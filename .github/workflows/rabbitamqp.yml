@@ -37,8 +37,8 @@ jobs:
       # Because in docker-compose-CI.yml we are setting env vars from github secrets.
       - name: Build and run image from docker-compose.yml
         run: |
-          docker-compose -f /home/runner/work/bloody-model/bloody-model/docker-compose.yml build --no-cache
-          docker-compose -f /home/runner/work/bloody-model/bloody-model/docker-compose.yml up -d
+          docker-compose -f $GITHUB_WORKSPACE/docker-compose.yml build --no-cache
+          docker-compose -f $GITHUB_WORKSPACE/docker-compose.yml up -d
           echo -n "Verifying images:"
           docker images     
       - name: Run tox

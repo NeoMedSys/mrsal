@@ -1,0 +1,16 @@
+version: "3.8"
+
+services:
+  # Deploy the broker.
+  rabbitmq_server:
+    image: rabbitmq:3-management
+    container_name: rabbit_amqp
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_DEFAULT_PASS}
+    ports:
+      # RabbitMQ container listening on the default port of 5672.
+      # Expose the port for the bloody to add/get tasks
+      - "${RABBITMQ_CONTAINER_PORT}:5672"
+      # OPTIONAL: Expose the GUI port
+      - "${RABBITMQ_GUI_PORT}:15672"
