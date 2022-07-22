@@ -1,0 +1,72 @@
+name: rabbitamqp
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: [3.8]
+        poetry-version: [1.1.8]
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v2
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v2
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        #  possibly change this for a curl install althouhg OS felxibility will change
+        uses: abatilo/actions-poetry@v2.0.0
+        with:
+          poetry-version: ${{ matrix.poetry-version }}
+      - name: Poetry install
+        run: | 
+          poetry install
+      
+      # PS! docker-compose-CI.yml is the same as docker-compose.yml but with different environment variables' names
+      # Because in docker-compose-CI.yml we are setting env vars from github secrets.
+      - name: Build and run image from docker-compose.yml
+        run: |
+          docker-compose -f /home/runner/work/bloody-model/bloody-model/docker-compose.yml build --no-cache
+          docker-compose -f /home/runner/work/bloody-model/bloody-model/docker-compose.yml up -d
+          echo -n "Verifying images:"
+          docker images     
+      - name: Run tox
+        run: |
+          poetry run tox 
+        
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest 
+    steps:
+      - uses: actions/checkout@v2
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.8
+      - name: Install dependencies
+        uses: abatilo/actions-poetry@v2.0.0
+        with:
+          poetry-version: 1.1.8 
+      - name: Poetry install
+        run: |
+          poetry install
+      - name: publish
+        if: github.event_name == 'push'
+        # Run this job if it was manually started or the parent workflow succeeded
+        # if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+        env:
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: |
+          poetry config pypi-token.pypi $PYPI_TOKEN
+          poetry publish --build
