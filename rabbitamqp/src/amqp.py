@@ -90,12 +90,12 @@ class Amqp(object):
 
     def consume_messages(self, queue: str, callback: Callable, callback_args=None, escape_after=-1,
                          dead_letters_exchange: str = None, dead_letters_routing_key: str = None,
-                         prop: pika.BasicProperties = None, close_after_consuming: bool = False):
+                         prop: pika.BasicProperties = None):
         log.info(f'Consuming messages: queue= {queue}')
         result = self.queue_declare(queue=queue)
         message_count = result.method.message_count
         log.info(f'message_count = {message_count}')
-        if close_after_consuming and message_count == 0:
+        if escape_after > 0 and message_count == 0:
             self.channel.stop_consuming()
             self.close_connection()
         else:
@@ -128,10 +128,11 @@ class Amqp(object):
                                                    properties=prop)
                                 log.info(f'Not processed message was published: message= {message}, dead_letters_exchange= {dead_letters_exchange}, dead_letters_routing_key= {dead_letters_routing_key}')
                                 self.channel.basic_ack(delivery_tag)
+                                log.info('----------------------------------------------------')
                                 continue
                             except pika.exceptions.UnroutableError:
                                 log.error('Not processed message was returned')
-                    if close_after_consuming:
+                    if escape_after > 0:
                         result = self.queue_declare(queue=queue)
                         message_count = result.method.message_count
                         log.info(f'message_count = {message_count}')
@@ -141,7 +142,7 @@ class Amqp(object):
             except FileNotFoundError as e:
                 log.info('Connection is closed')
                 self.close_connection()
-            if close_after_consuming:
+            if escape_after > 0:
                 self.channel.stop_consuming()
                 self.close_connection()
 

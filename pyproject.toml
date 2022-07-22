@@ -2,7 +2,7 @@
 authors = ["Raafat <rafatzahran90@gmail.com>"]
 description = ""
 name = "rabbitamqp"
-version = "0.1.5"
+version = "0.1.6"
 
 [tool.poetry.dependencies]
 colorlog = ">=5.0.1,<6.0.0"

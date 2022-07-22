@@ -28,8 +28,7 @@ def test_dead_letter_consumer():
         queue=dead_letter_queue,
         callback=consumer_dead_letters_callback,
         callback_args=(host, queue),
-        escape_after=-1,
-        close_after_consuming=True
+        escape_after=1
     )
 
 def consumer_dead_letters_callback(host_param: str, queue_param: str, message_param: str):

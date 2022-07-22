@@ -30,10 +30,9 @@ def test_consumer():
         queue=queue,
         callback=consumer_callback,
         callback_args=(host, queue),
-        escape_after=-1,
+        escape_after=3,
         dead_letters_exchange=exchange,
-        dead_letters_routing_key=dead_letter_routing_key,
-        close_after_consuming=True
+        dead_letters_routing_key=dead_letter_routing_key
     )
 
 
