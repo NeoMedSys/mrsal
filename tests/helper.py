@@ -1,7 +1,7 @@
 import os
 
-import rabbitamqp.config.config as config
-from rabbitamqp.src.amqp import Amqp
+import rabbitamqptest3.config.config as config
+from rabbitamqptest3.src.amqp import Amqp
 from typing import Tuple
 
 def setup_amqp(host: str, port: int, credentials: Tuple[str, str], exchange: str, exchange_type: str,

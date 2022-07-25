@@ -2,9 +2,9 @@ import json
 import os
 
 import pika
-import rabbitamqp.config.config as config
-from rabbitamqp.config.logging import get_logger
-from rabbitamqp.src.amqp import Amqp
+import rabbitamqptest3.config.config as config
+from rabbitamqptest3.config.logging import get_logger
+from rabbitamqptest3.src.amqp import Amqp
 
 import tests.config as test_config
 import tests.helper as helper

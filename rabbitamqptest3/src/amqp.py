@@ -2,8 +2,8 @@ import json
 from typing import Callable, NoReturn, Tuple
 
 import pika
-from rabbitamqp.config.exceptions import RabbitMQConnectionError
-from rabbitamqp.config.logging import get_logger
+from rabbitamqptest3.config.exceptions import RabbitMQConnectionError
+from rabbitamqptest3.config.logging import get_logger
 
 log = get_logger(__name__)
 
@@ -19,15 +19,20 @@ class Amqp(object):
 # --------------------------------------------------------------
 # CONNECTION
 # --------------------------------------------------------------
-    def establish_connection(self):
+    def establish_connection(self, heartbeat: int = 600, blocked_connection_timeout: int = 300):
         try:
             self.connection = pika.BlockingConnection(
                 pika.ConnectionParameters(
                     host=self.host,
                     port=self.port,
-                    credentials=pika.PlainCredentials(*self.credentials)
+                    credentials=pika.PlainCredentials(*self.credentials),
+                    heartbeat=heartbeat,
+                    blocked_connection_timeout=blocked_connection_timeout
                 ))
             self.channel = self.connection.channel()
+            # Note: prefetch is set to 1 here as an example only.
+            # In production you will want to test with different prefetch values
+            # to find which one provides the best performance and usability for your solution
             self.channel.basic_qos(prefetch_count=1)
             log.success(f'Connection established with RabbitMQ on {self.host}')
             return self.connection
@@ -37,17 +42,17 @@ class Amqp(object):
             raise RabbitMQConnectionError(
                 f'No connection to the RabbitMQ server on {self.host} was made: {str(e)}')
 
-    def exchange_declare(self, exchange: str, exchange_type: str):
+    def exchange_declare(self, exchange: str, exchange_type: str, durable=True, passive=False, auto_delete=False):
         # exchange_type can be either direct, topic, headers or fanout
         # We will use direct: The routing algorithm behind a direct exchange is simple -
         # a message goes to the queues whose binding key exactly matches the routing key of the message
-        self.channel.exchange_declare(exchange=exchange, exchange_type=exchange_type)
+        self.channel.exchange_declare(exchange=exchange, exchange_type=exchange_type, durable=durable, passive=passive, auto_delete=auto_delete)
         log.info(
             f'Exchange ({exchange}) is declared in RabbitMQ to post messages to by "Producers"')
 
     def queue_declare(self, queue: str, durable=True, exclusive=False, auto_delete=False):
         result = self.channel.queue_declare(
-            queue=queue, durable=True, exclusive=False, auto_delete=False)
+            queue=queue, durable=durable, exclusive=exclusive, auto_delete=auto_delete)
         log.info(f'result.method: {result.method}')
         return result
 
