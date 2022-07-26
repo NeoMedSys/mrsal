@@ -1,14 +1,15 @@
 import os
 
-import rabbitamqptest3.config.config as config
-from rabbitamqptest3.src.amqp import Amqp
+import rabbitamqp.config.config as config
+from rabbitamqp.src.amqp import Amqp
 from typing import Tuple
 
-def setup_amqp(host: str, port: int, credentials: Tuple[str, str], exchange: str, exchange_type: str,
-               queue: str, routing_key: str, dead_letter_queue: str, dead_letter_routing_key:str):
+def setup_amqp(host: str, port: int, credentials: Tuple[str, str], virtual_host: str, exchange: str, exchange_type: str,
+               queue: str, routing_key: str, dead_letter_queue: str, dead_letter_routing_key: str):
     amqp = Amqp(host=host,
                 port=port,
-                credentials=credentials)
+                credentials=credentials,
+                virtual_host=virtual_host)
 
     # Establish connection
     amqp.establish_connection()

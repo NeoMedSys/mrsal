@@ -2,32 +2,40 @@ import json
 from typing import Callable, NoReturn, Tuple
 
 import pika
-from rabbitamqptest3.config.exceptions import RabbitMQConnectionError
-from rabbitamqptest3.config.logging import get_logger
+import rabbitamqp.config.config as config
+import requests
+from rabbitamqp.config.exceptions import RabbitMQConnectionError
+from rabbitamqp.config.logging import get_logger
+from requests.auth import HTTPBasicAuth
 
 log = get_logger(__name__)
 
-
 class Amqp(object):
-    def __init__(self, host: str, port: int, credentials: Tuple[str, str]):
+    def __init__(self, host: str, port: int, credentials: Tuple[str, str],
+                 virtual_host: str = config.V_HOST,
+                 heartbeat: int = 600, blocked_connection_timeout: int = 300):
         self.host = host
         self.port = port
         self.credentials = credentials
+        self.virtual_host = virtual_host
+        self.heartbeat = heartbeat
+        self.blocked_connection_timeout = blocked_connection_timeout
         self.connection = None
         self.channel = None
 
 # --------------------------------------------------------------
 # CONNECTION
 # --------------------------------------------------------------
-    def establish_connection(self, heartbeat: int = 600, blocked_connection_timeout: int = 300):
+    def establish_connection(self, ):
         try:
             self.connection = pika.BlockingConnection(
                 pika.ConnectionParameters(
                     host=self.host,
                     port=self.port,
+                    virtual_host=self.virtual_host,
                     credentials=pika.PlainCredentials(*self.credentials),
-                    heartbeat=heartbeat,
-                    blocked_connection_timeout=blocked_connection_timeout
+                    heartbeat=self.heartbeat,
+                    blocked_connection_timeout=self.blocked_connection_timeout
                 ))
             self.channel = self.connection.channel()
             # Note: prefetch is set to 1 here as an example only.
@@ -89,67 +97,53 @@ class Amqp(object):
 
     def confirm_delivery(self):
         self.channel.confirm_delivery()
+
+    def get_queue_messages_count(self, queue: str):
+        url = 'http://localhost:15673/api/queues/bloody_vhost/' + queue
+        response = requests.get(url, auth=HTTPBasicAuth('root', 'password'))
+        if response.status_code == 200:
+            queue_details = response.json()
+            if 'messages' in queue_details:
+                return queue_details['messages']
+            return None
+        return None
+
     # --------------------------------------------------------------
     # CONSUMER
     # --------------------------------------------------------------
-
     def consume_messages(self, queue: str, callback: Callable, callback_args=None, escape_after=-1,
                          dead_letters_exchange: str = None, dead_letters_routing_key: str = None,
                          prop: pika.BasicProperties = None):
         log.info(f'Consuming messages: queue= {queue}')
-        result = self.queue_declare(queue=queue)
-        message_count = result.method.message_count
-        log.info(f'message_count = {message_count}')
-        if escape_after > 0 and message_count == 0:
-            self.channel.stop_consuming()
-            self.close_connection()
-        else:
-            try:
-                for method_frame, properties, body in self.channel.consume(queue):
-                    consumer_tags = self.channel.consumer_tags
-                    message = json.loads(body).replace('"', '')
-                    exchange = method_frame.exchange
-                    routing_key = method_frame.routing_key
-                    delivery_tag = method_frame.delivery_tag
-                    log.info(f'consumer_callback: message: {message}, exchange: {exchange}, routing_key: {routing_key}, delivery_tag: {delivery_tag}, properties: {properties}, consumer_tags: {consumer_tags}')
-                    is_processed = callback(*callback_args, message)
-                    log.info(f'is_processed= {is_processed}')
-                    if is_processed:
-                        log.info('Message acknowledged')
-                        self.channel.basic_ack(delivery_tag)
 
-                        if method_frame.delivery_tag == escape_after:
-                            log.info(
-                                f'Break! Max messages to be processed is {escape_after}')
-                            break
-                    else:
-                        log.warning(f'Could not process the message= {message}')
-                        if dead_letters_exchange != None and dead_letters_routing_key != None:
-                            log.warning(f'Re-route the message= {message} to the exchange= {exchange} with routing_key= {routing_key}')
-                            try:
-                                self.basic_publish(exchange=dead_letters_exchange,
-                                                   routing_key=dead_letters_routing_key,
-                                                   message=json.dumps(message),
-                                                   properties=prop)
-                                log.info(f'Not processed message was published: message= {message}, dead_letters_exchange= {dead_letters_exchange}, dead_letters_routing_key= {dead_letters_routing_key}')
-                                self.channel.basic_ack(delivery_tag)
-                                log.info('----------------------------------------------------')
-                                continue
-                            except pika.exceptions.UnroutableError:
-                                log.error('Not processed message was returned')
-                    if escape_after > 0:
-                        result = self.queue_declare(queue=queue)
-                        message_count = result.method.message_count
-                        log.info(f'message_count = {message_count}')
-                        if message_count == 0:
-                            break
-                    log.info('----------------------------------------------------')
-            except FileNotFoundError as e:
-                log.info('Connection is closed')
-                self.close_connection()
-            if escape_after > 0:
-                self.channel.stop_consuming()
-                self.close_connection()
+        try:
+            for method_frame, properties, body in self.channel.consume(queue):
+                consumer_tags = self.channel.consumer_tags
+                message = json.loads(body).replace('"', '')
+                exchange = method_frame.exchange
+                routing_key = method_frame.routing_key
+                delivery_tag = method_frame.delivery_tag
+                log.info(f'consumer_callback: message: {message}, exchange: {exchange}, routing_key: {routing_key}, delivery_tag: {delivery_tag}, properties: {properties}, consumer_tags: {consumer_tags}')
+                is_processed = callback(*callback_args, message)
+                log.info(f'is_processed= {is_processed}')
+                if is_processed:
+                    self.channel.basic_ack(delivery_tag)
+                    log.info('Message acknowledged')
+
+                    if method_frame.delivery_tag == escape_after:
+                        log.info(
+                            f'Break! Max messages to be processed is {escape_after}')
+                        break
+                else:
+                    log.warning(f'Could not process the message= {message}. Process it as dead letter.')
+                    is_dead_letter_published = self.publish_dead_letter(message=message, delivery_tag=delivery_tag, dead_letters_exchange=dead_letters_exchange,
+                                             dead_letters_routing_key=dead_letters_routing_key, prop=prop)
+                    if is_dead_letter_published:
+                        self.channel.basic_ack(delivery_tag)
+                log.info('----------------------------------------------------')
+        except FileNotFoundError as e:
+            log.info('Connection is closed')
+            self.channel.stop_consuming()
 
     # --------------------------------------------------------------
     # PRODUCER
@@ -171,3 +165,18 @@ class Amqp(object):
             log.error(
                 f'Producer could not publish the message ({message}) to the exchange "{exchange}" with a routing key "{routing_key}": {e}', exc_info=True)
             return False
+
+    def publish_dead_letter(self, message: str, delivery_tag: int, dead_letters_exchange: str = None, dead_letters_routing_key: str = None,
+                            prop: pika.BasicProperties = None):
+        if dead_letters_exchange != None and dead_letters_routing_key != None:
+            log.warning(f'Re-route the message= {message} to the exchange= {dead_letters_exchange} with routing_key= {dead_letters_routing_key}')
+            try:
+                self.basic_publish(exchange=dead_letters_exchange,
+                                   routing_key=dead_letters_routing_key,
+                                   message=json.dumps(message),
+                                   properties=prop)
+                log.info(f'Dead letter was published: message= {message}, exchange= {dead_letters_exchange}, routing_key= {dead_letters_routing_key}')
+                return True
+            except pika.exceptions.UnroutableError:
+                log.error('Dead letter was returned')
+                return False

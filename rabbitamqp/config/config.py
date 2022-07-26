@@ -2,18 +2,19 @@ from typing import Tuple
 
 RABBITMQ_SERVICE_NAME_DOCKER_COMPOSE: str = 'rabbitmq_server'  # Service name in docker-compose.yaml
 RABBITMQ_SERVER: str = 'localhost'
+V_HOST: str = 'v_host'
 RABBITMQ_DEFAULT_PORT: int = 5673
 
 RABBITMQ_USER = 'root'  # DELETEME
 RABBITMQ_PASSWORD = 'password'  # DELETEME
 RABBITMQ_CREDENTIALS: Tuple[str, str] = (RABBITMQ_USER, RABBITMQ_PASSWORD)
 
-RABBITMQ_EXCHANGE: str = 'bloody-exchange'
+RABBITMQ_EXCHANGE: str = 'bloody_exchange'
 RABBITMQ_EXCHANGE_TYPE: str = 'direct'  # pick from direct, headers, topic or fanout
 RABBITMQ_BIND_ROUTING_KEY: str = 'emergency'
-RABBITMQ_QUEUE: str = 'bloody-queue' 
-RABBITMQ_DEAD_LETTER_ROUTING_KEY: str = 'dead-letter'
-RABBITMQ_DEAD_LETTER_QUEUE: str = 'dead-letter-queue'  
+RABBITMQ_QUEUE: str = 'bloody_queue' 
+RABBITMQ_DEAD_LETTER_ROUTING_KEY: str = 'dead_letter'
+RABBITMQ_DEAD_LETTER_QUEUE: str = 'dead_letter-queue'  
 
 NON_PERSIST_MSG: int = 1
 PERSIST_MSG: int = 2
