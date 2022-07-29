@@ -3,4 +3,10 @@ This is script for custom exceptions
 """
 
 class RabbitMQConnectionError(Exception):
-    """temporary fail for connection to RabbitMQ"""
+    """Fail to connect to RabbitMQ"""
+
+class RabbitMQDeclareExchangeError(Exception):
+    """Fail to declare exchange"""
+
+class RabbitMQDeclareQueueError(Exception):
+    """Fail to declare queue"""

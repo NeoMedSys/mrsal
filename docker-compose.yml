@@ -3,7 +3,10 @@ version: "3.8"
 services:
   # Deploy the broker.
   rabbitmq_server:
-    image: rabbitmq:3-management
+    # image: rabbitmq:3.9.21-management
+    image: rabbit_amqp
+    build:
+      context: .
     container_name: rabbit_amqp
     environment:
       - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER}
