@@ -12,7 +12,7 @@ def setup_amqp(host: str, port: int, credentials: Tuple[str, str], virtual_host:
                 virtual_host=virtual_host)
 
     # Establish connection
-    amqp.establish_connection()
+    amqp.setup_connection()
 
     # Create exchange and bind it to the main queue
     amqp.setup_exchange(exchange=exchange, exchange_type=exchange_type)

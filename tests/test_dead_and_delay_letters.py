@@ -11,40 +11,44 @@ import tests.config as test_config
 
 log = get_logger(__name__)
 
-HOST = os.environ.get('RABBITMQ_HOST', 'localhost')
-amqp = Amqp(host=HOST,
-            port=config.RABBITMQ_DEFAULT_PORT,
-            credentials=config.RABBITMQ_CREDENTIALS,
-            virtual_host=config.V_HOST)
+def setup_test():
+    HOST = os.environ.get('RABBITMQ_HOST', 'localhost')
+    amqp = Amqp(host=HOST,
+                port=config.RABBITMQ_DEFAULT_PORT,
+                credentials=config.RABBITMQ_CREDENTIALS,
+                virtual_host=config.V_HOST)
 
-# Establish connection
-amqp.establish_connection()
+    # Establish connection
+    amqp.setup_connection()
 
-amqp.exchange_delete(exchange=test_config.EXCHANGE)
-amqp.exchange_delete(exchange=test_config.DEAD_LETTER_EXCHANGE)
-amqp.exchange_delete(exchange=test_config.DELAY_EXCHANGE)
-amqp.queue_delete(test_config.QUEUE)
-amqp.queue_delete(test_config.DEAD_LETTER_QUEUE)
-amqp.queue_delete(config.RABBITMQ_QUEUE)
+    amqp.exchange_delete(exchange=test_config.EXCHANGE)
+    amqp.exchange_delete(exchange=test_config.DEAD_LETTER_EXCHANGE)
+    amqp.exchange_delete(exchange=test_config.DELAY_EXCHANGE)
+    amqp.queue_delete(test_config.QUEUE)
+    amqp.queue_delete(test_config.DEAD_LETTER_QUEUE)
+    amqp.queue_delete(config.RABBITMQ_QUEUE)
 
+    amqp.setup_dead_and_delay_letters(exchange=test_config.EXCHANGE,
+                                      routing_key=test_config.ROUTING_KEY,
+                                      dl_exchange=test_config.DEAD_LETTER_EXCHANGE,
+                                      dl_exchange_type=test_config.EXCHANGE_TYPE,
+                                      dl_routing_key=test_config.DEAD_LETTER_ROUTING_KEY,
+                                      queue=test_config.QUEUE,
+                                      dl_queue=test_config.DEAD_LETTER_QUEUE,
+                                      message_ttl=test_config.MESSAGE_TTL)
 
-amqp.setup_dead_and_delay_letters(exchange=test_config.EXCHANGE,
-                                  routing_key=test_config.ROUTING_KEY,
-                                  dl_exchange=test_config.DEAD_LETTER_EXCHANGE,
-                                  dl_exchange_type=test_config.EXCHANGE_TYPE,
-                                  dl_routing_key=test_config.DEAD_LETTER_ROUTING_KEY,
-                                  queue=test_config.QUEUE,
-                                  dl_queue=test_config.DEAD_LETTER_QUEUE,
-                                  message_ttl=test_config.MESSAGE_TTL)
+    dl_amqp = Amqp(host=HOST,
+                   port=config.RABBITMQ_DEFAULT_PORT,
+                   credentials=config.RABBITMQ_CREDENTIALS,
+                   virtual_host=config.V_HOST)
+    dl_amqp.setup_connection()
 
-dl_amqp = Amqp(host=HOST,
-               port=config.RABBITMQ_DEFAULT_PORT,
-               credentials=config.RABBITMQ_CREDENTIALS,
-               virtual_host=config.V_HOST)
-dl_amqp.establish_connection()
+    return HOST, amqp, dl_amqp
 
 
 def test_dead_letters():
+    HOST, amqp, dl_amqp = setup_test()
+
     x_delay1: int = 2000
     prop1 = pika.BasicProperties(
         content_type='text/plain',
@@ -54,10 +58,10 @@ def test_dead_letters():
 
     message1 = 'uuid1'
     try:
-        amqp.basic_publish(exchange=test_config.EXCHANGE,
-                           routing_key=test_config.ROUTING_KEY,
-                           message=json.dumps(message1),
-                           properties=prop1)
+        amqp.publish_message(exchange=test_config.EXCHANGE,
+                             routing_key=test_config.ROUTING_KEY,
+                             message=json.dumps(message1),
+                             properties=prop1)
         log.info(f'Message {message1} was published')
     except pika.exceptions.UnroutableError:
         log.error(f'Message {message1} was returned')
@@ -71,10 +75,10 @@ def test_dead_letters():
         delivery_mode=pika.DeliveryMode.Persistent)
     message2 = 'uuid2'
     try:
-        amqp.basic_publish(exchange=test_config.EXCHANGE,
-                           routing_key=test_config.ROUTING_KEY,
-                           message=json.dumps(message2),
-                           properties=prop2)
+        amqp.publish_message(exchange=test_config.EXCHANGE,
+                             routing_key=test_config.ROUTING_KEY,
+                             message=json.dumps(message2),
+                             properties=prop2)
         log.info(f'Message {message2} was published')
     except pika.exceptions.UnroutableError:
         log.error(f'Message {message2} was returned')
@@ -89,10 +93,10 @@ def test_dead_letters():
         delivery_mode=pika.DeliveryMode.Persistent)
     message3 = 'uuid3'
     try:
-        amqp.basic_publish(exchange=test_config.EXCHANGE,
-                           routing_key=test_config.ROUTING_KEY,
-                           message=json.dumps(message3),
-                           properties=prop3)
+        amqp.publish_message(exchange=test_config.EXCHANGE,
+                             routing_key=test_config.ROUTING_KEY,
+                             message=json.dumps(message3),
+                             properties=prop3)
         log.info(f'Message {message3} was published')
     except pika.exceptions.UnroutableError:
         log.error(f'Message {message3} was returned')
@@ -112,33 +116,39 @@ def test_dead_letters():
         delivery_mode=pika.DeliveryMode.Persistent)
     message4 = 'uuid4'
     try:
-        amqp.basic_publish(exchange=test_config.EXCHANGE,
-                           routing_key=test_config.ROUTING_KEY,
-                           message=json.dumps(message4),
-                           properties=prop4)
+        amqp.publish_message(exchange=test_config.EXCHANGE,
+                             routing_key=test_config.ROUTING_KEY,
+                             message=json.dumps(message4),
+                             properties=prop4)
         log.info(f'Message {message4} was published')
     except pika.exceptions.UnroutableError:
         log.error(f'Message {message4} was returned')
 
+    log.info('------------------------------------------------------')
     log.info(f'=====Start consuming from {test_config.QUEUE}========')
-    amqp.consume_messages_aux(
+    log.info('------------------------------------------------------')
+    amqp.start_consumer(
         queue=test_config.QUEUE,
         callback=consumer_callback,
         callback_args=(HOST, test_config.QUEUE),
-        escape_after=3
+        escape_after=3,
+        requeue=False
     )
 
+    log.info('------------------------------------------------------')
     log.info(f'=====Start consuming from {test_config.DEAD_LETTER_QUEUE}========')
+    log.info('------------------------------------------------------')
     result = dl_amqp.setup_queue(queue=test_config.DEAD_LETTER_QUEUE)
     message_count = result.method.message_count
     log.info(f'Message count in queue "{test_config.DEAD_LETTER_QUEUE}" before consuming= {message_count}')
     assert message_count == 2
 
-    dl_amqp.consume_messages_aux(
+    dl_amqp.start_consumer(
         queue=test_config.DEAD_LETTER_QUEUE,
         callback=consumer_dead_letters_callback,
         callback_args=(HOST, test_config.DEAD_LETTER_QUEUE),
-        escape_after=2
+        escape_after=2,
+        requeue=False
     )
 
     result = dl_amqp.setup_queue(queue=test_config.DEAD_LETTER_QUEUE)
@@ -147,13 +157,13 @@ def test_dead_letters():
     assert message_count == 0
 
 def consumer_callback(host: str, queue: str, message: str):
-    log.info(f'queue callback: host={host}, queue={queue}, message={message}')
+    # log.info(f'queue callback: host={host}, queue={queue}, message={message}')
     if message == 'uuid3':
         time.sleep(3)
     return message != 'uuid2'
 
 def consumer_dead_letters_callback(host_param: str, queue_param: str, message_param: str):
-    log.info(f'dl_queue callback: host={host_param}, queue={queue_param}, message={message_param}')
+    # log.info(f'dl_queue callback: host={host_param}, queue={queue_param}, message={message_param}')
     return True
 
 
