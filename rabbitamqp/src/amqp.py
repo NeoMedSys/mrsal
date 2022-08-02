@@ -512,13 +512,13 @@ class Amqp(object):
                         log.warning('Message rejected')
                     log.info('----------------------------------------------------')
                 else:
-                    log.warning(f'Given period of inactivity {inactivity_timeout} is exceeded. Cancel consumer {consumer_tag}')
+                    log.warning(f'Given period of inactivity {inactivity_timeout} is exceeded. Cancel consumer.')
                     self._channel.cancel()
         except ValueError as err1:
-            log.error(f'ValueError is caught while consuming. Consumer-creation parameters dont match those of the existing queue consumer generator. Cancel consumer {consumer_tag}')
+            log.error(f'ValueError is caught while consuming. Consumer-creation parameters dont match those of the existing queue consumer generator. Cancel consumer.')
             self._channel.cancel()
         except pika.exceptions.ChannelClosed as err2:
-            log.error(f'ChannelClosed is caught while consuming. Channel is closed by broker. Cancel consumer {consumer_tag}')
+            log.error(f'ChannelClosed is caught while consuming. Channel is closed by broker. Cancel consumer.')
             self._channel.cancel()
 
     # --------------------------------------------------------------
