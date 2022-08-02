@@ -17,7 +17,6 @@ def setup_test():
                 credentials=config.RABBITMQ_CREDENTIALS,
                 virtual_host=config.V_HOST)
 
-    # Establish connection
     amqp.setup_connection()
 
     amqp.exchange_delete(exchange=test_config.EXCHANGE)
@@ -29,13 +28,16 @@ def setup_test():
 
     amqp.setup_broker_with_delay_letter(exchange=test_config.DELAY_EXCHANGE,
                                         routing_key=test_config.DELAY_ROUTING_KEY,
-                                        queue=config.RABBITMQ_QUEUE)
+                                        queue=test_config.QUEUE)
     return HOST, amqp
 
 def test_delay_letter():
     HOST, amqp = setup_test()
 
-    x_delay1: int = 5000
+    # Publisher:
+    #   Message ("uuid1") is published with x-delay=3000
+    #   Message ("uuid2") is published with x-delay=1000
+    x_delay1: int = 3000
     message1 = 'uuid1'
     prop1 = pika.BasicProperties(
         content_type='text/plain',
@@ -66,17 +68,24 @@ def test_delay_letter():
         log.info(f'Message {message2} was published')
     except pika.exceptions.UnroutableError:
         log.error(f'Message {message2} was returned')
-
+    # --------------------------------------------------------------
+    # --------------------------------------------------------------
+    log.info('--------------------------------------------------------')
+    log.info(f'===== Start consuming from {test_config.QUEUE} ========')
+    log.info('--------------------------------------------------------')
+    # Consumer from main queue
+    #   Message ("uuid2"): Consumed first because its delivered from exchange to the queue
+    #    after x-delay=1000ms which is the shortest time.
+    #   Message ("uuid1"): Consumed at second place because its x-delay = 3000 ms.
     amqp.start_consumer(
-        queue=config.RABBITMQ_QUEUE,
+        queue=test_config.QUEUE,
         callback=consumer_callback,
-        callback_args=(HOST, config.RABBITMQ_QUEUE),
-        escape_after=2,
+        callback_args=(HOST, test_config.QUEUE),
+        inactivity_timeout=3,
         requeue=False
     )
 
 def consumer_callback(host: str, queue: str, message: str):
-    log.info(f'consume callback: host={host}, queue={queue}, message={message}')
     return True
 
 

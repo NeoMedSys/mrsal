@@ -1,11 +1,12 @@
 import json
 from dataclasses import dataclass
+from socket import gaierror
 from typing import Callable, Dict, NoReturn, Tuple
 
 import pika
 import rabbitamqp.config.config as config
 import requests
-from rabbitamqp.config.exceptions import RabbitMQConnectionError
+from rabbitamqp.config.exceptions import RabbitMQConnectionError, RabbitMQDeclareExchangeError
 from rabbitamqp.config.logging import get_logger
 from requests.auth import HTTPBasicAuth
 from retry import retry
@@ -40,7 +41,7 @@ class Amqp(object):
     _connection: pika.BlockingConnection = None
     _channel = None
 
-    @retry(RabbitMQConnectionError, tries=2, delay=5, jitter=(1, 3))
+    @retry((pika.exceptions.AMQPConnectionError, TypeError, gaierror), tries=2, delay=5, jitter=(1, 3))
     def setup_connection(self):
         """
         Establish connection to RabbitMQ server specifying connection parameters.
@@ -65,10 +66,19 @@ class Amqp(object):
             self._channel.basic_qos(prefetch_count=self.prefetch_count)
             log.success(f'Connection established with RabbitMQ on ' + connection_info)
             return self._connection
-        except Exception as e:
-            msg = f'No connection to the RabbitMQ server was made on {connection_info}: {str(e)}'
-            log.error(msg, exc_info=True)
-            raise RabbitMQConnectionError(msg)
+        except TypeError as err:
+            log.error(f'Caught a type error: {err}')
+            raise TypeError
+        except pika.exceptions.AMQPConnectionError as err:
+            log.error(f'Caught a connection error: {err}')
+            raise pika.exceptions.AMQPConnectionError
+        except gaierror as err:
+            log.error(f'Caught a socket error: {err}')
+            raise gaierror
+        # except Exception as e:
+        #     msg = f'No connection to the RabbitMQ server was made on {connection_info}: {str(e)}'
+        #     log.error(msg, exc_info=True)
+        #     raise RabbitMQConnectionError(msg)
 
     def setup_exchange(self, exchange: str, exchange_type: str, arguments: Dict[str, str] = None,
                        durable=True, passive=False, internal=False, auto_delete=False):
@@ -95,18 +105,28 @@ class Amqp(object):
         exchange_declare_info = f'exchange={exchange}, exchange_type={exchange_type}, durable={durable}, passive={passive}, internal={internal}, auto_delete={auto_delete}, arguments={arguments}'
         if self.verbose:
             log.info(f'Declaring exchange with: {exchange_declare_info}')
-        exchange_declare_result = self._channel.exchange_declare(exchange=exchange,
-                                                                 exchange_type=exchange_type,
-                                                                 arguments=arguments,
-                                                                 durable=durable,
-                                                                 passive=passive,
-                                                                 internal=internal,
-                                                                 auto_delete=auto_delete)
-        log.success(f'Exchange is declared: {exchange_declare_info}, result={exchange_declare_result}')
-        return exchange_declare_result
+        try:
+            exchange_declare_result = self._channel.exchange_declare(exchange=exchange,
+                                                                     exchange_type=exchange_type,
+                                                                     arguments=arguments,
+                                                                     durable=durable,
+                                                                     passive=passive,
+                                                                     internal=internal,
+                                                                     auto_delete=auto_delete)
+            log.success(f'Exchange is declared successfully: {exchange_declare_info}, result={exchange_declare_result}')
+            return exchange_declare_result
+        except TypeError as err:
+            log.error(f'Caught a type error: {err}')
+            raise TypeError
+        except AttributeError as err:
+            log.error(f'Caught a attribute error: {err}')
+            raise AttributeError
+        except pika.exceptions.ConnectionClosedByBroker as err:
+            log.error(f'Caught a connection closed by broker error: {err}')
+            raise pika.exceptions.ConnectionClosedByBroker(503, str(err))
 
-    def setup_queue(self, queue: str, arguments: Dict[str, str] = None,
-                    durable=True, exclusive=False, auto_delete=False):
+    def setup_queue(self, queue: str, arguments: Dict[str, str] = None, durable: bool = True,
+                    exclusive: bool = False, auto_delete: bool = False, passive: bool = False):
         """Declare queue, create if needed. This method creates or checks a
         queue. When creating a new queue the client can specify various
         properties that control the durability of the queue and its contents,
@@ -132,13 +152,18 @@ class Amqp(object):
         queue_declare_info = f'queue={queue}, durable={durable}, exclusive={exclusive}, auto_delete={auto_delete}, arguments={arguments}'
         if self.verbose:
             log.info(f'Declaring queue with: {queue_declare_info}')
-        queue_declare_result = self._channel.queue_declare(queue=queue,
-                                                           arguments=arguments,
-                                                           durable=durable,
-                                                           exclusive=exclusive,
-                                                           auto_delete=auto_delete)
-        log.success(f'Queue is declared: {queue_declare_info}, result={queue_declare_result.method}')
-        return queue_declare_result
+        try:
+            queue_declare_result = self._channel.queue_declare(queue=queue,
+                                                               arguments=arguments,
+                                                               durable=durable,
+                                                               exclusive=exclusive,
+                                                               auto_delete=auto_delete,
+                                                               passive=passive)
+            log.success(f'Queue is declared successfully: {queue_declare_info}, result={queue_declare_result.method}')
+            return queue_declare_result
+        except pika.exceptions.ChannelClosedByBroker as err:
+            log.error(f'Caught ChannelClosedByBroker: {err}')
+            raise pika.exceptions.ChannelClosedByBroker(503, str(err))
 
     def setup_queue_binding(self, exchange: str, queue: str, routing_key: str):
         """Bind the queue to the specified exchange.
@@ -154,13 +179,17 @@ class Amqp(object):
         """
         if self.verbose:
             log.info(f'Binding queue to exchange: queue={queue}, exchange={exchange}, routing_key={routing_key}')
-        bind_result = self._channel.queue_bind(
-            exchange=exchange, queue=queue, routing_key=routing_key)
-        log.success(f'The queue is bound to exchange: queue={queue}, exchange={exchange}, routing_key={routing_key}, result={bind_result}')
-        if self.verbose:
-            log.info(f'In such setup a message published to the exchange "{exchange}" \
-                        with routing key "{routing_key}" will be routed to queue "{queue}"')
-        return bind_result
+        try:
+            bind_result = self._channel.queue_bind(
+                exchange=exchange, queue=queue, routing_key=routing_key)
+            log.success(f'The queue is bound to exchange successfully: queue={queue}, exchange={exchange}, routing_key={routing_key}, result={bind_result}')
+            if self.verbose:
+                log.info(f'In such setup a message published to the exchange "{exchange}" \
+                            with routing key "{routing_key}" will be routed to queue "{queue}"')
+            return bind_result
+        except pika.exceptions.ChannelClosedByBroker as err:
+            log.error(f'Caught ChannelClosedByBroker: {err}')
+            raise pika.exceptions.ChannelClosedByBroker(503, str(err))
 
     def setup_broker_with_delay_letter(self, exchange: str, routing_key: str, queue: str):
         """
@@ -431,7 +460,7 @@ class Amqp(object):
             self._channel.stop_consuming()
 
     def start_consumer(self, queue: str, callback: Callable, callback_args=None,
-                       escape_after=-1, inactivity_timeout=None, requeue: bool = True):
+                       inactivity_timeout=None, requeue: bool = True):
         """
         Setup consumer:
             1- Consumer start consuming the messages from the queue.
@@ -448,8 +477,6 @@ class Amqp(object):
         :param Callable callback: Method where received messages are sent to be processed
         :param Tuple callback_args: Tuple of arguments for callback method
         :param dict arguments: Custom key/value pair arguments for the consumer
-        :param int escape_after: Limit messages to consume (Useful for tests)
-            - Will cause to stop consuming when the number of consumed messages reach the limit.
         :param float inactivity_timeout: 
             - if a number is given (in seconds), will cause the method to yield (None, None, None) after the
                 given period of inactivity.
@@ -464,36 +491,39 @@ class Amqp(object):
         try:
             for method_frame, properties, body in \
                     self._channel.consume(queue=queue, inactivity_timeout=inactivity_timeout):
-                consumer_tags = self._channel.consumer_tags
-                message = json.loads(body).replace('"', '')
-                exchange = method_frame.exchange
-                routing_key = method_frame.routing_key
-                delivery_tag = method_frame.delivery_tag
-                redelivered = method_frame.redelivered  # Will be True when the consumer consumes requeued message
-                if self.verbose:
-                    log.info(
-                        f'Consumed message: message= {message}, redelivered= {redelivered}, exchange= {exchange}, routing_key= {routing_key}, delivery_tag= {delivery_tag}, properties= {properties}, consumer_tags= {consumer_tags}, is_processed: {is_processed}')
-                is_processed = callback(*callback_args, message)
-                if is_processed:
-                    self._channel.basic_ack(delivery_tag=delivery_tag)
-                    log.info('Message {message} is acknowledged')
-
-                    if method_frame.delivery_tag == escape_after:
+                if (method_frame, properties, body) != (None, None, None):
+                    consumer_tags = self._channel.consumer_tags
+                    consumer_tag = method_frame.consumer_tag
+                    message = json.loads(body).replace('"', '')
+                    exchange = method_frame.exchange
+                    routing_key = method_frame.routing_key
+                    delivery_tag = method_frame.delivery_tag
+                    redelivered = method_frame.redelivered  # Will be True when the consumer consumes requeued message
+                    if self.verbose:
                         log.info(
-                            f'Break! Max messages to be processed is {escape_after}')
-                        self._channel.stop_consuming()
-                        break
+                            f'Consumed message: message= {message}, method_frame= {method_frame}, redelivered= {redelivered}, exchange= {exchange}, routing_key= {routing_key}, delivery_tag= {delivery_tag}, properties= {properties}, consumer_tags= {consumer_tags}, consumer_tag= {consumer_tag}')
+                    is_processed = callback(*callback_args, message)
+                    if is_processed:
+                        self._channel.basic_ack(delivery_tag=delivery_tag)
+                        log.info(f'Message {message} is acknowledged')
+                    else:
+                        log.warning(f'Could not process the message= {message}. This will be rejected and sent to dead-letters-exchange if it configured or deleted if not.')
+                        self._channel.basic_nack(delivery_tag=delivery_tag, requeue=requeue)
+                        log.warning('Message rejected')
+                    log.info('----------------------------------------------------')
                 else:
-                    log.warning(f'Could not process the message= {message}. This will be rejected and sent to dead-letters-exchange if it configured or deleted if not.')
-                    self._channel.basic_nack(delivery_tag=delivery_tag, requeue=requeue)
-                    log.warning('Message rejected')
-                log.info('----------------------------------------------------')
-        except FileNotFoundError as e:
-            log.error('Error is caught while consuming. Stop consuming')
-            self._channel.stop_consuming()
+                    log.warning(f'Given period of inactivity {inactivity_timeout} is exceeded. Cancel consumer {consumer_tag}')
+                    self._channel.cancel()
+        except ValueError as err1:
+            log.error(f'ValueError is caught while consuming. Consumer-creation parameters dont match those of the existing queue consumer generator. Cancel consumer {consumer_tag}')
+            self._channel.cancel()
+        except pika.exceptions.ChannelClosed as err2:
+            log.error(f'ChannelClosed is caught while consuming. Channel is closed by broker. Cancel consumer {consumer_tag}')
+            self._channel.cancel()
 
     # --------------------------------------------------------------
     # --------------------------------------------------------------
+    @retry((pika.exceptions.UnroutableError), tries=2, delay=5, jitter=(1, 3))
     def publish_message(self, exchange: str, routing_key: str,
                         message: str, properties: pika.BasicProperties):
         """Publish message to the channel with the given exchange, routing key.
@@ -524,9 +554,9 @@ class Amqp(object):
 
             # The message will be returned if no one is listening
             return True
-        except pika.exceptions.UnroutableError as e:
+        except pika.exceptions.UnroutableError as err1:
             log.error(
-                f'Producer could not publish the message ({message}) to the exchange "{exchange}" with a routing key "{routing_key}": {e}', exc_info=True)
+                f'Producer could not publish the message ({message}) to the exchange "{exchange}" with a routing key "{routing_key}": {err1}', exc_info=True)
             return False
 
     # TODO NOT IN USE: maybe we will use it in the method consume_messages_with_retries to publish messages to dead letters exchange after retries limit. (remove or use)

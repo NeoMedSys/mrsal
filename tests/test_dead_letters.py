@@ -18,7 +18,6 @@ def setup_test():
                 credentials=config.RABBITMQ_CREDENTIALS,
                 virtual_host=config.V_HOST)
 
-    # Establish connection
     amqp.setup_connection()
 
     amqp.exchange_delete(exchange=test_config.EXCHANGE)
@@ -50,6 +49,11 @@ def setup_test():
 def test_dead_letters():
     HOST, amqp, dl_amqp = setup_test()
 
+    # Publisher:
+    #   Message ("uuid1") is published
+    #   Message ("uuid2") is published
+    #   Message ("uuid3") is published
+    #   Message ("uuid4") is published
     prop = pika.BasicProperties(
         content_type='text/plain',
         content_encoding='utf-8',
@@ -65,7 +69,6 @@ def test_dead_letters():
     except pika.exceptions.UnroutableError:
         log.error(f'Message {message1} was returned')
 
-    # Dead message with (x-first-death-reason: rejected) because is negatively acknowledged by the consumer.
     message2 = 'uuid2'
     try:
         amqp.publish_message(exchange=test_config.EXCHANGE,
@@ -76,8 +79,6 @@ def test_dead_letters():
     except pika.exceptions.UnroutableError:
         log.error(f'Message {message2} was returned')
 
-    # Processing time of this message in the consumer's callback is greater than (test_config.MESSAGE_TTL).
-    # That makes all the messages published to the queue (test_config.QUEUE) marked as dead and they will be moved to dl_exchange.
     message3 = 'uuid3'
     try:
         amqp.publish_message(exchange=test_config.EXCHANGE,
@@ -88,13 +89,6 @@ def test_dead_letters():
     except pika.exceptions.UnroutableError:
         log.error(f'Message {message3} was returned')
 
-    # Dead message with (x-first-death-reason: expired) because:
-    # 1. This message is published to the exchange (test_config.EXCHANGE).
-    # 2. The queue (test_config.QUEUE) is bound to this exchange with routing key (test_config.ROUTING_KEY).
-    # 3. This queue has the argument (x-message-ttl) equals to (test_config.MESSAGE_TTL).
-    # 4. The previous message (uuid3) has processing time in the consumer's call_back function greater than (test_config.MESSAGE_TTL).
-    # 5. That's why the amount of time the message (uuid4) has spent in the queue exceeded the time to live, (test_config.MESSAGE_TTL).
-    # 6. Therefor this message is dead and it moved to the dl_exchange.
     message4 = 'uuid4'
     try:
         amqp.publish_message(exchange=test_config.EXCHANGE,
@@ -104,15 +98,47 @@ def test_dead_letters():
         log.info(f'Message {message4} was published')
     except pika.exceptions.UnroutableError:
         log.error(f'Message {message4} was returned')
-
+    # --------------------------------------------------------------
+    # --------------------------------------------------------------
+    log.info('--------------------------------------------------------')
+    log.info(f'===== Start consuming from {test_config.QUEUE} ========')
+    log.info('--------------------------------------------------------')
+    # Consumer from main queue
+    #   Message ("uuid1"):
+    #       - This message is positively-acknowledged by consumer.
+    #       - Then it will be deleted from queue.
+    #   Message ("uuid2"):
+    #       - This message is rejected by consumer's callback.
+    #       - Therefor it will be negatively-acknowledged by consumer.
+    #       - Then it will be forwarded to dead-letters-exchange (x-first-death-reason: rejected).
+    #   Message ("uuid3"):
+    #       - This message has processing time in the consumer's callback equal to 3s
+    #           which is greater that TTL=2s.
+    #       - After processing will be positively-acknowledged by consumer.
+    #       - Then it will be deleted from queue.
+    #   Message ("uuid4"):
+    #       - This message will be forwarded to dead-letters-exchange
+    #           because it spent in the queue more than TTL=2s waiting "uuid3" to be processed
+    #           (x-first-death-reason: expired).
     amqp.start_consumer(
         queue=test_config.QUEUE,
         callback=consumer_callback,
         callback_args=(HOST, test_config.QUEUE),
-        escape_after=3,
+        inactivity_timeout=3,
         requeue=False
     )
-
+    # --------------------------------------------------------------
+    # --------------------------------------------------------------
+    log.info('------------------------------------------------------')
+    log.info(f'===== Start consuming from {test_config.DEAD_LETTER_QUEUE} ========')
+    log.info('------------------------------------------------------')
+    # Consumer from dead letters queue
+    #   Message ("uuid2"):
+    #       - This message is positively-acknowledged by consumer.
+    #       - Then it will be deleted from dl-queue.
+    #   Message ("uuid4"):
+    #       - This message is positively-acknowledged by consumer.
+    #       - Then it will be deleted from dl-queue.
     result = dl_amqp.setup_queue(queue=test_config.DEAD_LETTER_QUEUE)
     message_count = result.method.message_count
     log.info(f'Message count in queue "{test_config.DEAD_LETTER_QUEUE}" before consuming= {message_count}')
@@ -122,7 +148,7 @@ def test_dead_letters():
         queue=test_config.DEAD_LETTER_QUEUE,
         callback=consumer_dead_letters_callback,
         callback_args=(HOST, test_config.DEAD_LETTER_QUEUE),
-        escape_after=2,
+        inactivity_timeout=3,
         requeue=False
     )
 
@@ -132,13 +158,11 @@ def test_dead_letters():
     assert message_count == 0
 
 def consumer_callback(host: str, queue: str, message: str):
-    log.info(f'queue callback: host={host}, queue={queue}, message={message}')
     if message == 'uuid3':
         time.sleep(3)
     return message != 'uuid2'
 
 def consumer_dead_letters_callback(host_param: str, queue_param: str, message_param: str):
-    log.info(f'dl_queue callback: host={host_param}, queue={queue_param}, message={message_param}')
     return True
 
 
