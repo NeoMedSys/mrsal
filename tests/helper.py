@@ -1,7 +1,7 @@
 import os
 
 import rabbitamqp.config.config as config
-from rabbitamqp.src.amqp import Amqp
+from rabbitamqp.amqp import Amqp
 from typing import Tuple
 
 def setup_amqp(host: str, port: int, credentials: Tuple[str, str], virtual_host: str, exchange: str, exchange_type: str,
@@ -12,7 +12,7 @@ def setup_amqp(host: str, port: int, credentials: Tuple[str, str], virtual_host:
                 virtual_host=virtual_host)
 
     # Establish connection
-    amqp.setup_connection()
+    amqp.connect_to_server()
 
     # Create exchange and bind it to the main queue
     amqp.setup_exchange(exchange=exchange, exchange_type=exchange_type)
