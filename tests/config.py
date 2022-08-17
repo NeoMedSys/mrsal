@@ -18,3 +18,6 @@ DEAD_LETTER_EXCHANGE: str = 'dead_letter_exchange'
 DEAD_LETTER_ROUTING_KEY: str = 'dead_letter_routing_key'
 
 MESSAGE_TTL: int = 2000  # ms
+
+CONTENT_TYPE: str = 'text/plain'
+CONTENT_ENCODING: str = 'utf-8'

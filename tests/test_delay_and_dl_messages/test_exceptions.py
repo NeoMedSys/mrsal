@@ -5,8 +5,8 @@ import pika
 import pytest
 import rabbitamqp.config.config as config
 import tests.config as test_config
-from rabbitamqp.config.logging import get_logger
 from rabbitamqp.amqp import Amqp
+from rabbitamqp.config.logging import get_logger
 
 log = get_logger(__name__)
 

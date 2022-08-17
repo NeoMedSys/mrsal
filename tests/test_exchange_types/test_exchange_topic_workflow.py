@@ -4,8 +4,8 @@ import time
 import pika
 import rabbitamqp.config.config as config
 import tests.config as test_config
-from rabbitamqp.config.logging import get_logger
 from rabbitamqp.amqp import Amqp
+from rabbitamqp.config.logging import get_logger
 
 log = get_logger(__name__)
 
@@ -16,11 +16,6 @@ amqp = Amqp(host=test_config.HOST,
 amqp.connect_to_server()
 
 def test_topic_exchange_workflow():
-    EXCHANGE: str = 'agreements'
-    EXCHANGE_TYPE: str = 'topic'
-
-    QUEUE_1: str = 'berlin_agreements'
-    QUEUE_2: str = 'september_agreements'
 
     ROUTING_KEY_1: str = 'agreements.eu.berlin.august.2022'  # Messages will published with this routing key
     ROUTING_KEY_2: str = 'agreements.eu.madrid.september.2022'  # Messages will published with this routing key
@@ -31,54 +26,54 @@ def test_topic_exchange_workflow():
     # ------------------------------------------
 
     # Delete existing queues and exchanges to use
-    amqp.exchange_delete(exchange=EXCHANGE)
-    amqp.queue_delete(queue=QUEUE_1)
-    amqp.queue_delete(queue=QUEUE_2)
+    amqp.exchange_delete(exchange='agreements')
+    amqp.queue_delete(queue='berlin_agreements')
+    amqp.queue_delete(queue='september_agreements')
 
     # Setup exchange
-    exch_result: pika.frame.Method = amqp.setup_exchange(exchange=EXCHANGE,
-                                                         exchange_type=EXCHANGE_TYPE)
+    exch_result: pika.frame.Method = amqp.setup_exchange(exchange='agreements',
+                                                         exchange_type='topic')
     assert exch_result != None
     # ------------------------------------------
 
     # Setup queue for berlin agreements
-    q_result1: pika.frame.Method = amqp.setup_queue(queue=QUEUE_1)
+    q_result1: pika.frame.Method = amqp.setup_queue(queue='berlin_agreements')
     assert q_result1 != None
 
     # Bind queue to exchange with binding key
-    qb_result1: pika.frame.Method = amqp.setup_queue_binding(exchange=EXCHANGE,
+    qb_result1: pika.frame.Method = amqp.setup_queue_binding(exchange='agreements',
                                                              routing_key=BINDING_KEY_1,
-                                                             queue=QUEUE_1)
+                                                             queue='berlin_agreements')
     assert qb_result1 != None
     # ----------------------------------
 
     # Setup queue for september agreements
-    q_result2: pika.frame.Method = amqp.setup_queue(queue=QUEUE_2)
+    q_result2: pika.frame.Method = amqp.setup_queue(queue='september_agreements')
     assert q_result2 != None
 
     # Bind queue to exchange with binding key
-    qb_result2: pika.frame.Method = amqp.setup_queue_binding(exchange=EXCHANGE,
+    qb_result2: pika.frame.Method = amqp.setup_queue_binding(exchange='agreements',
                                                              routing_key=BINDING_KEY_2,
-                                                             queue=QUEUE_2)
+                                                             queue='september_agreements')
     assert qb_result2 != None
     # ----------------------------------
 
     # Publisher:
     prop = pika.BasicProperties(
-        content_type='text/plain',
-        content_encoding='utf-8',
+        content_type=test_config.CONTENT_TYPE,
+        content_encoding=test_config.CONTENT_ENCODING,
         delivery_mode=pika.DeliveryMode.Persistent)
 
     # Message ("uuid1") is published to the exchange will be routed to queue1
     message1 = 'uuid1'
-    amqp.publish_message(exchange=EXCHANGE,
+    amqp.publish_message(exchange='agreements',
                          routing_key=ROUTING_KEY_1,
                          message=json.dumps(message1),
                          properties=prop)
 
     # Message ("uuid2") is published to the exchange will be routed to queue2
     message2 = 'uuid2'
-    amqp.publish_message(exchange=EXCHANGE,
+    amqp.publish_message(exchange='agreements',
                          routing_key=ROUTING_KEY_2,
                          message=json.dumps(message2),
                          properties=prop)
@@ -86,39 +81,39 @@ def test_topic_exchange_workflow():
 
     time.sleep(1)
     # Confirm messages are routed to respected queues
-    result1 = amqp.setup_queue(queue=QUEUE_1, passive=True)
+    result1 = amqp.setup_queue(queue='berlin_agreements', passive=True)
     message_count1 = result1.method.message_count
     assert message_count1 == 1
 
-    result2 = amqp.setup_queue(queue=QUEUE_2, passive=True)
+    result2 = amqp.setup_queue(queue='september_agreements', passive=True)
     message_count2 = result2.method.message_count
     assert message_count2 == 1
     # ------------------------------------------
 
     # Start consumer for every queue
     amqp.start_consumer(
-        queue=QUEUE_1,
+        queue='berlin_agreements',
         callback=consumer_callback,
-        callback_args=(test_config.HOST, QUEUE_1),
+        callback_args=(test_config.HOST, 'berlin_agreements'),
         inactivity_timeout=1,
         requeue=False
     )
 
     amqp.start_consumer(
-        queue=QUEUE_2,
+        queue='september_agreements',
         callback=consumer_callback,
-        callback_args=(test_config.HOST, QUEUE_2),
+        callback_args=(test_config.HOST, 'september_agreements'),
         inactivity_timeout=1,
         requeue=False
     )
     # ------------------------------------------
 
     # Confirm messages are consumed
-    result1 = amqp.setup_queue(queue=QUEUE_1, passive=True)
+    result1 = amqp.setup_queue(queue='berlin_agreements', passive=True)
     message_count1 = result1.method.message_count
     assert message_count1 == 0
 
-    result2 = amqp.setup_queue(queue=QUEUE_2, passive=True)
+    result2 = amqp.setup_queue(queue='september_agreements', passive=True)
     message_count2 = result2.method.message_count
     assert message_count2 == 0
 

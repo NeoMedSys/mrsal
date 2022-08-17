@@ -4,8 +4,8 @@ import time
 import pika
 import rabbitamqp.config.config as config
 import tests.config as test_config
-from rabbitamqp.config.logging import get_logger
 from rabbitamqp.amqp import Amqp
+from rabbitamqp.config.logging import get_logger
 
 log = get_logger(__name__)
 
@@ -16,76 +16,64 @@ amqp = Amqp(host=test_config.HOST,
 amqp.connect_to_server()
 
 def test_headers_exchange_workflow():
-    EXCHANGE: str = 'agreements'
-    EXCHANGE_TYPE: str = 'headers'
-
-    QUEUE_1: str = 'zip_report'
-    Q1_ARGS = {'x-match': 'all', 'format': 'zip', 'type': 'report'}
-
-    QUEUE_2: str = 'pdf_report'
-    Q2_ARGS = {'x-match': 'any', 'format': 'pdf', 'type': 'log'}
-
-    HEADERS1 = {'format': 'zip', 'type': 'report'}
-    HEADERS2 = {'format': 'pdf', 'date': '2022'}
-    # ------------------------------------------
 
     # Delete existing queues and exchanges to use
-    amqp.exchange_delete(exchange=EXCHANGE)
-    amqp.queue_delete(queue=QUEUE_1)
-    amqp.queue_delete(queue=QUEUE_2)
+    amqp.exchange_delete(exchange='agreements')
+    amqp.queue_delete(queue='zip_report')
+    amqp.queue_delete(queue='pdf_report')
     # ------------------------------------------
 
     # Setup exchange
-    exch_result: pika.frame.Method = amqp.setup_exchange(exchange=EXCHANGE,
-                                                         exchange_type=EXCHANGE_TYPE)
+    exch_result: pika.frame.Method = amqp.setup_exchange(exchange='agreements',
+                                                         exchange_type='headers')
     assert exch_result != None
     # ------------------------------------------
 
     # Setup queue
-    q_result1: pika.frame.Method = amqp.setup_queue(queue=QUEUE_1)
+    q_result1: pika.frame.Method = amqp.setup_queue(queue='zip_report')
     assert q_result1 != None
 
     # Bind queue to exchange with arguments
-    qb_result1: pika.frame.Method = amqp.setup_queue_binding(exchange=EXCHANGE,
-                                                             queue=QUEUE_1,
-                                                             arguments=Q1_ARGS)
+    qb_result1: pika.frame.Method = amqp.setup_queue_binding(exchange='agreements',
+                                                             queue='zip_report',
+                                                             arguments={'x-match': 'all', 'format': 'zip', 'type': 'report'})
     assert qb_result1 != None
     # ------------------------------------------
 
     # Setup queue
-    q_result2: pika.frame.Method = amqp.setup_queue(queue=QUEUE_2)
+    q_result2: pika.frame.Method = amqp.setup_queue(queue='pdf_report')
     assert q_result2 != None
 
     # Bind queue to exchange with arguments
-    qb_result2: pika.frame.Method = amqp.setup_queue_binding(exchange=EXCHANGE,
-                                                             queue=QUEUE_2,
-                                                             arguments=Q2_ARGS)
+    qb_result2: pika.frame.Method = amqp.setup_queue_binding(exchange='agreements',
+                                                             queue='pdf_report',
+                                                             arguments={'x-match': 'any', 'format': 'pdf', 'type': 'log'})
     assert qb_result2 != None
     # ------------------------------------------
 
     # Publisher:
     # Message ("uuid1") is published to the exchange with a set of headers
     prop1 = pika.BasicProperties(
-        content_type='text/plain',
-        content_encoding='utf-8',
-        headers=HEADERS1,
+        content_type=test_config.CONTENT_TYPE,
+        content_encoding=test_config.CONTENT_ENCODING,
+        headers={'format': 'zip', 'type': 'report'},
         delivery_mode=pika.DeliveryMode.Persistent)
 
     message1 = 'uuid1'
-    amqp.publish_message(exchange=EXCHANGE,
+    amqp.publish_message(exchange='agreements',
                          routing_key='',
                          message=json.dumps(message1),
                          properties=prop1)
 
     # Message ("uuid2") is published to the exchange with a set of headers
     prop2 = pika.BasicProperties(
-        content_type='text/plain',
-        content_encoding='utf-8',
-        headers=HEADERS2,
+        content_type=test_config.CONTENT_TYPE,
+        content_encoding=test_config.CONTENT_ENCODING,
+        headers={'format': 'pdf', 'date': '2022'},
         delivery_mode=pika.DeliveryMode.Persistent)
 
     message2 = 'uuid2'
-    amqp.publish_message(exchange=EXCHANGE,
+    amqp.publish_message(exchange='agreements',
                          routing_key='',
                          message=json.dumps(message2),
                          properties=prop2)
@@ -93,39 +81,39 @@ def test_headers_exchange_workflow():
 
     time.sleep(1)
     # Confirm messages are routed to respected queues
-    result1 = amqp.setup_queue(queue=QUEUE_1, passive=True)
+    result1 = amqp.setup_queue(queue='zip_report', passive=True)
     message_count1 = result1.method.message_count
     assert message_count1 == 1
 
-    result2 = amqp.setup_queue(queue=QUEUE_2, passive=True)
+    result2 = amqp.setup_queue(queue='pdf_report', passive=True)
     message_count2 = result2.method.message_count
     assert message_count2 == 1
     # ------------------------------------------
 
     # Start consumer for every queue
     amqp.start_consumer(
-        queue=QUEUE_1,
+        queue='zip_report',
         callback=consumer_callback,
-        callback_args=(test_config.HOST, QUEUE_1),
+        callback_args=(test_config.HOST, 'zip_report'),
         inactivity_timeout=2,
         requeue=False
     )
 
     amqp.start_consumer(
-        queue=QUEUE_2,
+        queue='pdf_report',
         callback=consumer_callback,
-        callback_args=(test_config.HOST, QUEUE_2),
+        callback_args=(test_config.HOST, 'pdf_report'),
         inactivity_timeout=2,
         requeue=False
     )
     # ------------------------------------------
 
     # Confirm messages are consumed
-    result1 = amqp.setup_queue(queue=QUEUE_1, passive=True)
+    result1 = amqp.setup_queue(queue='zip_report', passive=True)
     message_count1 = result1.method.message_count
     assert message_count1 == 0
 
-    result2 = amqp.setup_queue(queue=QUEUE_2, passive=True)
+    result2 = amqp.setup_queue(queue='pdf_report', passive=True)
     message_count2 = result2.method.message_count
     assert message_count2 == 0
 
