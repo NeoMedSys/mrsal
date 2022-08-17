@@ -4,19 +4,18 @@ from socket import gaierror
 from typing import Callable, Dict, NoReturn, Tuple
 
 import pika
-import rabbitamqp.config.config as config
 import requests
-from rabbitamqp.config.exceptions import RabbitMQConnectionError, RabbitMQDeclareExchangeError
-from rabbitamqp.config.logging import get_logger
 from requests.auth import HTTPBasicAuth
 from retry import retry
+
+from mrsal.config.logging import get_logger
 
 log = get_logger(__name__)
 
 @dataclass
-class Amqp(object):
+class Mrsal(object):
     """
-    The Amqp creates a layer on top of Pika's core, providing methods to setup a 
+    Mrsal creates a layer on top of Pika's core, providing methods to setup a 
     RabbitMQ broker with multiple functionalities.
 
     Properties:
@@ -25,7 +24,7 @@ class Amqp(object):
         :prop pika.credentials.Credentials credentials: auth credentials
         :prop str virtual_host: RabbitMQ virtual host to use
         :prop bool verbose: If True then more INFO logs will be printed
-        :prop int heartbeat: Controls AMQP heartbeat timeout negotiation during connection tuning.
+        :prop int heartbeat: Controls RabbitMQ's server heartbeat timeout negotiation during connection tuning.
         :prop int blocked_connection_timeout: blocked_connection_timeout is the timeout, in seconds, 
             for the connection to remain blocked; if the timeout expires, the connection will be torn down
         :prop int prefetch_count: Specifies a prefetch window in terms of whole messages.
@@ -37,12 +36,12 @@ class Amqp(object):
     verbose: bool = False
     prefetch_count: int = 1
     heartbeat: int = 5 * 60 * 60  # 5 hours
-    blocked_connection_timeout: int = 300  # 30 sec
+    blocked_connection_timeout: int = 300  # sec
     _connection: pika.BlockingConnection = None
     _channel = None
 
     @retry((pika.exceptions.AMQPConnectionError, TypeError, gaierror), tries=2, delay=5, jitter=(1, 3))
-    def setup_connection(self):
+    def connect_to_server(self):
         """
         Establish connection to RabbitMQ server specifying connection parameters.
         """
@@ -75,10 +74,6 @@ class Amqp(object):
         except gaierror as err:
             log.error(f'Caught a socket error: {err}')
             raise gaierror
-        # except Exception as e:
-        #     msg = f'No connection to the RabbitMQ server was made on {connection_info}: {str(e)}'
-        #     log.error(msg, exc_info=True)
-        #     raise RabbitMQConnectionError(msg)
 
     def setup_exchange(self, exchange: str, exchange_type: str, arguments: Dict[str, str] = None,
                        durable=True, passive=False, internal=False, auto_delete=False):
@@ -165,12 +160,13 @@ class Amqp(object):
             log.error(f'Caught ChannelClosedByBroker: {err}')
             raise pika.exceptions.ChannelClosedByBroker(503, str(err))
 
-    def setup_queue_binding(self, exchange: str, queue: str, routing_key: str):
-        """Bind the queue to the specified exchange.
+    def setup_queue_binding(self, exchange: str, queue: str, routing_key: str = None, arguments=None):
+        """Bind queue to exchange.
 
         :param str queue: The queue to bind to the exchange
         :param str exchange: The source exchange to bind to
         :param str routing_key: The routing key to bind on
+        :param dict arguments: Custom key/value pair arguments for the binding
 
         :returns: Method frame from the Queue.Bind-ok response
         :rtype: `pika.frame.Method` having `method` attribute of type
@@ -181,7 +177,7 @@ class Amqp(object):
             log.info(f'Binding queue to exchange: queue={queue}, exchange={exchange}, routing_key={routing_key}')
         try:
             bind_result = self._channel.queue_bind(
-                exchange=exchange, queue=queue, routing_key=routing_key)
+                exchange=exchange, queue=queue, routing_key=routing_key, arguments=arguments)
             log.success(f'The queue is bound to exchange successfully: queue={queue}, exchange={exchange}, routing_key={routing_key}, result={bind_result}')
             if self.verbose:
                 log.info(f'In such setup a message published to the exchange "{exchange}" \
@@ -190,195 +186,6 @@ class Amqp(object):
         except pika.exceptions.ChannelClosedByBroker as err:
             log.error(f'Caught ChannelClosedByBroker: {err}')
             raise pika.exceptions.ChannelClosedByBroker(503, str(err))
-
-    def setup_broker_with_delay_letter(self, exchange: str, routing_key: str, queue: str):
-        """
-        Setup broker to handle messages with delay time using the delayed-messaging plugin.
-        PS! 
-            - This plugin is not commercially supported by Pivotal at the moment. 
-            - Plugin has known limitations: for more info check here https://github.com/rabbitmq/rabbitmq-delayed-message-exchange#limitations
-
-        Delayed messages:
-            We are using the delayed-messaging plugin:  
-                - A user can declare an exchange with the type x-delayed-message.
-                - Then publish messages with the custom header x-delay expressing in milliseconds a delay time for the message. 
-                - The message will be delivered to the respective queues after x-delay milliseconds.
-
-        Workflow scenario with this setup:
-            1- PUBLISHER: publish messages to exchange specifying routing-key and x-delay (delay time for the message).
-            2- EXCHANGE: send message to queues (bound to the exchange by routing-key) after specified x-delay ms.
-            3- QUEUE: receives and stack messages from exchange. 
-            4- CONSUMER: start consuming messages from the queue. 
-                - These messages can be either 
-                    - correctly-acknowledge and deleted from QUEUE or 
-                    - negatively-acknowledged with requeue equals to either 
-                        - True (The consumer will consume it again from the queue) or 
-                        - False (The message will be deleted from queue).
-
-        Params:
-            :param str exchange: The exchange name  
-                - This exchange is declared with the type x-delayed-message.
-                - So when the publisher publish messages with the custom header x-delay 
-                    expressing in milliseconds a delay time for the message, 
-                    then the message will be delivered to the respective queues after x-delay milliseconds.
-            :param str routing_key: The routing key to bind queue to exchange.
-            :param str queue: The queue name
-        """
-        if self.verbose:
-            log.info(f'Setting up broker to handle messages with delay time.')
-
-        # Setup main exchange with delay message type
-        self.setup_exchange(exchange=exchange,
-                            exchange_type=config.DELAY_EXCHANGE_TYPE,
-                            arguments=config.DELAY_EXCHANGE_ARGS)
-
-        self.setup_queue(queue=queue)
-
-        # Bind the queue to the main exchange
-        self.setup_queue_binding(exchange=exchange,
-                                 routing_key=routing_key,
-                                 queue=queue)
-
-    def setup_broker_to_handle_dead_messages(self, exchange: str, exchange_type: str, routing_key: str,
-                                             dl_exchange: str, dl_exchange_type: str, dl_routing_key: str,
-                                             queue: str, dl_queue: str, message_ttl: int = None,
-                                             exchange_arguments: Dict[str, str] = None):
-        """
-        Setup broker to handle dead messages.
-
-        Dead messages are:
-            - Some messages become undeliverable or unhandled even when received by the broker. 
-            - This can happen when: 
-                - The amount of time the message has spent in a queue exceeds the time to live 'TTL' (x-message-ttl). 
-                - When a message is negatively-acknowledged by the consumer. 
-                - When the queue reaches its capacity.
-            - Such a message is called a dead message.
-
-
-        Workflow scenario with this setup:
-            1- PUBLISHER: publish messages to exchange specifying routing-key.
-            2- EXCHANGE: send message to queues (bound to the exchange by routing-key).
-            3- QUEUE: receives and stack messages from exchange. 
-                - A message that has been in the queue for longer than the configured TTL (x-message-ttl) 
-                    is said to be expired and will be sent to dead-letters-exchange.
-            4- CONSUMER: start consuming not-expired messages from the queue. 
-                - These messages can be either 
-                    - correctly-acknowledge and deleted from QUEUE or 
-                    - negatively-acknowledged and will be send to dead-letters-exchange.
-        Params:
-            :param str exchange: The Name of main exchange. 
-            :param str exchange_type: The type of exchange.
-            :param str routing_key: The routing key to bind queue to main exchange.
-            :param str dl_exchange: The Name of dead letters exchange.
-            :param str dl_exchange_type: The type of dead letters exchange.
-            :param str dl_routing_key: The routing key to bind queue to dead letters exchange.
-            :param str queue: The main queue name.
-            :param str dl_queue: The dead letters queue name.
-            :param int message_ttl: Message TTL (time to live) applied to main queue.
-            :param Dict[str,str] exchange_arguments: Custom key/value arguments for main exchange.
-        """
-        if self.verbose:
-            log.info(f'Setting up broker to handle dead messages.')
-
-        # Setup dead letters exchange
-        self.setup_exchange(exchange=dl_exchange, exchange_type=dl_exchange_type)
-
-        # Setup main exchange
-        self.setup_exchange(exchange=exchange,
-                            exchange_type=exchange_type,
-                            arguments=exchange_arguments)
-
-        # Setup queue with dead letters exchange
-        queue_args = {**config.DEAD_LETTER_QUEUE_ARGS,
-                      'x-dead-letter-exchange': dl_exchange,
-                      'x-dead-letter-routing-key': dl_routing_key}
-        # Set message time to live if it presents
-        if message_ttl != None:
-            queue_args['x-message-ttl'] = message_ttl
-
-        self.setup_queue(queue=queue,
-                         arguments=queue_args)
-
-        # Bind the queue to the main exchange
-        self.setup_queue_binding(exchange=exchange,
-                                 routing_key=routing_key,
-                                 queue=queue)
-
-        # Bind the dl_queue to the dl_exchange
-        self.setup_queue(queue=dl_queue)
-        self.setup_queue_binding(exchange=dl_exchange,
-                                 routing_key=dl_routing_key,
-                                 queue=dl_queue)
-
-    def setup_dead_and_delay_letters(self, exchange: str, routing_key: str,
-                                     dl_exchange: str, dl_exchange_type: str, dl_routing_key: str,
-                                     queue: str, dl_queue: str, message_ttl: int = None):
-        """
-        Setup broker to handle messages which are dead or|and have delayed time.
-
-        1. Dead messages are:
-            See doc in :func:`AMQP.setup_dead_letters` 
-
-        2. Delayed messages:
-            See doc in :func:`AMQP.setup_delay_letter` 
-
-        Workflow scenario with this setup:
-            1- PUBLISHER: publish messages to exchange specifying routing-key and x-delay (delay time for the message).
-            2- EXCHANGE: send message to queues (bound to the exchange by routing-key) after specified x-delay ms.
-            3- QUEUE: receives and stack messages from exchange. 
-                - A message that has been in the queue for longer than the configured TTL (x-message-ttl) 
-                    is said to be expired and will be sent to dead-letters-exchange.
-            4- CONSUMER: start consuming not-expired messages from the queue. 
-                - These messages can be either 
-                    - correctly-acknowledge and deleted from QUEUE or 
-                    - negatively-acknowledged and will be send to dead-letters-exchange.
-
-        Params:
-            :param str exchange: The Name of main exchange. 
-                - This exchange is declared with the type x-delayed-message.
-                - So when the publisher publish messages with the custom header x-delay 
-                    expressing in milliseconds a delay time for the message. 
-                - The message will be delivered to the respective queues after x-delay milliseconds.
-            :param str routing_key: The routing key to bind on queue to main exchange.
-            :param str dl_exchange: The Name of dead letters exchange.
-            :param str dl_exchange_type: The type of dead letters exchange.
-            :param str dl_routing_key: The routing key to bind on queue to dead letters exchange.
-            :param str queue: The main queue name.
-            :param str dl_queue: The dead letters queue name.
-            :param int message_ttl: Message TTL (time to live) applied to a main queue.
-        """
-        if self.verbose:
-            log.info(f'Setting up broker to handle messages which are dead or|and have delayed time.')
-
-        # Setup dead letters exchange
-        self.setup_exchange(exchange=dl_exchange, exchange_type=dl_exchange_type)
-
-        # Setup main exchange with delay message type
-        self.setup_exchange(exchange=exchange,
-                            exchange_type=config.DELAY_EXCHANGE_TYPE,
-                            arguments=config.DELAY_EXCHANGE_ARGS)
-
-        # Setup queue with dead letters exchange
-        queue_args = {**config.DEAD_LETTER_QUEUE_ARGS,
-                      'x-dead-letter-exchange': dl_exchange,
-                      'x-dead-letter-routing-key': dl_routing_key}
-        # Set message time to live if it presents
-        if message_ttl != None:
-            queue_args['x-message-ttl'] = message_ttl
-
-        self.setup_queue(queue=queue,
-                         arguments=queue_args)
-
-        # Bind the queue to the main exchange
-        self.setup_queue_binding(exchange=exchange,
-                                 routing_key=routing_key,
-                                 queue=queue)
-
-        # Bind the dl_queue to the dl_exchange
-        self.setup_queue(queue=dl_queue)
-        self.setup_queue_binding(exchange=dl_exchange,
-                                 routing_key=dl_routing_key,
-                                 queue=dl_queue)
 
     # TODO NOT IN USE (remove or use)
     def stop_consuming(self, consumer_tag: str) -> NoReturn:
@@ -464,19 +271,19 @@ class Amqp(object):
         """
         Setup consumer:
             1- Consumer start consuming the messages from the queue.
-            2- Send the consumed message to callback method to be processed, and then the message can be either:
+            2- If `inactivity_timeout` is given (in seconds) the consumer will be canceled when the time of inactivity 
+                exceeds inactivity_timeout.
+            3- Send the consumed message to callback method to be processed, and then the message can be either:
                 - Processed, then correctly-acknowledge and deleted from QUEUE or 
-                - Failed to process, then negatively-acknowledged and then will be either
-                    - requeued if requeue is True, or
-                    - deleted from queue if dead-letters' configuration is not setup and requeue is False or
-                    - dead letter if dead-letters' configuration is setup and:
-                        - requeue is False or 
+                - Failed to process, negatively-acknowledged and then will be either
+                    - `Requeued` if requeue is True
+                    - `Dead letter` and deleted from queue if 
+                        - requeue is False
                         - requeue is True and requeue attempt fails.
 
         :param str queue: The queue name to consume
         :param Callable callback: Method where received messages are sent to be processed
         :param Tuple callback_args: Tuple of arguments for callback method
-        :param dict arguments: Custom key/value pair arguments for the consumer
         :param float inactivity_timeout: 
             - if a number is given (in seconds), will cause the method to yield (None, None, None) after the
                 given period of inactivity.
@@ -486,7 +293,7 @@ class Amqp(object):
                              requeue attempt fails the messages are discarded or
                              dead-lettered.
         """
-        log.info(f'Consuming messages: queue= {queue}')
+        log.info(f'Consuming messages: queue= {queue}, requeue= {requeue}, inactivity_timeout= {inactivity_timeout}')
 
         try:
             for method_frame, properties, body in \
@@ -515,10 +322,10 @@ class Amqp(object):
                     log.warning(f'Given period of inactivity {inactivity_timeout} is exceeded. Cancel consumer.')
                     self._channel.cancel()
         except ValueError as err1:
-            log.error(f'ValueError is caught while consuming. Consumer-creation parameters dont match those of the existing queue consumer generator. Cancel consumer.')
+            log.error(f'ValueError is caught while consuming. Consumer-creation parameters dont match those of the existing queue consumer generator. Cancel consumer. . {str(err1)}')
             self._channel.cancel()
         except pika.exceptions.ChannelClosed as err2:
-            log.error(f'ChannelClosed is caught while consuming. Channel is closed by broker. Cancel consumer.')
+            log.error(f'ChannelClosed is caught while consuming. Channel is closed by broker. Cancel consumer. {str(err2)}')
             self._channel.cancel()
 
     # --------------------------------------------------------------
@@ -526,7 +333,7 @@ class Amqp(object):
     @retry((pika.exceptions.UnroutableError), tries=2, delay=5, jitter=(1, 3))
     def publish_message(self, exchange: str, routing_key: str,
                         message: str, properties: pika.BasicProperties):
-        """Publish message to the channel with the given exchange, routing key.
+        """Publish message to the exchange specifying routing key and properties.
 
         :param str exchange: The exchange to publish to
         :param str routing_key: The routing key to bind on
@@ -544,11 +351,10 @@ class Amqp(object):
         """
         try:
             # Publish the message by serializing it in json dump
-            self._channel.basic_publish(
-                exchange=exchange, routing_key=routing_key, body=json.dumps(
-                    message),
-                properties=properties)
-
+            self._channel.basic_publish(exchange=exchange,
+                                        routing_key=routing_key,
+                                        body=json.dumps(message),
+                                        properties=properties)
             log.info(
                 f'Message ({message}) is published to the exchange "{exchange}" with a routing key "{routing_key}"')
 
