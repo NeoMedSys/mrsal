@@ -1,8 +1,8 @@
 [tool.poetry]
 authors = ["Raafat <rafatzahran90@gmail.com>"]
 description = ""
-name = "rabbitamqp"
-version = "0.2.4"
+name = "mrsal"
+version = "0.1.0"
 
 [tool.poetry.dependencies]
 python = "^3.8"

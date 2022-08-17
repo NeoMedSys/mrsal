@@ -32,7 +32,7 @@
 <div id='theWhat'/>
 
 ### The What
-> PY-AMQP Is a _message broker_ based on [**RabbitMQ**](https://www.rabbitmq.com/) with [**Pika**](https://pika.readthedocs.io/en/stable/#).
+> MRSAL Is a _message broker_ based on [**RabbitMQ**](https://www.rabbitmq.com/) with [**Pika**](https://pika.readthedocs.io/en/stable/#).
 
 <div id='theWhy'/>
 
@@ -49,9 +49,9 @@
 
 ## Installation
 
-rabbitamqp is available for download via PyPI and may be installed using pip.
+MRSAL is available for download via PyPI and may be installed using pip.
 ```bash
-pip install rabbitamqp
+pip install mrsal
 ```
 ---
 <div id='startRabbitMQ'/>
@@ -86,14 +86,14 @@ version: "3.8"
 
 services:
   rabbitmq_server:
-    image: rabbit_amqp
+    image: mrsal
     build:
       context: .
-    container_name: rabbit_amqp
+    container_name: mrsal
     environment:
-      - RABBITMQ_DEFAULT_USER=root
-      - RABBITMQ_DEFAULT_PASS=password
-      - RABBITMQ_DEFAULT_VHOST=v_host
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_DEFAULT_PASS}
+      - RABBITMQ_DEFAULT_VHOST=${RABBITMQ_DEFAULT_VHOST}
     ports:
       # RabbitMQ container listening on port 5672.
       # Expose default port to the port 5673
@@ -147,12 +147,12 @@ This tutorial assumes RabbitMQ is installed and running on localhost on the port
     - Different users can have different permissions to different vhost and queues and exchanges can be created, so they only exist in one vhost. 
     - When a client establishes a connection to the RabbitMQ server, it specifies the vhost within which it will operate
 ```py
-amqp = Amqp(host='localhost',
+mrsal = Mrsal(host='localhost',
             port=5673,
             credentials=('root', 'password'),
             virtual_host='v_host')
 
-amqp.connect_to_server()
+mrsal.connect_to_server()
 ```
 ---
 <div id='declareExchange'/>
@@ -180,7 +180,7 @@ amqp.connect_to_server()
 # Argument with the kye _x-delayed-type_ to specify how the messages will be routed after the delay period specified
 EXCHANGE_ARGS: str = {'x-delayed-type': 'direct'}
 
-amqp.setup_exchange(exchange='agreements',
+mrsal.setup_exchange(exchange='agreements',
                     exchange_type='x-delayed-message',
                     arguments=EXCHANGE_ARGS,
                     durable=True, passive=False, internal=False, auto_delete=False)
@@ -213,7 +213,7 @@ amqp.setup_exchange(exchange='agreements',
 QUEUE_ARGS = {'x-dead-letter-exchange': DL_EXCHANGE,
                 'x-dead-letter-routing-key': DL_ROUTING_KEY,
                 'x-message-ttl': 2000}
-amqp.setup_queue(queue='agreements_queue',
+mrsal.setup_queue(queue='agreements_queue',
                 arguments=QUEUE_ARGS,
                 durable: bool = True,
                 exclusive: bool = False, auto_delete: bool = False, passive: bool = False)
@@ -233,7 +233,7 @@ Bind the queue to exchange.
 
 ```py
 ARGS = {'x-match': 'all', 'format': 'zip', 'type': 'report'}
-amqp.setup_queue_binding(exchange='agreements',
+mrsal.setup_queue_binding(exchange='agreements',
                         routing_key='agreements_key',
                         queue='agreements_queue',
                         arguments=ARGS)
@@ -266,7 +266,7 @@ prop = pika.BasicProperties(
         headers=headers,
         delivery_mode=pika.DeliveryMode.Persistent)
 
-amqp.publish_message(exchange='agreements',
+mrsal.publish_message(exchange='agreements',
                 routing_key='agreements_key',
                 message=json.dumps(message),
                 properties=prop)
@@ -293,7 +293,7 @@ def consumer_callback(host: str, queue: str, message: str):
 
 QUEUE: str = 'agreements_queue'
 
-amqp.start_consumer(
+mrsal.start_consumer(
         queue='agreements_queue,
         callback=consumer_callback,
         callback_args=(test_config.HOST, 'agreements_queue'),
@@ -331,24 +331,24 @@ ROUTING_KEY_2: str = 'madrid agreements'
 # ------------------------------------------
 
 # Setup exchange
-amqp.setup_exchange(exchange=EXCHANGE,
+mrsal.setup_exchange(exchange=EXCHANGE,
                     exchange_type=EXCHANGE_TYPE)
 # ------------------------------------------
 
 # Setup queue for berlin agreements
-amqp.setup_queue(queue=QUEUE_1)
+mrsal.setup_queue(queue=QUEUE_1)
 
 # Bind queue to exchange with binding key
-amqp.setup_queue_binding(exchange=EXCHANGE,
+mrsal.setup_queue_binding(exchange=EXCHANGE,
                         routing_key=ROUTING_KEY_1,
                         queue=QUEUE_1)
 # ------------------------------------------
 
 # Setup queue for madrid agreements
-amqp.setup_queue(queue=QUEUE_2)
+mrsal.setup_queue(queue=QUEUE_2)
 
 # Bind queue to exchange with binding key
-amqp.setup_queue_binding(exchange=EXCHANGE,
+mrsal.setup_queue_binding(exchange=EXCHANGE,
                         routing_key=ROUTING_KEY_2,
                         queue=QUEUE_2)
 # ------------------------------------------
@@ -361,21 +361,21 @@ prop = pika.BasicProperties(
 
 # Message ("uuid2") is published to the exchange and it's routed to queue2
 message2 = 'uuid2'
-amqp.publish_message(exchange=EXCHANGE,
+mrsal.publish_message(exchange=EXCHANGE,
                         routing_key=ROUTING_KEY_2,
                         message=json.dumps(message2),
                         properties=prop)
 
 # Message ("uuid1") is published to the exchange and it's routed to queue1
 message1 = 'uuid1'
-amqp.publish_message(exchange=EXCHANGE,
+mrsal.publish_message(exchange=EXCHANGE,
                         routing_key=ROUTING_KEY_1,
                         message=json.dumps(message1),
                         properties=prop)
 # ------------------------------------------
 
 # Start consumer for every queue
-amqp.start_consumer(
+mrsal.start_consumer(
     queue=QUEUE_1,
     callback=consumer_callback,
     callback_args=(test_config.HOST, QUEUE_1),
@@ -383,7 +383,7 @@ amqp.start_consumer(
     requeue=False
 )
 
-amqp.start_consumer(
+mrsal.start_consumer(
     queue=QUEUE_2,
     callback=consumer_callback,
     callback_args=(test_config.HOST, QUEUE_2),
@@ -421,25 +421,25 @@ BINDING_KEY_3: str = 'agreements.#'  # All agreements
 # ------------------------------------------
 
 # Setup exchange
-amqp.setup_exchange(exchange=EXCHANGE,
+mrsal.setup_exchange(exchange=EXCHANGE,
                     exchange_type=EXCHANGE_TYPE)
 # ------------------------------------------
 
 # Setup queue for berlin agreements
-amqp.setup_queue(queue=QUEUE_1)
+mrsal.setup_queue(queue=QUEUE_1)
 
 
 # Bind queue to exchange with binding key
-amqp.setup_queue_binding(exchange=EXCHANGE,
+mrsal.setup_queue_binding(exchange=EXCHANGE,
                         routing_key=BINDING_KEY_1,
                         queue=QUEUE_1)
 # ----------------------------------
 
 # Setup queue for september agreements
-amqp.setup_queue(queue=QUEUE_2)
+mrsal.setup_queue(queue=QUEUE_2)
 
 # Bind queue to exchange with binding key
-amqp.setup_queue_binding(exchange=EXCHANGE,
+mrsal.setup_queue_binding(exchange=EXCHANGE,
                         routing_key=BINDING_KEY_2,
                         queue=QUEUE_2)
 # ----------------------------------
@@ -452,21 +452,21 @@ prop = pika.BasicProperties(
 
 # Message ("uuid1") is published to the exchange will be routed to queue1
 message1 = 'uuid1'
-amqp.publish_message(exchange=EXCHANGE,
+mrsal.publish_message(exchange=EXCHANGE,
                         routing_key=ROUTING_KEY_1,
                         message=json.dumps(message1),
                         properties=prop)
 
 # Message ("uuid2") is published to the exchange will be routed to queue2
 message2 = 'uuid2'
-amqp.publish_message(exchange=EXCHANGE,
+mrsal.publish_message(exchange=EXCHANGE,
                         routing_key=ROUTING_KEY_2,
                         message=json.dumps(message2),
                         properties=prop)
 # ------------------------------------------
 
 # Start consumer for every queue
-amqp.start_consumer(
+mrsal.start_consumer(
     queue=QUEUE_1,
     callback=consumer_callback,
     callback_args=(test_config.HOST, QUEUE_1),
@@ -474,7 +474,7 @@ amqp.start_consumer(
     requeue=False
 )
 
-amqp.start_consumer(
+mrsal.start_consumer(
     queue=QUEUE_2,
     callback=consumer_callback,
     callback_args=(test_config.HOST, QUEUE_2),
@@ -500,7 +500,7 @@ EXCHANGE_TYPE: str = 'fanout'
 ROUTING_KEY: str = ''
 
 # Setup exchange
-amqp.setup_exchange(exchange=EXCHANGE,
+mrsal.setup_exchange(exchange=EXCHANGE,
                     exchange_type=EXCHANGE_TYPE)
 ```
 <div id='headersExchange'/>
@@ -533,24 +533,24 @@ HEADERS2 = {'format': 'pdf', 'date': '2022'}
 # ------------------------------------------
 
 # Setup exchange
-amqp.setup_exchange(exchange=EXCHANGE,
+mrsal.setup_exchange(exchange=EXCHANGE,
                     exchange_type=EXCHANGE_TYPE)
 # ------------------------------------------
 
 # Setup queue
-amqp.setup_queue(queue=QUEUE_1)
+mrsal.setup_queue(queue=QUEUE_1)
 
 # Bind queue to exchange with arguments
-amqp.setup_queue_binding(exchange=EXCHANGE,
+mrsal.setup_queue_binding(exchange=EXCHANGE,
                         queue=QUEUE_1,
                         arguments=Q1_ARGS)
 # ------------------------------------------
 
 # Setup queue
-amqp.setup_queue(queue=QUEUE_2)
+mrsal.setup_queue(queue=QUEUE_2)
 
 # Bind queue to exchange with arguments
-amqp.setup_queue_binding(exchange=EXCHANGE,
+mrsal.setup_queue_binding(exchange=EXCHANGE,
                         queue=QUEUE_2,
                         arguments=Q2_ARGS)
 # ------------------------------------------
@@ -564,7 +564,7 @@ prop1 = pika.BasicProperties(
     delivery_mode=pika.DeliveryMode.Persistent)
 
 message1 = 'uuid1'
-amqp.publish_message(exchange=EXCHANGE,
+mrsal.publish_message(exchange=EXCHANGE,
                         routing_key='',
                         message=json.dumps(message1),
                         properties=prop1)
@@ -577,14 +577,14 @@ prop2 = pika.BasicProperties(
     delivery_mode=pika.DeliveryMode.Persistent)
 
 message2 = 'uuid2'
-amqp.publish_message(exchange=EXCHANGE,
+mrsal.publish_message(exchange=EXCHANGE,
                         routing_key='',
                         message=json.dumps(message2),
                         properties=prop2)
 # ------------------------------------------
 
 # Start consumer for every queue
-amqp.start_consumer(
+mrsal.start_consumer(
     queue=QUEUE_1,
     callback=consumer_callback,
     callback_args=(test_config.HOST, QUEUE_1),
@@ -592,7 +592,7 @@ amqp.start_consumer(
     requeue=False
 )
 
-amqp.start_consumer(
+mrsal.start_consumer(
     queue=QUEUE_2,
     callback=consumer_callback,
     callback_args=(test_config.HOST, QUEUE_2),
@@ -618,7 +618,7 @@ EXCHANGE_TYPE: str = 'x-delayed-message'
 EXCHANGE_ARGS: Dict[str, str] = {'x-delayed-type': 'direct'}
 
 # Setup exchange with delay message type
-amqp.setup_exchange(exchange=EXCHANGE,
+mrsal.setup_exchange(exchange=EXCHANGE,
                     exchange_type=EXCHANGE_TYPE,
                     arguments=EXCHANGE_ARGS)
 
@@ -646,7 +646,7 @@ queue: str = 'queue'
 queue_args = {'x-dead-letter-exchange': dl_exchange,
                 'x-dead-letter-routing-key': dl_routing_key,
                 'x-message-ttl': 2000}
-amqp.setup_queue(queue=queue,
+mrsal.setup_queue(queue=queue,
                 arguments=queue_args)
 ```
 ---
@@ -681,30 +681,30 @@ if MESSAGE_TTL != None:
 # ------------------------------------------
 
 # Setup dead letters exchange
-amqp.setup_exchange(exchange=DL_EXCHANGE,
+mrsal.setup_exchange(exchange=DL_EXCHANGE,
                     exchange_type=DL_EXCHANGE_TYPE)
 
 # Setup main exchange with 'x-delayed-message' type
 # and arguments where we specify how the messages will be routed after the delay period specified
-amqp.setup_exchange(exchange=EXCHANGE,
+mrsal.setup_exchange(exchange=EXCHANGE,
                     exchange_type=EXCHANGE_TYPE,
                     arguments=EXCHANGE_ARGS)
 # ------------------------------------------
 
 # Setup main queue with arguments where we specify DL_EXCHANGE and DL_ROUTING_KEY
-amqp.setup_queue(queue=QUEUE,
+mrsal.setup_queue(queue=QUEUE,
                 arguments=QUEUE_ARGS)
 
 # Bind main queue to the main exchange with routing_key
-amqp.setup_queue_binding(exchange=EXCHANGE,
+mrsal.setup_queue_binding(exchange=EXCHANGE,
                         routing_key=ROUTING_KEY,
                         queue=QUEUE)
 # ------------------------------------------
 
 # Bind DL_QUEUE to DL_EXCHANGE with DL_ROUTING_KEY
-amqp.setup_queue(queue=DL_QUEUE)
+mrsal.setup_queue(queue=DL_QUEUE)
 
-amqp.setup_queue_binding(exchange=DL_EXCHANGE,
+mrsal.setup_queue_binding(exchange=DL_EXCHANGE,
                         routing_key=DL_ROUTING_KEY,
                         queue=DL_QUEUE)
 # ------------------------------------------
@@ -721,7 +721,7 @@ prop1 = pika.BasicProperties(
     headers={'x-delay': x_delay1},
     delivery_mode=pika.DeliveryMode.Persistent)
 message1 = 'uuid1'
-amqp.publish_message(exchange=EXCHANGE,
+mrsal.publish_message(exchange=EXCHANGE,
                         routing_key=ROUTING_KEY,
                         message=json.dumps(message1),
                         properties=prop1)
@@ -733,7 +733,7 @@ prop2 = pika.BasicProperties(
     headers={'x-delay': x_delay2},
     delivery_mode=pika.DeliveryMode.Persistent)
 message2 = 'uuid2'
-amqp.publish_message(exchange=EXCHANGE,
+mrsal.publish_message(exchange=EXCHANGE,
                         routing_key=ROUTING_KEY,
                         message=json.dumps(message2),
                         properties=prop2)
@@ -745,7 +745,7 @@ prop3 = pika.BasicProperties(
     headers={'x-delay': x_delay3},
     delivery_mode=pika.DeliveryMode.Persistent)
 message3 = 'uuid3'
-amqp.publish_message(exchange=EXCHANGE,
+mrsal.publish_message(exchange=EXCHANGE,
                         routing_key=ROUTING_KEY,
                         message=json.dumps(message3),
                         properties=prop3)
@@ -757,7 +757,7 @@ prop4 = pika.BasicProperties(
     headers={'x-delay': x_delay4},
     delivery_mode=pika.DeliveryMode.Persistent)
 message4 = 'uuid4'
-amqp.publish_message(exchange=EXCHANGE,
+mrsal.publish_message(exchange=EXCHANGE,
                         routing_key=ROUTING_KEY,
                         message=json.dumps(message4),
                         properties=prop4)
@@ -782,7 +782,7 @@ log.info(f'===== Start consuming from {QUEUE} ========')
 #       - This message will be forwarded to dead-letters-exchange
 #           because it spent in the queue more than TTL=2s waiting "uuid3" to be processed
 #           (x-first-death-reason: expired).
-amqp.start_consumer(
+mrsal.start_consumer(
     queue=QUEUE,
     callback=consumer_callback,
     callback_args=(test_config.HOST, QUEUE),
@@ -800,7 +800,7 @@ log.info(f'===== Start consuming from {DL_QUEUE} ========')
 #       - This message is positively-acknowledged by consumer.
 #       - Then it will be deleted from dl-queue.
 
-amqp.start_consumer(
+mrsal.start_consumer(
     queue=DL_QUEUE,
     callback=consumer_dead_letters_callback,
     callback_args=(test_config.HOST, DL_QUEUE),

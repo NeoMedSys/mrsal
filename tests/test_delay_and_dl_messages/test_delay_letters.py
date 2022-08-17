@@ -1,39 +1,39 @@
 import json
 
+import mrsal.config.config as config
 import pika
-import rabbitamqp.config.config as config
 import tests.config as test_config
-from rabbitamqp.amqp import Amqp
-from rabbitamqp.config.logging import get_logger
+from mrsal.config.logging import get_logger
+from mrsal.mrsal import Mrsal
 
 log = get_logger(__name__)
 
-amqp = Amqp(host=test_config.HOST,
-            port=config.RABBITMQ_PORT,
-            credentials=config.RABBITMQ_CREDENTIALS,
-            virtual_host=config.V_HOST)
-amqp.connect_to_server()
+mrsal = Mrsal(host=test_config.HOST,
+             port=config.RABBITMQ_PORT,
+             credentials=config.RABBITMQ_CREDENTIALS,
+             virtual_host=config.V_HOST)
+mrsal.connect_to_server()
 
 def test_delay_letter():
 
     # Delete existing queues and exchanges to use
-    amqp.exchange_delete(exchange='agreements')
-    amqp.queue_delete(queue='agreements_queue')
+    mrsal.exchange_delete(exchange='agreements')
+    mrsal.queue_delete(queue='agreements_queue')
     # ------------------------------------------
     # Setup main exchange with 'x-delayed-message' type
     # and arguments where we specify how the messages will be routed after the delay period specified
-    exch_result: pika.frame.Method = amqp.setup_exchange(exchange='agreements',
+    exch_result: pika.frame.Method = mrsal.setup_exchange(exchange='agreements',
                                                          exchange_type='x-delayed-message',
                                                          arguments={'x-delayed-type': 'direct'})
     assert exch_result != None
     # ------------------------------------------
 
     # Setup main queue with arguments where we specify DL_EXCHANGE and DL_ROUTING_KEY
-    q_result: pika.frame.Method = amqp.setup_queue(queue='agreements_queue')
+    q_result: pika.frame.Method = mrsal.setup_queue(queue='agreements_queue')
     assert q_result != None
 
     # Bind main queue to the main exchange with routing_key
-    qb_result: pika.frame.Method = amqp.setup_queue_binding(exchange='agreements',
+    qb_result: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
                                                             routing_key='agreements_key',
                                                             queue='agreements_queue')
     assert qb_result != None
@@ -50,7 +50,7 @@ def test_delay_letter():
         content_type=test_config.CONTENT_TYPE,
         headers={'x-delay': x_delay1},
         delivery_mode=pika.DeliveryMode.Persistent)
-    amqp.publish_message(exchange='agreements',
+    mrsal.publish_message(exchange='agreements',
                          routing_key='agreements_key',
                          message=json.dumps(message1),
                          properties=prop1)
@@ -61,7 +61,7 @@ def test_delay_letter():
         content_encoding=test_config.CONTENT_ENCODING,
         headers={'x-delay': x_delay2},
         delivery_mode=pika.DeliveryMode.Persistent)
-    amqp.publish_message(exchange='agreements',
+    mrsal.publish_message(exchange='agreements',
                          routing_key='agreements_key',
                          message=json.dumps(message2),
                          properties=prop2)
@@ -74,7 +74,7 @@ def test_delay_letter():
        after x-delay=1000ms which is the shortest time.
       Message ("uuid1"): Consumed at second place because its x-delay = 3000 ms.
     """
-    amqp.start_consumer(
+    mrsal.start_consumer(
         queue='agreements_queue',
         callback=consumer_callback,
         callback_args=(test_config.HOST, 'agreements_queue'),
@@ -84,7 +84,7 @@ def test_delay_letter():
     # ------------------------------------------
 
     # Confirm messages are consumed
-    result = amqp.setup_queue(queue='agreements_queue')
+    result = mrsal.setup_queue(queue='agreements_queue')
     message_count = result.method.message_count
     assert message_count == 0
 

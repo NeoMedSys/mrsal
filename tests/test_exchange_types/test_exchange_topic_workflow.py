@@ -1,19 +1,19 @@
 import json
 import time
 
+import mrsal.config.config as config
 import pika
-import rabbitamqp.config.config as config
 import tests.config as test_config
-from rabbitamqp.amqp import Amqp
-from rabbitamqp.config.logging import get_logger
+from mrsal.config.logging import get_logger
+from mrsal.mrsal import Mrsal
 
 log = get_logger(__name__)
 
-amqp = Amqp(host=test_config.HOST,
-            port=config.RABBITMQ_PORT,
-            credentials=config.RABBITMQ_CREDENTIALS,
-            virtual_host=config.V_HOST)
-amqp.connect_to_server()
+mrsal = Mrsal(host=test_config.HOST,
+             port=config.RABBITMQ_PORT,
+             credentials=config.RABBITMQ_CREDENTIALS,
+             virtual_host=config.V_HOST)
+mrsal.connect_to_server()
 
 def test_topic_exchange_workflow():
 
@@ -26,33 +26,33 @@ def test_topic_exchange_workflow():
     # ------------------------------------------
 
     # Delete existing queues and exchanges to use
-    amqp.exchange_delete(exchange='agreements')
-    amqp.queue_delete(queue='berlin_agreements')
-    amqp.queue_delete(queue='september_agreements')
+    mrsal.exchange_delete(exchange='agreements')
+    mrsal.queue_delete(queue='berlin_agreements')
+    mrsal.queue_delete(queue='september_agreements')
 
     # Setup exchange
-    exch_result: pika.frame.Method = amqp.setup_exchange(exchange='agreements',
+    exch_result: pika.frame.Method = mrsal.setup_exchange(exchange='agreements',
                                                          exchange_type='topic')
     assert exch_result != None
     # ------------------------------------------
 
     # Setup queue for berlin agreements
-    q_result1: pika.frame.Method = amqp.setup_queue(queue='berlin_agreements')
+    q_result1: pika.frame.Method = mrsal.setup_queue(queue='berlin_agreements')
     assert q_result1 != None
 
     # Bind queue to exchange with binding key
-    qb_result1: pika.frame.Method = amqp.setup_queue_binding(exchange='agreements',
+    qb_result1: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
                                                              routing_key=BINDING_KEY_1,
                                                              queue='berlin_agreements')
     assert qb_result1 != None
     # ----------------------------------
 
     # Setup queue for september agreements
-    q_result2: pika.frame.Method = amqp.setup_queue(queue='september_agreements')
+    q_result2: pika.frame.Method = mrsal.setup_queue(queue='september_agreements')
     assert q_result2 != None
 
     # Bind queue to exchange with binding key
-    qb_result2: pika.frame.Method = amqp.setup_queue_binding(exchange='agreements',
+    qb_result2: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
                                                              routing_key=BINDING_KEY_2,
                                                              queue='september_agreements')
     assert qb_result2 != None
@@ -66,14 +66,14 @@ def test_topic_exchange_workflow():
 
     # Message ("uuid1") is published to the exchange will be routed to queue1
     message1 = 'uuid1'
-    amqp.publish_message(exchange='agreements',
+    mrsal.publish_message(exchange='agreements',
                          routing_key=ROUTING_KEY_1,
                          message=json.dumps(message1),
                          properties=prop)
 
     # Message ("uuid2") is published to the exchange will be routed to queue2
     message2 = 'uuid2'
-    amqp.publish_message(exchange='agreements',
+    mrsal.publish_message(exchange='agreements',
                          routing_key=ROUTING_KEY_2,
                          message=json.dumps(message2),
                          properties=prop)
@@ -81,17 +81,17 @@ def test_topic_exchange_workflow():
 
     time.sleep(1)
     # Confirm messages are routed to respected queues
-    result1 = amqp.setup_queue(queue='berlin_agreements', passive=True)
+    result1 = mrsal.setup_queue(queue='berlin_agreements', passive=True)
     message_count1 = result1.method.message_count
     assert message_count1 == 1
 
-    result2 = amqp.setup_queue(queue='september_agreements', passive=True)
+    result2 = mrsal.setup_queue(queue='september_agreements', passive=True)
     message_count2 = result2.method.message_count
     assert message_count2 == 1
     # ------------------------------------------
 
     # Start consumer for every queue
-    amqp.start_consumer(
+    mrsal.start_consumer(
         queue='berlin_agreements',
         callback=consumer_callback,
         callback_args=(test_config.HOST, 'berlin_agreements'),
@@ -99,7 +99,7 @@ def test_topic_exchange_workflow():
         requeue=False
     )
 
-    amqp.start_consumer(
+    mrsal.start_consumer(
         queue='september_agreements',
         callback=consumer_callback,
         callback_args=(test_config.HOST, 'september_agreements'),
@@ -109,11 +109,11 @@ def test_topic_exchange_workflow():
     # ------------------------------------------
 
     # Confirm messages are consumed
-    result1 = amqp.setup_queue(queue='berlin_agreements', passive=True)
+    result1 = mrsal.setup_queue(queue='berlin_agreements', passive=True)
     message_count1 = result1.method.message_count
     assert message_count1 == 0
 
-    result2 = amqp.setup_queue(queue='september_agreements', passive=True)
+    result2 = mrsal.setup_queue(queue='september_agreements', passive=True)
     message_count2 = result2.method.message_count
     assert message_count2 == 0
 

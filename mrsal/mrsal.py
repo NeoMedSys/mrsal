@@ -8,14 +8,14 @@ import requests
 from requests.auth import HTTPBasicAuth
 from retry import retry
 
-from rabbitamqp.config.logging import get_logger
+from mrsal.config.logging import get_logger
 
 log = get_logger(__name__)
 
 @dataclass
-class Amqp(object):
+class Mrsal(object):
     """
-    The Amqp creates a layer on top of Pika's core, providing methods to setup a 
+    Mrsal creates a layer on top of Pika's core, providing methods to setup a 
     RabbitMQ broker with multiple functionalities.
 
     Properties:
@@ -24,7 +24,7 @@ class Amqp(object):
         :prop pika.credentials.Credentials credentials: auth credentials
         :prop str virtual_host: RabbitMQ virtual host to use
         :prop bool verbose: If True then more INFO logs will be printed
-        :prop int heartbeat: Controls AMQP heartbeat timeout negotiation during connection tuning.
+        :prop int heartbeat: Controls RabbitMQ's server heartbeat timeout negotiation during connection tuning.
         :prop int blocked_connection_timeout: blocked_connection_timeout is the timeout, in seconds, 
             for the connection to remain blocked; if the timeout expires, the connection will be torn down
         :prop int prefetch_count: Specifies a prefetch window in terms of whole messages.
@@ -36,7 +36,7 @@ class Amqp(object):
     verbose: bool = False
     prefetch_count: int = 1
     heartbeat: int = 5 * 60 * 60  # 5 hours
-    blocked_connection_timeout: int = 300  # 30 sec
+    blocked_connection_timeout: int = 300  # sec
     _connection: pika.BlockingConnection = None
     _channel = None
 
@@ -161,7 +161,7 @@ class Amqp(object):
             raise pika.exceptions.ChannelClosedByBroker(503, str(err))
 
     def setup_queue_binding(self, exchange: str, queue: str, routing_key: str = None, arguments=None):
-        """Bind the queue to exchange.
+        """Bind queue to exchange.
 
         :param str queue: The queue to bind to the exchange
         :param str exchange: The source exchange to bind to
@@ -271,7 +271,8 @@ class Amqp(object):
         """
         Setup consumer:
             1- Consumer start consuming the messages from the queue.
-            2- If `inactivity_timeout` is given the consumer will be canceled when inactivity_timeout is exceeded.
+            2- If `inactivity_timeout` is given (in seconds) the consumer will be canceled when the time of inactivity 
+                exceeds inactivity_timeout.
             3- Send the consumed message to callback method to be processed, and then the message can be either:
                 - Processed, then correctly-acknowledge and deleted from QUEUE or 
                 - Failed to process, negatively-acknowledged and then will be either
@@ -283,7 +284,6 @@ class Amqp(object):
         :param str queue: The queue name to consume
         :param Callable callback: Method where received messages are sent to be processed
         :param Tuple callback_args: Tuple of arguments for callback method
-        :param dict arguments: Custom key/value pair arguments for the consumer
         :param float inactivity_timeout: 
             - if a number is given (in seconds), will cause the method to yield (None, None, None) after the
                 given period of inactivity.
@@ -293,7 +293,7 @@ class Amqp(object):
                              requeue attempt fails the messages are discarded or
                              dead-lettered.
         """
-        log.info(f'Consuming messages: queue= {queue}')
+        log.info(f'Consuming messages: queue= {queue}, requeue= {requeue}, inactivity_timeout= {inactivity_timeout}')
 
         try:
             for method_frame, properties, body in \
@@ -351,11 +351,10 @@ class Amqp(object):
         """
         try:
             # Publish the message by serializing it in json dump
-            self._channel.basic_publish(
-                exchange=exchange, routing_key=routing_key, body=json.dumps(
-                    message),
-                properties=properties)
-            # message with uuid is published at time by sdasd
+            self._channel.basic_publish(exchange=exchange,
+                                        routing_key=routing_key,
+                                        body=json.dumps(message),
+                                        properties=properties)
             log.info(
                 f'Message ({message}) is published to the exchange "{exchange}" with a routing key "{routing_key}"')
 

@@ -1,5 +1,5 @@
-# py-amqp
-PY-AMQP Message broker based on RabbitMQ 
+# MRSAL
+MRSAL Is a _message broker_ based on [**RabbitMQ**](https://www.rabbitmq.com/) with [**Pika**](https://pika.readthedocs.io/en/stable/#).
 
 ## Package the code and add it to PyPI
 ```bash

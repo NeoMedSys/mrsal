@@ -2,10 +2,10 @@ version: "3.8"
 
 services:
   rabbitmq_server:
-    image: rabbit_amqp
+    image: mrsal
     build:
       context: .
-    container_name: rabbit_amqp
+    container_name: mrsal
     environment:
       - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER}
       - RABBITMQ_DEFAULT_PASS=${RABBITMQ_DEFAULT_PASS}

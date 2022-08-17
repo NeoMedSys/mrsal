@@ -1,62 +1,62 @@
 import json
 import time
 
+import mrsal.config.config as config
 import pika
-import rabbitamqp.config.config as config
 import tests.config as test_config
-from rabbitamqp.amqp import Amqp
-from rabbitamqp.config.logging import get_logger
+from mrsal.config.logging import get_logger
+from mrsal.mrsal import Mrsal
 
 log = get_logger(__name__)
 
-amqp = Amqp(host=test_config.HOST,
-            port=config.RABBITMQ_PORT,
-            credentials=config.RABBITMQ_CREDENTIALS,
-            virtual_host=config.V_HOST)
-amqp.connect_to_server()
+mrsal = Mrsal(host=test_config.HOST,
+             port=config.RABBITMQ_PORT,
+             credentials=config.RABBITMQ_CREDENTIALS,
+             virtual_host=config.V_HOST)
+mrsal.connect_to_server()
 
 
 def test_delay_and_dead_letters():
 
     # Delete existing queues and exchanges to use
-    amqp.exchange_delete(exchange='agreements')
-    amqp.exchange_delete(exchange='dl_agreements')
-    amqp.queue_delete(queue='agreements_queue')
-    amqp.queue_delete(queue='dl_agreements_queue')
+    mrsal.exchange_delete(exchange='agreements')
+    mrsal.exchange_delete(exchange='dl_agreements')
+    mrsal.queue_delete(queue='agreements_queue')
+    mrsal.queue_delete(queue='dl_agreements_queue')
     # ------------------------------------------
 
     # Setup dead letters exchange
-    exch_result1: pika.frame.Method = amqp.setup_exchange(exchange='dl_agreements',
+    exch_result1: pika.frame.Method = mrsal.setup_exchange(exchange='dl_agreements',
                                                           exchange_type='direct')
     assert exch_result1 != None
 
     # Setup main exchange with 'x-delayed-message' type
     # and arguments where we specify how the messages will be routed after the delay period specified
-    exch_result2: pika.frame.Method = amqp.setup_exchange(exchange='agreements',
+    exch_result2: pika.frame.Method = mrsal.setup_exchange(exchange='agreements',
                                                           exchange_type='x-delayed-message',
                                                           arguments={'x-delayed-type': 'direct'})
     assert exch_result2 != None
     # ------------------------------------------
 
     # Setup main queue with arguments where we specify DL_EXCHANGE and DL_ROUTING_KEY
-    q_result1: pika.frame.Method = amqp.setup_queue(queue='agreements_queue',
+    q_result1: pika.frame.Method = mrsal.setup_queue(queue='agreements_queue',
                                                     arguments={'x-dead-letter-exchange': 'dl_agreements',
                                                                'x-dead-letter-routing-key': 'dl_agreements_key',
                                                                'x-message-ttl': test_config.MESSAGE_TTL})
     assert q_result1 != None
 
     # Bind main queue to the main exchange with routing_key
-    qb_result1: pika.frame.Method = amqp.setup_queue_binding(exchange='agreements',
+    qb_result1: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
                                                              routing_key='agreements_key',
                                                              queue='agreements_queue')
     assert qb_result1 != None
     # ------------------------------------------
 
     # Bind DL_QUEUE to DL_EXCHANGE with DL_ROUTING_KEY
-    q_result2: pika.frame.Method = amqp.setup_queue(queue='dl_agreements_queue')
+    q_result2: pika.frame.Method = mrsal.setup_queue(queue='dl_agreements_queue')
     assert q_result2 != None
 
-    qb_result2: pika.frame.Method = amqp.setup_queue_binding(exchange='dl_agreements',
+    qb_result2: pika.frame.Method = mrsal.setup_queue_binding(exchange='dl_agreements',
                                                              routing_key='dl_agreements_key',
                                                              queue='dl_agreements_queue')
     assert qb_result2 != None
@@ -76,7 +76,7 @@ def test_delay_and_dead_letters():
         headers={'x-delay': x_delay1},
         delivery_mode=pika.DeliveryMode.Persistent)
     message1 = 'uuid1'
-    amqp.publish_message(exchange='agreements',
+    mrsal.publish_message(exchange='agreements',
                          routing_key='agreements_key',
                          message=json.dumps(message1),
                          properties=prop1)
@@ -88,7 +88,7 @@ def test_delay_and_dead_letters():
         headers={'x-delay': x_delay2},
         delivery_mode=pika.DeliveryMode.Persistent)
     message2 = 'uuid2'
-    amqp.publish_message(exchange='agreements',
+    mrsal.publish_message(exchange='agreements',
                          routing_key='agreements_key',
                          message=json.dumps(message2),
                          properties=prop2)
@@ -99,7 +99,7 @@ def test_delay_and_dead_letters():
         headers={'x-delay': x_delay3},
         delivery_mode=pika.DeliveryMode.Persistent)
     message3 = 'uuid3'
-    amqp.publish_message(exchange='agreements',
+    mrsal.publish_message(exchange='agreements',
                          routing_key='agreements_key',
                          message=json.dumps(message3),
                          properties=prop3)
@@ -110,7 +110,7 @@ def test_delay_and_dead_letters():
         headers={'x-delay': x_delay4},
         delivery_mode=pika.DeliveryMode.Persistent)
     message4 = 'uuid4'
-    amqp.publish_message(exchange='agreements',
+    mrsal.publish_message(exchange='agreements',
                          routing_key='agreements_key',
                          message=json.dumps(message4),
                          properties=prop4)
@@ -137,7 +137,7 @@ def test_delay_and_dead_letters():
               because it spent in the queue more than TTL=2s waiting "uuid3" to be processed
               (x-first-death-reason: expired).
     """
-    amqp.start_consumer(
+    mrsal.start_consumer(
         queue='agreements_queue',
         callback=consumer_callback,
         callback_args=(test_config.HOST, 'agreements_queue'),
@@ -147,7 +147,7 @@ def test_delay_and_dead_letters():
     # ------------------------------------------
 
     # Confirm messages are routed to respected queue
-    result = amqp.setup_queue(queue='dl_agreements_queue')
+    result = mrsal.setup_queue(queue='dl_agreements_queue')
     message_count = result.method.message_count
     assert message_count == 2
     # ------------------------------------------
@@ -163,7 +163,7 @@ def test_delay_and_dead_letters():
           - Then it will be deleted from dl-queue.
     """
 
-    amqp.start_consumer(
+    mrsal.start_consumer(
         queue='dl_agreements_queue',
         callback=consumer_dead_letters_callback,
         callback_args=(test_config.HOST, 'dl_agreements_queue'),
@@ -173,7 +173,7 @@ def test_delay_and_dead_letters():
     # ------------------------------------------
 
     # Confirm messages are consumed
-    result = amqp.setup_queue(queue='dl_agreements_queue')
+    result = mrsal.setup_queue(queue='dl_agreements_queue')
     message_count = result.method.message_count
     log.info(f'Message count in queue "dl_agreements_queue" after consuming= {message_count}')
     assert message_count == 0
