@@ -21,7 +21,22 @@ Please read the [full guide](https://github.com/NeoMedSys/mrsal/blob/main/FullGu
 
 ###### Mrsal was first developed by NeoMedSys and the research group [CRAI](https://crai.no/) at the univeristy hospital of Oslo.
 
-### 1. Setup
+### 1. Setup and connect
+
+We are setting up a server on our localhost with the port and credentials we used when spinning up the docker-compose
+
+```python
+from mrsal import Mrsal
+
+mrsal = Mrsal(
+    host='localhost',
+    port=5671,
+    credentials=('username', 'password'),
+    virtual_host='myRabbitHost'  # use this to connect to specific part of the rabbit server
+)
+
+mrsal.connect_to_server()
+```
 
 The first thing we need to do is to setup our rabbit server before we can subscribe and publish to it.
 
