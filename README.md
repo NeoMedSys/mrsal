@@ -23,7 +23,8 @@ Please read the [full guide](https://github.com/NeoMedSys/mrsal/blob/main/FullGu
 
 ### 1. Setup and connect
 
-We are setting up a server on our localhost with the port and credentials we used when spinning up the docker-compose
+
+The first thing we need to do is to setup our rabbit server before we can subscribe and publish to it. Lets set up a server on our localhost with the port and credentials we used when spinning up the docker-compose
 
 ```python
 from mrsal import Mrsal
@@ -37,8 +38,6 @@ mrsal = Mrsal(
 
 mrsal.connect_to_server()
 ```
-
-The first thing we need to do is to setup our rabbit server before we can subscribe and publish to it.
 
 ### 2. bind and publish
 
