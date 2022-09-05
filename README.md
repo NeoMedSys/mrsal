@@ -20,9 +20,13 @@ We need to install RabbitMQ to use Mrsal. Head over to [install](https://www.rab
 Next set the default username, password and servername for your RabbitMQ setup. It's advisable to use a `.env` script or the rc file for persistence.
 
 ```bash
+[RabbitEnvVars]
 RABBITMQ_DEFAULT_USER=****
-RABBITMQ_DEFAULT_PASSWORD=****
+RABBITMQ_DEFAULT_PASS=****
 RABBITMQ_DEFAULT_SERVICE_NAME=****
+RABBITMQ_DEFAULT_VHOST=****
+RABBITMQ_CONTAINER_PORT=****
+RABBITMQ_GUI_PORT=****
 ```
 
 Please read the [full guide](https://github.com/NeoMedSys/mrsal/blob/main/FullGuide.md) to understand what Mrsal currently can and can't do.
