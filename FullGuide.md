@@ -260,16 +260,19 @@ message: str = 'uuid'
 
 # publish messages with  header x-delay expressing in milliseconds a delay time for the message.
 headers={'x-delay': 2000}, 
-prop = pika.BasicProperties(
-        content_type='text/plain',
-        content_encoding='utf-8',
-        headers=headers,
-        delivery_mode=pika.DeliveryMode.Persistent)
+properties = {
+        'content_type': 'text/plain',
+        'content_encoding': 'utf-8',
+        'headers': headers,
+        'delivery_mode': pika.DeliveryMode.Persistent
+        }
 
-mrsal.publish_message(exchange='agreements',
+mrsal.publish_message(fast_setup=False,
+                exchange='agreements',
                 routing_key='agreements_key',
                 message=json.dumps(message),
-                properties=prop)
+                **properties
+                )
 ```                        
 --- 
 <div id='startConsumer'/>
@@ -293,7 +296,7 @@ def consumer_callback(host: str, queue: str, message: str):
 
 QUEUE: str = 'agreements_queue'
 
-mrsal.start_consumer(
+mrsal.start_consumer(fast_setup=False
         queue='agreements_queue,
         callback=consumer_callback,
         callback_args=(test_config.HOST, 'agreements_queue'),
@@ -354,28 +357,24 @@ mrsal.setup_queue_binding(exchange=EXCHANGE,
 # ------------------------------------------
 
 # Publisher:
-prop = pika.BasicProperties(
-    content_type='text/plain',
-    content_encoding='utf-8',
-    delivery_mode=pika.DeliveryMode.Persistent)
 
 # Message ("uuid2") is published to the exchange and it's routed to queue2
 message2 = 'uuid2'
-mrsal.publish_message(exchange=EXCHANGE,
+mrsal.publish_message(fast_setup=False,
+                        exchange=EXCHANGE,
                         routing_key=ROUTING_KEY_2,
-                        message=json.dumps(message2),
-                        properties=prop)
+                        message=json.dumps(message2))
 
 # Message ("uuid1") is published to the exchange and it's routed to queue1
 message1 = 'uuid1'
-mrsal.publish_message(exchange=EXCHANGE,
+mrsal.publish_message(fast_setup=False,
+                        exchange=EXCHANGE,
                         routing_key=ROUTING_KEY_1,
-                        message=json.dumps(message1),
-                        properties=prop)
+                        message=json.dumps(message1))
 # ------------------------------------------
 
 # Start consumer for every queue
-mrsal.start_consumer(
+mrsal.start_consumer(fast_setup=False,
     queue=QUEUE_1,
     callback=consumer_callback,
     callback_args=(test_config.HOST, QUEUE_1),
@@ -383,7 +382,7 @@ mrsal.start_consumer(
     requeue=False
 )
 
-mrsal.start_consumer(
+mrsal.start_consumer(fast_setup=False,
     queue=QUEUE_2,
     callback=consumer_callback,
     callback_args=(test_config.HOST, QUEUE_2),
@@ -445,28 +444,31 @@ mrsal.setup_queue_binding(exchange=EXCHANGE,
 # ----------------------------------
 
 # Publisher:
-prop = pika.BasicProperties(
-    content_type='text/plain',
-    content_encoding='utf-8',
-    delivery_mode=pika.DeliveryMode.Persistent)
+prop = {
+        'content_type': 'text/plain',
+        'content_encoding': 'utf-8',
+        'delivery_mode': pika.DeliveryMode.Persistent
+        }
 
 # Message ("uuid1") is published to the exchange will be routed to queue1
 message1 = 'uuid1'
-mrsal.publish_message(exchange=EXCHANGE,
+mrsal.publish_message(fast_setup=False
+                        exchange=EXCHANGE,
                         routing_key=ROUTING_KEY_1,
                         message=json.dumps(message1),
-                        properties=prop)
+                        **prop)
 
 # Message ("uuid2") is published to the exchange will be routed to queue2
 message2 = 'uuid2'
-mrsal.publish_message(exchange=EXCHANGE,
+mrsal.publish_message(fast_setup=False
+                        exchange=EXCHANGE,
                         routing_key=ROUTING_KEY_2,
                         message=json.dumps(message2),
-                        properties=prop)
+                        **properties)
 # ------------------------------------------
 
 # Start consumer for every queue
-mrsal.start_consumer(
+mrsal.start_consumer(fast_setup=False
     queue=QUEUE_1,
     callback=consumer_callback,
     callback_args=(test_config.HOST, QUEUE_1),
@@ -474,7 +476,7 @@ mrsal.start_consumer(
     requeue=False
 )
 
-mrsal.start_consumer(
+mrsal.start_consumer(fast_setup=False
     queue=QUEUE_2,
     callback=consumer_callback,
     callback_args=(test_config.HOST, QUEUE_2),
@@ -557,34 +559,38 @@ mrsal.setup_queue_binding(exchange=EXCHANGE,
 
 # Publisher:
 # Message ("uuid1") is published to the exchange with a set of headers
-prop1 = pika.BasicProperties(
-    content_type='text/plain',
-    content_encoding='utf-8',
-    headers=HEADERS1,
-    delivery_mode=pika.DeliveryMode.Persistent)
+prop1 = {
+        'content_type': 'text/plain',
+        'content_encoding': 'utf-8',
+        'headers': HEADERS1,
+        'delivery_mode': pika.DeliveryMode.Persistent
+        }
 
 message1 = 'uuid1'
-mrsal.publish_message(exchange=EXCHANGE,
+mrsal.publish_message(fast_setup=False,
+                        exchange=EXCHANGE,
                         routing_key='',
                         message=json.dumps(message1),
-                        properties=prop1)
+                        **prop1)
 
 # Message ("uuid2") is published to the exchange with a set of headers
-prop2 = pika.BasicProperties(
-    content_type='text/plain',
-    content_encoding='utf-8',
-    headers=HEADERS2,
-    delivery_mode=pika.DeliveryMode.Persistent)
+prop2 = {
+        'content_type': 'text/plain',
+        'content_encoding': 'utf-8',
+        'headers': HEADERS2,
+        'delivery_mode': pika.DeliveryMode.Persistent
+        }
 
 message2 = 'uuid2'
-mrsal.publish_message(exchange=EXCHANGE,
+mrsal.publish_message(fast_setup=False,
+                        exchange=EXCHANGE,
                         routing_key='',
                         message=json.dumps(message2),
-                        properties=prop2)
+                        **prop2)
 # ------------------------------------------
 
 # Start consumer for every queue
-mrsal.start_consumer(
+mrsal.start_consumer(fast_setup=False,
     queue=QUEUE_1,
     callback=consumer_callback,
     callback_args=(test_config.HOST, QUEUE_1),
@@ -592,7 +598,7 @@ mrsal.start_consumer(
     requeue=False
 )
 
-mrsal.start_consumer(
+mrsal.start_consumer(fast_setup=False,
     queue=QUEUE_2,
     callback=consumer_callback,
     callback_args=(test_config.HOST, QUEUE_2),
@@ -715,49 +721,58 @@ mrsal.setup_queue_binding(exchange=DL_EXCHANGE,
 #   Message ("uuid3") is published with x-delay=3000
 #   Message ("uuid4") is published with x-delay=4000
 x_delay1: int = 2000
-prop1 = pika.BasicProperties(
-    content_type='text/plain',
-    content_encoding='utf-8',
-    headers={'x-delay': x_delay1},
-    delivery_mode=pika.DeliveryMode.Persistent)
+prop1 = {
+        'content_type': 'text/plain',
+        'content_encoding': 'utf-8',
+        'headers': 'x-delay': x_delay1},
+        'delivery_mode': pika.DeliveryMode.Persistent
+        }
+        
 message1 = 'uuid1'
-mrsal.publish_message(exchange=EXCHANGE,
+mrsal.publish_message(fast_setup=False,
+                        exchange=EXCHANGE,
                         routing_key=ROUTING_KEY,
                         message=json.dumps(message1),
-                        properties=prop1)
+                        **prop1)
 
 x_delay2: int = 1000
-prop2 = pika.BasicProperties(
-    content_type='text/plain',
-    content_encoding='utf-8',
-    headers={'x-delay': x_delay2},
-    delivery_mode=pika.DeliveryMode.Persistent)
+prop2 = {
+        'content_type': 'text/plain',
+        'content_encoding': 'utf-8',
+        'headers': 'x-delay': x_delay2},
+        'delivery_mode': pika.DeliveryMode.Persistent
+        }
 message2 = 'uuid2'
-mrsal.publish_message(exchange=EXCHANGE,
+mrsal.publish_message(fast_setup=False,
+                        exchange=EXCHANGE,
                         routing_key=ROUTING_KEY,
                         message=json.dumps(message2),
-                        properties=prop2)
+                        **prop2)
 
 x_delay3: int = 3000
-prop3 = pika.BasicProperties(
-    content_type='text/plain',
-    content_encoding='utf-8',
-    headers={'x-delay': x_delay3},
-    delivery_mode=pika.DeliveryMode.Persistent)
+prop3 = {
+        'content_type': 'text/plain',
+        'content_encoding': 'utf-8',
+        'headers': 'x-delay': x_delay3},
+        'delivery_mode': pika.DeliveryMode.Persistent
+        }
 message3 = 'uuid3'
-mrsal.publish_message(exchange=EXCHANGE,
+mrsal.publish_message(fast_setup=False,
+                        exchange=EXCHANGE,
                         routing_key=ROUTING_KEY,
                         message=json.dumps(message3),
-                        properties=prop3)
+                        **prop3)
 
 x_delay4: int = 4000
-prop4 = pika.BasicProperties(
-    content_type='text/plain',
-    content_encoding='utf-8',
-    headers={'x-delay': x_delay4},
-    delivery_mode=pika.DeliveryMode.Persistent)
+prop4 = {
+        'content_type': 'text/plain',
+        'content_encoding': 'utf-8',
+        'headers': 'x-delay': x_delay4,
+        'delivery_mode': pika.DeliveryMode.Persistent
+        }
 message4 = 'uuid4'
-mrsal.publish_message(exchange=EXCHANGE,
+mrsal.publish_message(fast_setup=False
+                        exchange=EXCHANGE,
                         routing_key=ROUTING_KEY,
                         message=json.dumps(message4),
                         properties=prop4)
@@ -782,7 +797,7 @@ log.info(f'===== Start consuming from {QUEUE} ========')
 #       - This message will be forwarded to dead-letters-exchange
 #           because it spent in the queue more than TTL=2s waiting "uuid3" to be processed
 #           (x-first-death-reason: expired).
-mrsal.start_consumer(
+mrsal.start_consumer(fast_setup=False,
     queue=QUEUE,
     callback=consumer_callback,
     callback_args=(test_config.HOST, QUEUE),
@@ -800,7 +815,7 @@ log.info(f'===== Start consuming from {DL_QUEUE} ========')
 #       - This message is positively-acknowledged by consumer.
 #       - Then it will be deleted from dl-queue.
 
-mrsal.start_consumer(
+mrsal.start_consumer(fast_setup=False,
     queue=DL_QUEUE,
     callback=consumer_dead_letters_callback,
     callback_args=(test_config.HOST, DL_QUEUE),
