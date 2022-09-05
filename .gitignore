@@ -145,3 +145,4 @@ tests/output
 poetry.lock
 this_dockerfile_with_certs_path
 docker-compose.override.yml
+.env
