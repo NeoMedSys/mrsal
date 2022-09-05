@@ -45,9 +45,9 @@ class Mrsal(object):
         """
         Establish connection to RabbitMQ server specifying connection parameters.
         """
-        connection_info = f'host={self.host}, virtual_host={self.virtual_host},port={self.port}, heartbeat={self.heartbeat}'
+        connection_info = f'host={self.host}, virtual_host={self.virtual_host}, port={self.port}, heartbeat={self.heartbeat}'
         if self.verbose:
-            log.info(f'Establishing connection to RabbitMQ on ' + connection_info)
+            log.info(f'Establishing connection to RabbitMQ on {connection_info}')
         try:
             self._connection = pika.BlockingConnection(
                 pika.ConnectionParameters(
@@ -63,7 +63,7 @@ class Mrsal(object):
             # In production you will want to test with different prefetch values
             # to find which one provides the best performance and usability for your solution
             self._channel.basic_qos(prefetch_count=self.prefetch_count)
-            log.success(f'Connection established with RabbitMQ on ' + connection_info)
+            log.success(f'Connection established with RabbitMQ on {connection_info}')
             return self._connection
         except TypeError as err:
             log.error(f'Caught a type error: {err}')

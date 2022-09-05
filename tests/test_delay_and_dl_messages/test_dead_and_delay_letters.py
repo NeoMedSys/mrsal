@@ -137,6 +137,7 @@ def test_delay_and_dead_letters():
               because it spent in the queue more than TTL=2s waiting "uuid3" to be processed
               (x-first-death-reason: expired).
     """
+    breakpoint()
     mrsal.start_consumer(
         queue='agreements_queue',
         callback=consumer_callback,
