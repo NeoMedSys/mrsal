@@ -112,15 +112,14 @@ It would be a pitty if nobody is listening to the message of friendship, so let'
 
 ```python
 
-def consumer_callback(message):
-        msg = json.load(message)
-        if 'Salaam' in msg:
+def consumer_callback(host, queue, message):
+        if 'Salaam' in message:
             return 'Shalom habibi'
 
 mrsal.start_consumer(
     queue='friendship_queue,
     callback=consumer_callback,
-    callback_args=message
+    callback_args=(host, queue)
 )
 ```
 
