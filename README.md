@@ -110,7 +110,7 @@ def consumer_callback(message: Dict[str, Any]):
             return 'Shalom habibi'
 
 mrsal.start_consumer(
-    queue='firendship_queue,
+    queue='friendship_queue,
     callback=consumer_callback,
     callback_args=message
 )
