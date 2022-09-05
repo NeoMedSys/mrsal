@@ -261,10 +261,10 @@ message: str = 'uuid'
 # publish messages with  header x-delay expressing in milliseconds a delay time for the message.
 headers={'x-delay': 2000}, 
 properties = {
-        'content_type'='text/plain',
-        'content_encoding'='utf-8',
-        'headers'=headers,
-        'delivery_mode'=pika.DeliveryMode.Persistent
+        'content_type': 'text/plain',
+        'content_encoding': 'utf-8',
+        'headers': headers,
+        'delivery_mode': pika.DeliveryMode.Persistent
         }
 
 mrsal.publish_message(fast_setup=False,
@@ -445,10 +445,10 @@ mrsal.setup_queue_binding(exchange=EXCHANGE,
 
 # Publisher:
 prop = {
-    'content_type'='text/plain',
-    'content_encoding'='utf-8',
-    'delivery_mode'=pika.DeliveryMode.Persistent
-    }
+        'content_type': 'text/plain',
+        'content_encoding': 'utf-8',
+        'delivery_mode': pika.DeliveryMode.Persistent
+        }
 
 # Message ("uuid1") is published to the exchange will be routed to queue1
 message1 = 'uuid1'
@@ -560,11 +560,11 @@ mrsal.setup_queue_binding(exchange=EXCHANGE,
 # Publisher:
 # Message ("uuid1") is published to the exchange with a set of headers
 prop1 = {
-    'content_type'='text/plain',
-    'content_encoding'='utf-8',
-    'headers'=HEADERS1,
-    'delivery_mode'=pika.DeliveryMode.Persistent
-    }
+        'content_type': 'text/plain',
+        'content_encoding': 'utf-8',
+        'headers': HEADERS1,
+        'delivery_mode': pika.DeliveryMode.Persistent
+        }
 
 message1 = 'uuid1'
 mrsal.publish_message(fast_setup=False,
@@ -575,11 +575,11 @@ mrsal.publish_message(fast_setup=False,
 
 # Message ("uuid2") is published to the exchange with a set of headers
 prop2 = {
-    'content_type'='text/plain',
-    'content_encoding'='utf-8',
-    'headers'=HEADERS2,
-    'delivery_mode'=pika.DeliveryMode.Persistent
-    }
+        'content_type': 'text/plain',
+        'content_encoding': 'utf-8',
+        'headers': HEADERS2,
+        'delivery_mode': pika.DeliveryMode.Persistent
+        }
 
 message2 = 'uuid2'
 mrsal.publish_message(fast_setup=False,
@@ -722,11 +722,12 @@ mrsal.setup_queue_binding(exchange=DL_EXCHANGE,
 #   Message ("uuid4") is published with x-delay=4000
 x_delay1: int = 2000
 prop1 = {
-    'content_type'='text/plain',
-    'content_encoding'='utf-8',
-    'headers'={'x-delay': x_delay1},
-    'delivery_mode'=pika.DeliveryMode.Persistent
-    }
+        'content_type': 'text/plain',
+        'content_encoding': 'utf-8',
+        'headers': 'x-delay': x_delay1},
+        'delivery_mode': pika.DeliveryMode.Persistent
+        }
+        
 message1 = 'uuid1'
 mrsal.publish_message(fast_setup=False,
                         exchange=EXCHANGE,
@@ -736,11 +737,11 @@ mrsal.publish_message(fast_setup=False,
 
 x_delay2: int = 1000
 prop2 = {
-    'content_type'='text/plain',
-    'content_encoding'='utf-8',
-    'headers'={'x-delay': x_delay2},
-    'delivery_mode'=pika.DeliveryMode.Persistent
-    }
+        'content_type': 'text/plain',
+        'content_encoding': 'utf-8',
+        'headers': 'x-delay': x_delay2},
+        'delivery_mode': pika.DeliveryMode.Persistent
+        }
 message2 = 'uuid2'
 mrsal.publish_message(fast_setup=False,
                         exchange=EXCHANGE,
@@ -750,11 +751,11 @@ mrsal.publish_message(fast_setup=False,
 
 x_delay3: int = 3000
 prop3 = {
-    'content_type'='text/plain',
-    'content_encoding'='utf-8',
-    'headers'={'x-delay': x_delay3},
-    'delivery_mode'=pika.DeliveryMode.Persistent
-    }
+        'content_type': 'text/plain',
+        'content_encoding': 'utf-8',
+        'headers': 'x-delay': x_delay3},
+        'delivery_mode': pika.DeliveryMode.Persistent
+        }
 message3 = 'uuid3'
 mrsal.publish_message(fast_setup=False,
                         exchange=EXCHANGE,
@@ -764,11 +765,11 @@ mrsal.publish_message(fast_setup=False,
 
 x_delay4: int = 4000
 prop4 = {
-    content_type='text/plain',
-    content_encoding='utf-8',
-    headers={'x-delay': x_delay4},
-    delivery_mode=pika.DeliveryMode.Persistent
-    }
+        'content_type': 'text/plain',
+        'content_encoding': 'utf-8',
+        'headers': 'x-delay': x_delay4,
+        'delivery_mode': pika.DeliveryMode.Persistent
+        }
 message4 = 'uuid4'
 mrsal.publish_message(fast_setup=False
                         exchange=EXCHANGE,
