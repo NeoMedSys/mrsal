@@ -17,6 +17,14 @@ pip install mrsal
 
 We need to install RabbitMQ to use Mrsal. Head over to [install](https://www.rabbitmq.com/download.html) RabbitMQ. Make sure to stick to the configuration that you give the installation throughout this guide. You can also use the [Dockerfile](https://github.com/NeoMedSys/mrsal/blob/main/Dockerfile) and the [docker-compose](https://github.com/NeoMedSys/mrsal/blob/main/docker-compose.yml) that we are using in the full guide.
 
+Next set the default username, password and servername for your RabbitMQ setup. It's advisable to use a `.env` script or the rc file for persistence.
+
+```bash
+RABBITMQ_DEFAULT_USER=****
+RABBITMQ_DEFAULT_PASSWORD=****
+RABBITMQ_DEFAULT_SERVICE_NAME=****
+```
+
 Please read the [full guide](https://github.com/NeoMedSys/mrsal/blob/main/FullGuide.md) to understand what Mrsal currently can and can't do.
 
 ###### Mrsal was first developed by NeoMedSys and the research group [CRAI](https://crai.no/) at the univeristy hospital of Oslo.
@@ -110,7 +118,7 @@ def consumer_callback(message: Dict[str, Any]):
             return 'Shalom habibi'
 
 mrsal.start_consumer(
-    queue='firendship_queue,
+    queue='friendship_queue,
     callback=consumer_callback,
     callback_args=message
 )
