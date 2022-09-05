@@ -112,7 +112,7 @@ It would be a pitty if nobody is listening to the message of friendship, so let'
 
 ```python
 
-def consumer_callback(message: Dict[str, Any]):
+def consumer_callback:
         msg = json.load(message)
         if 'Salaam' in msg:
             return 'Shalom habibi'
