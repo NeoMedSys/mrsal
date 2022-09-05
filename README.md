@@ -68,9 +68,8 @@ Finally we need to declare the queue on the exchange that we want to bind and pu
 mrsal.setup_queue(queue='friendship_queue')
 ```
 
-### 3. Bind and publish
+#### 2.3 Bind
 
-#### 3.1 Bind
 We have a queue on an exchange that we can start publishing messages to, although we need to bind ourselves to it before we can publish messages at will. So lets do that with one of Mrsal's easy to use methods.
 
 ```python
@@ -81,32 +80,24 @@ mrsal.setup_queue_binding(
 )
 ```
 
-#### 3.2 Publish
+#### 3. Publish
 
-Finally we are ready to publish our first message to the queue. We are going to specifiy a JSON containing the message properties for RabbitMQ to understand how to parse our message. 
+Finally we are ready to publish our first message to the queue. We are going to specifiy a JSON containing the message properties for RabbitMQ to understand how to parse our message. We don't need to specify the parsing information for the message if we are sending plaintext in the body and we are fine with utf-8 encoding.
 
 
 ```python
 import json
 
-prop = pika.BasicProperties(
-    content_type='text/plain',
-    content_encoding='utf-8',
-    delivery_mode=pika.DeliveryMode.Persistent
-)
-
-
 mrsal.publish_message(
     exchange='friendship',
     routing_key='friendship_key',
     message=json.dumps('Salaam habibi'),
-    properties=prop
 )
 ```
 
 Done! Your first message of friendship has been sent to the friendship queue on the exchange of friendship.
 
-### Consume
+### 4. Consume
 
 It would be a pitty if nobody is listening to the message of friendship, so let's make sure that someone is ready to listen to our message. We are going to make a simple callback function, which is the function that is triggered by our message, and start the listening by setting up so called consumer.
 
@@ -122,5 +113,6 @@ mrsal.start_consumer(
     callback_args=(host, queue)
 )
 ```
+###### NOTE! You have to initiate the mrsal client for consume in the same way you initiated it for publish
 
 That's it. You have now setup a full advanced message queueing protocol that you can use to promote friendship or other necessary communication between your services.
