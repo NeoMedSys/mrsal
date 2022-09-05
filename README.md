@@ -47,72 +47,44 @@ mrsal = Mrsal(
 mrsal.connect_to_server()
 ```
 
-### 2. Declare an exchange and queue
+### 2 Consume
 
-#### 2.1 Exchange
-There are currently no exchanges declared on `myMrsalHost` so lets declare an exchange we can declare a queue on which we finally can bind and publish our messages to. We are going to use a **direct** exchange in this guide. See the full guide for more detailed information about the types of exhanges you can declare.
+Before publishing our first message, lets setup a consumer that will listen to our very important messages. If you are using scripts rather than noterbooks than it's advisable to run consume and publish in separately. We are going to need callback functions which is triggered on receiving the message from the exchange and queue we subscribe to.
 
-```python
-
-mrsal.setup_exchange(
-        exchange='friendship',
-        exchange_type='direct'
-)                 
-```
-
-##### 2.2 Queue
-
-Finally we need to declare the queue on the exchange that we want to bind and publish to. This is the last step of setting up a message protocol.
 
 ```python
-mrsal.setup_queue(queue='friendship_queue')
-```
 
-#### 2.3 Bind
+def consumer_callback(host: str, queque:str, message: str):
+        if 'Salaam' in message:
+            return 'Shalom habibi'
 
-We have a queue on an exchange that we can start publishing messages to, although we need to bind ourselves to it before we can publish messages at will. So lets do that with one of Mrsal's easy to use methods.
-
-```python
-mrsal.setup_queue_binding(
-        exchange='friendship',
-        queue='friendship_queue',
-        routing_key='friendship_key'  # use this string match key to make sure that the messages are delivered to the right exchange.
+mrsal.start_consumer(
+    exchange='friendship',
+    exchange_type='direct',
+    routing_key='friendship_key',
+    queue='friendship_queue,
+    callback=consumer_callback,
+    callback_args=('localhost', 'friendship_queque')
 )
 ```
 
-#### 3. Publish
-
-Finally we are ready to publish our first message to the queue. We are going to specifiy a JSON containing the message properties for RabbitMQ to understand how to parse our message. We don't need to specify the parsing information for the message if we are sending plaintext in the body and we are fine with utf-8 encoding.
-
+### 3 Publish
+Now lets publish our message of friendship on the friendship exchange that a friend is currently listening to.
 
 ```python
 import json
 
 mrsal.publish_message(
     exchange='friendship',
+    exchange_type='direct',
     routing_key='friendship_key',
-    message=json.dumps('Salaam habibi'),
+    queue='friendship_queue,
+    message=json.dumps('Salaam habibi')
 )
 ```
 
 Done! Your first message of friendship has been sent to the friendship queue on the exchange of friendship.
 
-### 4. Consume
+That simple! You have now setup a full advanced message queueing protocol that you can use to promote friendship or other necessary communication between your services.
 
-It would be a pitty if nobody is listening to the message of friendship, so let's make sure that someone is ready to listen to our message. We are going to make a simple callback function, which is the function that is triggered by our message, and start the listening by setting up so called consumer.
-
-```python
-
-def consumer_callback(host, queue, message):
-        if 'Salaam' in message:
-            return 'Shalom habibi'
-
-mrsal.start_consumer(
-    queue='friendship_queue,
-    callback=consumer_callback,
-    callback_args=(host, queue)
-)
-```
-###### NOTE! You have to initiate the mrsal client for consume in the same way you initiated it for publish
-
-That's it. You have now setup a full advanced message queueing protocol that you can use to promote friendship or other necessary communication between your services.
+###### Note! Please refer to the full guide on how to use customise Mrsal to meet specific needs. There are many parameters and settings that you can use to set up a more sophisticated communication protocol.

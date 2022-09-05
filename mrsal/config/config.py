@@ -1,12 +1,13 @@
 from typing import Tuple, Dict
+import os
 
-RABBITMQ_SERVICE_NAME_DOCKER_COMPOSE: str = 'rabbitmq_server'  # Service name in docker-compose.yaml
+RABBITMQ_SERVICE_NAME_DOCKER_COMPOSE: str = os.environ.get('RABBITMQ_SERVICE_NAME')  # Service name in docker-compose.yaml
 RABBITMQ_SERVER: str = 'localhost'
 V_HOST: str = 'v_host'
 RABBITMQ_PORT: int = 5673
 
-RABBITMQ_USER = 'root'
-RABBITMQ_PASSWORD = 'password'
+RABBITMQ_USER = os.environ.get('RABBITMQ_DEFAULT_USER', 'root')
+RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_DEFAULT_PASS', 'password')
 RABBITMQ_CREDENTIALS: Tuple[str, str] = (RABBITMQ_USER, RABBITMQ_PASSWORD)
 
 RABBITMQ_EXCHANGE: str = 'emergency_exchange'

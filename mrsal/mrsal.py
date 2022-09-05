@@ -1,7 +1,7 @@
 import json
 from dataclasses import dataclass
 from socket import gaierror
-from typing import Callable, Dict, NoReturn, Tuple
+from typing import Callable, Dict, NoReturn, Tuple, Any
 
 import pika
 import requests
@@ -10,10 +10,9 @@ from retry import retry
 
 from mrsal.config.logging import get_logger
 
-log = get_logger(__name__)
 
 @dataclass
-class Mrsal(object):
+class Mrsal:
     """
     Mrsal creates a layer on top of Pika's core, providing methods to setup a 
     RabbitMQ broker with multiple functionalities.
@@ -39,15 +38,16 @@ class Mrsal(object):
     blocked_connection_timeout: int = 300  # sec
     _connection: pika.BlockingConnection = None
     _channel = None
+    log = get_logger(__name__)
 
     @retry((pika.exceptions.AMQPConnectionError, TypeError, gaierror), tries=2, delay=5, jitter=(1, 3))
     def connect_to_server(self):
         """
         Establish connection to RabbitMQ server specifying connection parameters.
         """
-        connection_info = f'host={self.host}, virtual_host={self.virtual_host},port={self.port}, heartbeat={self.heartbeat}'
+        connection_info = f'host={self.host}, virtual_host={self.virtual_host}, port={self.port}, heartbeat={self.heartbeat}'
         if self.verbose:
-            log.info(f'Establishing connection to RabbitMQ on ' + connection_info)
+            self.log.info(f'Establishing connection to RabbitMQ on {connection_info}')
         try:
             self._connection = pika.BlockingConnection(
                 pika.ConnectionParameters(
@@ -63,16 +63,16 @@ class Mrsal(object):
             # In production you will want to test with different prefetch values
             # to find which one provides the best performance and usability for your solution
             self._channel.basic_qos(prefetch_count=self.prefetch_count)
-            log.success(f'Connection established with RabbitMQ on ' + connection_info)
+            self.log.success(f'Connection established with RabbitMQ on {connection_info}')
             return self._connection
         except TypeError as err:
-            log.error(f'Caught a type error: {err}')
+            self.log.error(f'Caught a type error: {err}')
             raise TypeError
         except pika.exceptions.AMQPConnectionError as err:
-            log.error(f'Caught a connection error: {err}')
+            self.log.error(f'Caught a connection error: {err}')
             raise pika.exceptions.AMQPConnectionError
         except gaierror as err:
-            log.error(f'Caught a socket error: {err}')
+            self.log.error(f'Caught a socket error: {err}')
             raise gaierror
 
     def setup_exchange(self, exchange: str, exchange_type: str, arguments: Dict[str, str] = None,
@@ -99,7 +99,7 @@ class Mrsal(object):
         """
         exchange_declare_info = f'exchange={exchange}, exchange_type={exchange_type}, durable={durable}, passive={passive}, internal={internal}, auto_delete={auto_delete}, arguments={arguments}'
         if self.verbose:
-            log.info(f'Declaring exchange with: {exchange_declare_info}')
+            self.log.info(f'Declaring exchange with: {exchange_declare_info}')
         try:
             exchange_declare_result = self._channel.exchange_declare(exchange=exchange,
                                                                      exchange_type=exchange_type,
@@ -108,16 +108,16 @@ class Mrsal(object):
                                                                      passive=passive,
                                                                      internal=internal,
                                                                      auto_delete=auto_delete)
-            log.success(f'Exchange is declared successfully: {exchange_declare_info}, result={exchange_declare_result}')
+            self.log.success(f'Exchange is declared successfully: {exchange_declare_info}, result={exchange_declare_result}')
             return exchange_declare_result
         except TypeError as err:
-            log.error(f'Caught a type error: {err}')
+            self.log.error(f'Caught a type error: {err}')
             raise TypeError
         except AttributeError as err:
-            log.error(f'Caught a attribute error: {err}')
+            self.log.error(f'Caught a attribute error: {err}')
             raise AttributeError
         except pika.exceptions.ConnectionClosedByBroker as err:
-            log.error(f'Caught a connection closed by broker error: {err}')
+            self.log.error(f'Caught a connection closed by broker error: {err}')
             raise pika.exceptions.ConnectionClosedByBroker(503, str(err))
 
     def setup_queue(self, queue: str, arguments: Dict[str, str] = None, durable: bool = True,
@@ -146,7 +146,7 @@ class Mrsal(object):
         """
         queue_declare_info = f'queue={queue}, durable={durable}, exclusive={exclusive}, auto_delete={auto_delete}, arguments={arguments}'
         if self.verbose:
-            log.info(f'Declaring queue with: {queue_declare_info}')
+            self.log.info(f'Declaring queue with: {queue_declare_info}')
         try:
             queue_declare_result = self._channel.queue_declare(queue=queue,
                                                                arguments=arguments,
@@ -154,10 +154,10 @@ class Mrsal(object):
                                                                exclusive=exclusive,
                                                                auto_delete=auto_delete,
                                                                passive=passive)
-            log.success(f'Queue is declared successfully: {queue_declare_info}, result={queue_declare_result.method}')
+            self.log.success(f'Queue is declared successfully: {queue_declare_info}, result={queue_declare_result.method}')
             return queue_declare_result
         except pika.exceptions.ChannelClosedByBroker as err:
-            log.error(f'Caught ChannelClosedByBroker: {err}')
+            self.log.error(f'Caught ChannelClosedByBroker: {err}')
             raise pika.exceptions.ChannelClosedByBroker(503, str(err))
 
     def setup_queue_binding(self, exchange: str, queue: str, routing_key: str = None, arguments=None):
@@ -174,39 +174,39 @@ class Mrsal(object):
 
         """
         if self.verbose:
-            log.info(f'Binding queue to exchange: queue={queue}, exchange={exchange}, routing_key={routing_key}')
+            self.log.info(f'Binding queue to exchange: queue={queue}, exchange={exchange}, routing_key={routing_key}')
         try:
             bind_result = self._channel.queue_bind(
                 exchange=exchange, queue=queue, routing_key=routing_key, arguments=arguments)
-            log.success(f'The queue is bound to exchange successfully: queue={queue}, exchange={exchange}, routing_key={routing_key}, result={bind_result}')
+            self.log.success(f'The queue is bound to exchange successfully: queue={queue}, exchange={exchange}, routing_key={routing_key}, result={bind_result}')
             if self.verbose:
-                log.info(f'In such setup a message published to the exchange "{exchange}" \
+                self.log.info(f'In such setup a message published to the exchange "{exchange}" \
                             with routing key "{routing_key}" will be routed to queue "{queue}"')
             return bind_result
         except pika.exceptions.ChannelClosedByBroker as err:
-            log.error(f'Caught ChannelClosedByBroker: {err}')
+            self.log.error(f'Caught ChannelClosedByBroker: {err}')
             raise pika.exceptions.ChannelClosedByBroker(503, str(err))
 
     # TODO NOT IN USE (remove or use)
-    def stop_consuming(self, consumer_tag: str) -> NoReturn:
+    def __stop_consuming(self, consumer_tag: str) -> NoReturn:
         self._channel.stop_consuming(consumer_tag=consumer_tag)
-        log.info('Consumer is stopped, carry on')
+        self.log.info('Consumer is stopped, carry on')
 
      # TODO NOT IN USE (remove or use)
     def cancel_channel(self, consumer_tag: str) -> NoReturn:
         self._channel.basic_cancel(consumer_tag=consumer_tag)
-        log.info('Channel is canceled, carry on')
+        self.log.info('Channel is canceled, carry on')
 
      # TODO NOT IN USE (remove or use)
     def close_channel(self) -> NoReturn:
         self._channel.close()
-        log.info('Channel is closed, carry on')
+        self.log.info('Channel is closed, carry on')
 
      # TODO NOT IN USE (remove or use)
-    def close_connection(self) -> NoReturn:
+    def __close_connection(self) -> NoReturn:
         self.close_channel()
         self._connection.close()
-        log.info('Connection is closed, carry on')
+        self.log.info('Connection is closed, carry on')
 
     def queue_delete(self, queue: str):
         self._channel.queue_delete(queue=queue)
@@ -234,7 +234,7 @@ class Mrsal(object):
     def consume_messages_with_retries(self, queue: str, callback: Callable, callback_args=None, escape_after=-1,
                                       dead_letters_exchange: str = None, dead_letters_routing_key: str = None,
                                       prop: pika.BasicProperties = None, inactivity_timeout=None):
-        log.info(f'Consuming messages: queue= {queue}')
+        self.log.info(f'Consuming messages: queue= {queue}')
 
         try:
             for method_frame, properties, body in self._channel.consume(queue=queue, inactivity_timeout=inactivity_timeout):
@@ -243,31 +243,34 @@ class Mrsal(object):
                 exchange = method_frame.exchange
                 routing_key = method_frame.routing_key
                 delivery_tag = method_frame.delivery_tag
-                log.info(f'consumer_callback: message: {message}, exchange: {exchange}, routing_key: {routing_key}, delivery_tag: {delivery_tag}, properties: {properties}, consumer_tags: {consumer_tags}')
+                self.log.info(f'consumer_callback: message: {message}, exchange: {exchange}, routing_key: {routing_key}, delivery_tag: {delivery_tag}, properties: {properties}, consumer_tags: {consumer_tags}')
                 is_processed = callback(*callback_args, message)
-                log.info(f'is_processed= {is_processed}')
+                self.log.info(f'is_processed= {is_processed}')
                 if is_processed:
                     self._channel.basic_ack(delivery_tag=delivery_tag)
                     # self._channel.basic_nack(delivery_tag=delivery_tag)
-                    log.info('Message acknowledged')
+                    self.log.info('Message acknowledged')
 
                     if method_frame.delivery_tag == escape_after:
-                        log.info(
+                        self.log.info(
                             f'Break! Max messages to be processed is {escape_after}')
                         break
                 else:
-                    log.warning(f'Could not process the message= {message}. Process it as dead letter.')
+                    self.log.warning(f'Could not process the message= {message}. Process it as dead letter.')
                     is_dead_letter_published = self.publish_dead_letter(message=message, delivery_tag=delivery_tag, dead_letters_exchange=dead_letters_exchange,
                                                                         dead_letters_routing_key=dead_letters_routing_key, prop=prop)
                     if is_dead_letter_published:
                         self._channel.basic_ack(delivery_tag)
-                log.info('----------------------------------------------------')
+                self.log.info('----------------------------------------------------')
         except FileNotFoundError as e:
-            log.info('Connection is closed')
+            self.log.info('Connection is closed')
             self._channel.stop_consuming()
 
-    def start_consumer(self, queue: str, callback: Callable, callback_args=None,
-                       inactivity_timeout=None, requeue: bool = True):
+    def start_consumer(
+            self, queue: str, callback: Callable, callback_args: Tuple[str, Any] = None,
+            exchange: str = None, exchange_type: str = None, routing_key: str = None,
+            inactivity_timeout=None, requeue: bool = True, fast_setup: bool = True
+    ):
         """
         Setup consumer:
             1- Consumer start consuming the messages from the queue.
@@ -293,46 +296,71 @@ class Mrsal(object):
                              requeue attempt fails the messages are discarded or
                              dead-lettered.
         """
-        log.info(f'Consuming messages: queue= {queue}, requeue= {requeue}, inactivity_timeout= {inactivity_timeout}')
+        if fast_setup:
+            # setting up the necessary connections
+            self.setup_exchange(exchange=exchange, exchange_type=exchange_type)
+            self.setup_queue(queue=queue)
+            self.setup_queue_binding(exchange=exchange, queue=queue, routing_key=routing_key)
+
+        self.log.info(f'Consuming messages: queue= {queue}, requeue= {requeue}, inactivity_timeout= {inactivity_timeout}')
 
         try:
             for method_frame, properties, body in \
                     self._channel.consume(queue=queue, inactivity_timeout=inactivity_timeout):
-                if (method_frame, properties, body) != (None, None, None):
-                    consumer_tags = self._channel.consumer_tags
-                    consumer_tag = method_frame.consumer_tag
-                    message = json.loads(body).replace('"', '')
-                    exchange = method_frame.exchange
-                    routing_key = method_frame.routing_key
-                    delivery_tag = method_frame.delivery_tag
-                    redelivered = method_frame.redelivered  # Will be True when the consumer consumes requeued message
-                    if self.verbose:
-                        log.info(
-                            f'Consumed message: message= {message}, method_frame= {method_frame}, redelivered= {redelivered}, exchange= {exchange}, routing_key= {routing_key}, delivery_tag= {delivery_tag}, properties= {properties}, consumer_tags= {consumer_tags}, consumer_tag= {consumer_tag}')
-                    is_processed = callback(*callback_args, message)
-                    if is_processed:
-                        self._channel.basic_ack(delivery_tag=delivery_tag)
-                        log.info(f'Message {message} is acknowledged')
+                try:
+                    if (method_frame, properties, body) != (None, None, None):
+                        consumer_tags = self._channel.consumer_tags
+                        consumer_tag = method_frame.consumer_tag
+                        message = json.loads(body).replace('"', '')
+                        if self.verbose:
+                            self.log.info(
+                                f"""
+                                Consumed message:
+                                message= {message},
+                                method_frame= {method_frame},
+                                redelivered= {method_frame.redelivered},
+                                exchange= {method_frame.exchange},
+                                routing_key= {method_frame.routing_key},
+                                delivery_tag= {method_frame.delivery_tag},
+                                properties= {properties},
+                                consumer_tags= {consumer_tags},
+                                consumer_tag= {consumer_tag}
+                                """)
+                        is_processed = callback(*callback_args, message) if callback_args else callback(message)
+                        if is_processed:
+                            self._channel.basic_ack(delivery_tag=method_frame.delivery_tag)
+                            self.log.info(f'Message {message} is acknowledged')
+                        else:
+                            self.log.warning(f'Could not process the message= {message}. This will be rejected and sent to dead-letters-exchange if it configured or deleted if not.')
+                            self._channel.basic_nack(delivery_tag=method_frame.delivery_tag, requeue=requeue)
+                            self.log.warning('Message rejected')
+                        self.log.info('----------------------------------------------------')
                     else:
-                        log.warning(f'Could not process the message= {message}. This will be rejected and sent to dead-letters-exchange if it configured or deleted if not.')
-                        self._channel.basic_nack(delivery_tag=delivery_tag, requeue=requeue)
-                        log.warning('Message rejected')
-                    log.info('----------------------------------------------------')
-                else:
-                    log.warning(f'Given period of inactivity {inactivity_timeout} is exceeded. Cancel consumer.')
-                    self._channel.cancel()
+                        self.log.warning(f'Given period of inactivity {inactivity_timeout} is exceeded. Cancel consumer.')
+                        self._channel.cancel()
+                except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosedByBroker):
+                    self.log.error('I lost the connection with the Mrsal. Oh Lordy Lord!', exc_info=True)
+                    continue
+                except KeyboardInterrupt:
+                    self.log('Stopping mrsal consumption. Walk in the light grashopper')
+                    self.__stop_consuming()
+                    self.__close_connection()
+                    break
         except ValueError as err1:
-            log.error(f'ValueError is caught while consuming. Consumer-creation parameters dont match those of the existing queue consumer generator. Cancel consumer. . {str(err1)}')
+            self.log.error(f'ValueError is caught while consuming. Consumer-creation parameters dont match those of the existing queue consumer generator. Cancel consumer. . {str(err1)}')
             self._channel.cancel()
         except pika.exceptions.ChannelClosed as err2:
-            log.error(f'ChannelClosed is caught while consuming. Channel is closed by broker. Cancel consumer. {str(err2)}')
+            self.log.error(f'ChannelClosed is caught while consuming. Channel is closed by broker. Cancel consumer. {str(err2)}')
             self._channel.cancel()
 
     # --------------------------------------------------------------
     # --------------------------------------------------------------
     @retry((pika.exceptions.UnroutableError), tries=2, delay=5, jitter=(1, 3))
-    def publish_message(self, exchange: str, routing_key: str,
-                        message: str, properties: pika.BasicProperties):
+    def publish_message(
+            self, exchange: str, routing_key: str, message: str, exchange_type: str = None,
+            queue: str = None, content_type: str = 'text/plain', content_encoding: str = 'utf-8',
+            delivery_mode: pika.DeliveryMode = pika.DeliveryMode.Persistent, fast_setup: bool = True
+    ):
         """Publish message to the exchange specifying routing key and properties.
 
         :param str exchange: The exchange to publish to
@@ -349,33 +377,45 @@ class Mrsal(object):
             `BlockingChannel.confirm_delivery`.
 
         """
+        if fast_setup:
+            # setting up the necessary connections
+            self.setup_exchange(exchange=exchange, exchange_type=exchange_type)
+            self.setup_queue(queue=queue)
+            self.setup_queue_binding(exchange=exchange, queue=queue, routing_key=routing_key)
+
+        # configuring the parsing information for the message
+        prop = pika.BasicProperties(
+            content_type=content_type,
+            content_encoding='utf-8',
+            delivery_mode=delivery_mode
+        )
         try:
             # Publish the message by serializing it in json dump
             self._channel.basic_publish(exchange=exchange,
                                         routing_key=routing_key,
                                         body=json.dumps(message),
-                                        properties=properties)
-            log.info(
+                                        properties=prop)
+            self.log.info(
                 f'Message ({message}) is published to the exchange "{exchange}" with a routing key "{routing_key}"')
 
             # The message will be returned if no one is listening
             return True
         except pika.exceptions.UnroutableError as err1:
-            log.error(
+            self.log.error(
                 f'Producer could not publish the message ({message}) to the exchange "{exchange}" with a routing key "{routing_key}": {err1}', exc_info=True)
             return False
 
     # TODO NOT IN USE: maybe we will use it in the method consume_messages_with_retries to publish messages to dead letters exchange after retries limit. (remove or use)
     def publish_dead_letter(self, message: str, delivery_tag: int, dead_letters_exchange: str = None,
                             dead_letters_routing_key: str = None, prop: pika.BasicProperties = None):
-        if dead_letters_exchange != None and dead_letters_routing_key != None:
-            log.warning(f'Re-route the message= {message} to the exchange= {dead_letters_exchange} with routing_key= {dead_letters_routing_key}')
+        if dead_letters_exchange is not None and dead_letters_routing_key is not None:
+            self.log.warning(f'Re-route the message= {message} to the exchange= {dead_letters_exchange} with routing_key= {dead_letters_routing_key}')
             try:
                 self.publish_message(exchange=dead_letters_exchange,
                                      routing_key=dead_letters_routing_key,
                                      message=json.dumps(message),
                                      properties=prop)
-                log.info(f'Dead letter was published: message= {message}, exchange= {dead_letters_exchange}, routing_key= {dead_letters_routing_key}')
+                self.log.info(f'Dead letter was published: message= {message}, exchange= {dead_letters_exchange}, routing_key= {dead_letters_routing_key}')
                 return True
             except pika.exceptions.UnroutableError:
                 log.error('Dead letter was returned')
