@@ -4,8 +4,6 @@ from socket import gaierror
 from typing import Callable, Dict, NoReturn, Tuple, Any
 
 import pika
-import requests
-from requests.auth import HTTPBasicAuth
 from retry import retry
 
 from mrsal.config.logging import get_logger
@@ -187,24 +185,16 @@ class Mrsal:
             self.log.error(f'Caught ChannelClosedByBroker: {err}')
             raise pika.exceptions.ChannelClosedByBroker(503, str(err))
 
-    # TODO NOT IN USE (remove or use)
     def __stop_consuming(self, consumer_tag: str) -> NoReturn:
         self._channel.stop_consuming(consumer_tag=consumer_tag)
         self.log.info('Consumer is stopped, carry on')
 
-     # TODO NOT IN USE (remove or use)
-    def cancel_channel(self, consumer_tag: str) -> NoReturn:
-        self._channel.basic_cancel(consumer_tag=consumer_tag)
-        self.log.info('Channel is canceled, carry on')
-
-     # TODO NOT IN USE (remove or use)
-    def close_channel(self) -> NoReturn:
+    def __close_channel(self) -> NoReturn:
         self._channel.close()
         self.log.info('Channel is closed, carry on')
 
-     # TODO NOT IN USE (remove or use)
     def __close_connection(self) -> NoReturn:
-        self.close_channel()
+        self.__close_channel()
         self._connection.close()
         self.log.info('Connection is closed, carry on')
 
@@ -216,17 +206,6 @@ class Mrsal:
 
     def confirm_delivery(self):
         self._channel.confirm_delivery()
-
-    # TODO NOT IN USE:  Test get info from API
-    def get_queue_messages_count(self, queue: str):
-        url = 'http://localhost:15673/api/queues/bloody_vhost/' + queue
-        response = requests.get(url, auth=HTTPBasicAuth('root', 'password'))
-        if response.status_code == 200:
-            queue_details = response.json()
-            if 'messages' in queue_details:
-                return queue_details['messages']
-            return None
-        return None
 
     # --------------------------------------------------------------
     # --------------------------------------------------------------
