@@ -84,7 +84,7 @@ mrsal.publish_message(
     exchange='friendship',
     exchange_type='direct',
     routing_key='friendship_key',
-    queue='friendship_queue,
+    queue='friendship_queue',
     message=json.dumps('Salaam habibi')
 )
 ```
