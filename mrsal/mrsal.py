@@ -218,11 +218,12 @@ class Mrsal:
         try:
             for method_frame, properties, body in self._channel.consume(queue=queue, inactivity_timeout=inactivity_timeout):
                 consumer_tags = self._channel.consumer_tags
-                message = json.loads(body).replace('"', '')
+                # Let the message be in whatever data type it needs to
+                message = json.loads(body)
                 exchange = method_frame.exchange
                 routing_key = method_frame.routing_key
                 delivery_tag = method_frame.delivery_tag
-                self.log.info(f'consumer_callback: message: {message}, exchange: {exchange}, routing_key: {routing_key}, delivery_tag: {delivery_tag}, properties: {properties}, consumer_tags: {consumer_tags}')
+                self.log.info(f'consumer_callback info: exchange: {exchange}, routing_key: {routing_key}, delivery_tag: {delivery_tag}, properties: {properties}, consumer_tags: {consumer_tags}')
                 is_processed = callback(*callback_args, message)
                 self.log.info(f'is_processed= {is_processed}')
                 if is_processed:
@@ -242,7 +243,7 @@ class Mrsal:
                         self._channel.basic_ack(delivery_tag)
                 self.log.info('----------------------------------------------------')
         except FileNotFoundError as e:
-            self.log.info('Connection is closed')
+            self.log.error(f'Connection closed with error: {e}')
             self._channel.stop_consuming()
 
     def start_consumer(
