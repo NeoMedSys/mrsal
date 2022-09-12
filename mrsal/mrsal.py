@@ -291,7 +291,8 @@ class Mrsal:
                     if (method_frame, properties, body) != (None, None, None):
                         consumer_tags = self._channel.consumer_tags
                         consumer_tag = method_frame.consumer_tag
-                        message = json.loads(body).replace('"', '')
+                        # let the message be whatever it needs to be
+                        message = json.loads(body)
                         if self.verbose:
                             self.log.info(
                                 f"""
