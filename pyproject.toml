@@ -2,7 +2,7 @@
 authors = ["Raafat <rafatzahran90@gmail.com>", "Jon E Nesvold <jnesvold@pm.me>"]
 description = ""
 name = "mrsal"
-version = "0.1.3-alpha"
+version = "0.1.4-alpha"
 
 [tool.poetry.dependencies]
 python = "^3.8"
