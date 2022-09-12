@@ -367,7 +367,7 @@ class Mrsal:
         # configuring the parsing information for the message
         prop = pika.BasicProperties(
             content_type=content_type,
-            content_encoding='utf-8',
+            content_encoding=content_encoding,
             delivery_mode=delivery_mode
         )
         try:
