@@ -249,7 +249,7 @@ class Mrsal:
     def start_consumer(
             self, queue: str, callback: Callable, callback_args: Tuple[str, Any] = None,
             exchange: str = None, exchange_type: str = None, routing_key: str = None,
-            inactivity_timeout=None, requeue: bool = True, fast_setup: bool = True
+            inactivity_timeout=None, requeue: bool = False, fast_setup: bool = True
     ):
         """
         Setup consumer:
@@ -292,12 +292,11 @@ class Mrsal:
                         consumer_tags = self._channel.consumer_tags
                         consumer_tag = method_frame.consumer_tag
                         # let the message be whatever it needs to be
-                        message = json.loads(body)
                         if self.verbose:
                             self.log.info(
                                 f"""
                                 Consumed message:
-                                message= {message},
+                                message= {body},
                                 method_frame= {method_frame},
                                 redelivered= {method_frame.redelivered},
                                 exchange= {method_frame.exchange},
@@ -307,29 +306,27 @@ class Mrsal:
                                 consumer_tags= {consumer_tags},
                                 consumer_tag= {consumer_tag}
                                 """)
-                        is_processed = callback(*callback_args, message) if callback_args else callback(message)
+                        is_processed = callback(*callback_args, body) if callback_args else callback(body)
                         if is_processed:
                             self._channel.basic_ack(delivery_tag=method_frame.delivery_tag)
-                            self.log.info(f'Message {message} is acknowledged')
+                            self.log.info(f'Message {body} is acknowledged')
                         else:
-                            self.log.warning(f'Could not process the message= {message}. This will be rejected and sent to dead-letters-exchange if it configured or deleted if not.')
+                            self.log.warning(f'Could not process the message= {body}. This will be rejected and sent to dead-letters-exchange if it configured or deleted if not.')
                             self._channel.basic_nack(delivery_tag=method_frame.delivery_tag, requeue=requeue)
                             self.log.warning('Message rejected')
-                        self.log.info('----------------------------------------------------')
+                            pass
+                        self.log.info(f'[*] keep listening on {queue}. Be well young grasshopper!')
                     else:
                         self.log.warning(f'Given period of inactivity {inactivity_timeout} is exceeded. Cancel consumer.')
                         self._channel.cancel()
-                except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosedByBroker):
+                except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosedByBroker, ValueError, TypeError):
                     self.log.error('I lost the connection with the Mrsal. Oh Lordy Lord!', exc_info=True)
-                    continue
+                    pass
                 except KeyboardInterrupt:
                     self.log('Stopping mrsal consumption. Walk in the light grashopper')
                     self.__stop_consuming()
                     self.__close_connection()
                     break
-        except ValueError as err1:
-            self.log.error(f'ValueError is caught while consuming. Consumer-creation parameters dont match those of the existing queue consumer generator. Cancel consumer. . {str(err1)}')
-            self._channel.cancel()
         except pika.exceptions.ChannelClosed as err2:
             self.log.error(f'ChannelClosed is caught while consuming. Channel is closed by broker. Cancel consumer. {str(err2)}')
             self._channel.cancel()
@@ -338,7 +335,7 @@ class Mrsal:
     # --------------------------------------------------------------
     @retry((pika.exceptions.UnroutableError), tries=2, delay=5, jitter=(1, 3))
     def publish_message(
-            self, exchange: str, routing_key: str, message: str, exchange_type: str = None,
+            self, exchange: str, routing_key: str, message: Any, exchange_type: str = None,
             queue: str = None, content_type: str = 'text/plain', content_encoding: str = 'utf-8',
             delivery_mode: pika.DeliveryMode = pika.DeliveryMode.Persistent, fast_setup: bool = True
     ):
