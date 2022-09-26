@@ -45,9 +45,9 @@ from mrsal import Mrsal
 
 mrsal = Mrsal(
     host='localhost',
-    port=5671,
+    port=5673, # Note RabbitMQ container is listening on the default port 5672 which is exposed to the port 5673 in docker-compose
     credentials=('username', 'password'),
-    virtual_host='myMrsalHost'  # use this to connect to specific part of the rabbit server
+    virtual_host='v_host'  # Use this to connect to specific part of the rabbit server
 )
 
 mrsal.connect_to_server()
@@ -59,36 +59,36 @@ Before publishing our first message, lets setup a consumer that will listen to o
 
 
 ```python
+import json
 
-def consumer_callback(host: str, queque:str, message: str):
-        if 'Salaam' in message:
-            return True # Consumed message processed correctly
-        return False
+def consumer_callback(host: str, queue: str, bin_message: str):
+    str_message = json.loads(bin_message).replace('"', '')
+    if 'Salaam' in str_message:
+        return True  # Consumed message processed correctly
+    return False
 
 mrsal.start_consumer(
-    exchange='friendship',
-    exchange_type='direct',
-    routing_key='friendship_key',
-    queue='friendship_queue,
-    callback=consumer_callback,
-    callback_args=('localhost', 'friendship_queue'),
-    fast_setup=True
-)
+        exchange='friendship',
+        exchange_type='direct',
+        routing_key='friendship_key',
+        queue='friendship_queue',
+        callback=consumer_callback,
+        callback_args=('localhost', 'friendship_queue'),
+        fast_setup=True
+    )
 ```
 
 ### 3 Publish
 Now lets publish our message of friendship on the friendship exchange that a friend is currently listening to.
 
 ```python
-import json
-
 mrsal.publish_message(
-    exchange='friendship',
-    exchange_type='direct',
-    routing_key='friendship_key',
-    queue='friendship_queue',
-    message=json.dumps('Salaam habibi')
-)
+        exchange='friendship',
+        exchange_type='direct',
+        routing_key='friendship_key',
+        queue='friendship_queue',
+        message=json.dumps('Salaam habibi')
+    )
 ```
 
 Done! Your first message of friendship has been sent to the friendship queue on the exchange of friendship.
