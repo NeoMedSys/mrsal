@@ -55,14 +55,15 @@ mrsal.connect_to_server()
 
 ### 2 Consume
 
-Before publishing our first message, lets setup a consumer that will listen to our very important messages. If you are using scripts rather than noterbooks than it's advisable to run consume and publish in separately. We are going to need callback functions which is triggered on receiving the message from the exchange and queue we subscribe to.
+Before publishing our first message, lets setup a consumer that will listen to our very important messages. If you are using scripts rather than noterbooks then it's advisable to run consume and publish in separately. We are going to need callback functions which is triggered on receiving the message from the queue we subscribe to.
 
 
 ```python
 
 def consumer_callback(host: str, queque:str, message: str):
         if 'Salaam' in message:
-            return 'Shalom habibi'
+            return True # Consumed message processed correctly
+        return False
 
 mrsal.start_consumer(
     exchange='friendship',
@@ -70,7 +71,8 @@ mrsal.start_consumer(
     routing_key='friendship_key',
     queue='friendship_queue,
     callback=consumer_callback,
-    callback_args=('localhost', 'friendship_queque')
+    callback_args=('localhost', 'friendship_queue'),
+    fast_setup=True
 )
 ```
 
@@ -93,4 +95,4 @@ Done! Your first message of friendship has been sent to the friendship queue on 
 
 That simple! You have now setup a full advanced message queueing protocol that you can use to promote friendship or other necessary communication between your services.
 
-###### Note! Please refer to the full guide on how to use customise Mrsal to meet specific needs. There are many parameters and settings that you can use to set up a more sophisticated communication protocol.
+###### Note! Please refer to the full guide on how to use customize Mrsal to meet specific needs. There are many parameters and settings that you can use to set up a more sophisticated communication protocol.

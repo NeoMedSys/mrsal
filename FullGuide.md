@@ -147,6 +147,8 @@ This tutorial assumes RabbitMQ is installed and running on localhost on the port
     - Different users can have different permissions to different vhost and queues and exchanges can be created, so they only exist in one vhost. 
     - When a client establishes a connection to the RabbitMQ server, it specifies the vhost within which it will operate
 ```py
+from mrsal import Mrsal
+
 mrsal = Mrsal(host='localhost',
             port=5673,
             credentials=('root', 'password'),
