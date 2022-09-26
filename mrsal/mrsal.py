@@ -249,7 +249,7 @@ class Mrsal:
     def start_consumer(
             self, queue: str, callback: Callable, callback_args: Tuple[str, Any] = None,
             exchange: str = None, exchange_type: str = None, routing_key: str = None,
-            inactivity_timeout=None, requeue: bool = False, fast_setup: bool = True
+            inactivity_timeout: int = None, requeue: bool = False, fast_setup: bool = False
     ):
         """
         Setup consumer:
@@ -315,15 +315,15 @@ class Mrsal:
                             self._channel.basic_nack(delivery_tag=method_frame.delivery_tag, requeue=requeue)
                             self.log.warning('Message rejected')
                             pass
-                        self.log.info(f'[*] keep listening on {queue}. Be well young grasshopper!')
+                        self.log.info(f'[*] keep listening on {queue}.')
                     else:
                         self.log.warning(f'Given period of inactivity {inactivity_timeout} is exceeded. Cancel consumer.')
                         self._channel.cancel()
                 except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosedByBroker, ValueError, TypeError):
-                    self.log.error('I lost the connection with the Mrsal. Oh Lordy Lord!', exc_info=True)
+                    self.log.error('I lost the connection with the Mrsal.', exc_info=True)
                     pass
                 except KeyboardInterrupt:
-                    self.log('Stopping mrsal consumption. Walk in the light grashopper')
+                    self.log('Stopping mrsal consumption.')
                     self.__stop_consuming()
                     self.__close_connection()
                     break
@@ -337,7 +337,7 @@ class Mrsal:
     def publish_message(
             self, exchange: str, routing_key: str, message: Any, exchange_type: str = None,
             queue: str = None, content_type: str = 'text/plain', content_encoding: str = 'utf-8',
-            delivery_mode: pika.DeliveryMode = pika.DeliveryMode.Persistent, fast_setup: bool = True
+            delivery_mode: pika.DeliveryMode = pika.DeliveryMode.Persistent, headers: Dict[str, Any] = None, fast_setup: bool = False
     ):
         """Publish message to the exchange specifying routing key and properties.
 
@@ -365,7 +365,8 @@ class Mrsal:
         prop = pika.BasicProperties(
             content_type=content_type,
             content_encoding=content_encoding,
-            delivery_mode=delivery_mode
+            delivery_mode=delivery_mode,
+            headers=headers
         )
         try:
             # Publish the message by serializing it in json dump
