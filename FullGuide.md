@@ -177,7 +177,7 @@ mrsal.connect_to_server()
         {'x-delayed-type': 'direct'}
         ```
 ```py
-# Argument with the kye _x-delayed-type_ to specify how the messages will be routed after the delay period specified
+# Argument with the kye x-delayed-type to specify how the messages will be routed after the delay period specified
 EXCHANGE_ARGS: str = {'x-delayed-type': 'direct'}
 
 mrsal.setup_exchange(exchange='agreements',
@@ -215,8 +215,8 @@ QUEUE_ARGS = {'x-dead-letter-exchange': DL_EXCHANGE,
                 'x-message-ttl': 2000}
 mrsal.setup_queue(queue='agreements_queue',
                 arguments=QUEUE_ARGS,
-                durable: bool = True,
-                exclusive: bool = False, auto_delete: bool = False, passive: bool = False)
+                durable=True,
+                exclusive=False, auto_delete=False, passive=False)
 ```
 ---
 <div id='bindQueueToExchange'/>
@@ -248,11 +248,7 @@ Publish message to the exchange specifying routing key and properties
 - `exchange`: The exchange to publish to
 - `routing_key`: The routing key to bind on
 - `body`: The message body; empty string if no body
-- `properties`: message properties. Eg:
-    - `content_type`
-    - `content_encoding`
-    - `delivery_mode`
-    - `headers`: Is useful when we want to send message with headers. E.g:
+- `headers`: Is useful when we want to send message with headers. E.g:
         - When exchange's type is `x-delayed-message` then we need to send messages to the exchange with `x-delay` header to specify delay time for message in exchange before route it to bound queue ([see example](#delayExchange)).
         - When exchange's type is `headers`, then we need to send messages with headers which match the binding-key of bound queues to the exchange ([see example](#headersExchange)).
 ```py
@@ -260,18 +256,12 @@ message: str = 'uuid'
 
 # publish messages with  header x-delay expressing in milliseconds a delay time for the message.
 headers={'x-delay': 2000}, 
-properties = {
-        'content_type': 'text/plain',
-        'content_encoding': 'utf-8',
-        'headers': headers,
-        'delivery_mode': pika.DeliveryMode.Persistent
-        }
 
 mrsal.publish_message(fast_setup=False,
                 exchange='agreements',
                 routing_key='agreements_key',
                 message=json.dumps(message),
-                **properties
+                headers=headers
                 )
 ```                        
 --- 
@@ -296,8 +286,8 @@ def consumer_callback(host: str, queue: str, message: str):
 
 QUEUE: str = 'agreements_queue'
 
-mrsal.start_consumer(fast_setup=False
-        queue='agreements_queue,
+mrsal.start_consumer(
+        queue='agreements_queue',
         callback=consumer_callback,
         callback_args=(test_config.HOST, 'agreements_queue'),
         inactivity_timeout=6,
@@ -323,6 +313,9 @@ mrsal.start_consumer(fast_setup=False
 </p>
 
 ```py
+def consumer_callback(host_param: str, queue_param: str, message_param: str):
+    return True
+
 EXCHANGE: str = 'agreements'
 EXCHANGE_TYPE: str = 'direct'
 QUEUE_1: str = 'agreements_berlin_queue'
@@ -360,32 +353,32 @@ mrsal.setup_queue_binding(exchange=EXCHANGE,
 
 # Message ("uuid2") is published to the exchange and it's routed to queue2
 message2 = 'uuid2'
-mrsal.publish_message(fast_setup=False,
+mrsal.publish_message(
                         exchange=EXCHANGE,
                         routing_key=ROUTING_KEY_2,
                         message=json.dumps(message2))
 
 # Message ("uuid1") is published to the exchange and it's routed to queue1
 message1 = 'uuid1'
-mrsal.publish_message(fast_setup=False,
+mrsal.publish_message(
                         exchange=EXCHANGE,
                         routing_key=ROUTING_KEY_1,
                         message=json.dumps(message1))
 # ------------------------------------------
 
 # Start consumer for every queue
-mrsal.start_consumer(fast_setup=False,
+mrsal.start_consumer(
     queue=QUEUE_1,
     callback=consumer_callback,
-    callback_args=(test_config.HOST, QUEUE_1),
+    callback_args=('localhost', QUEUE_1),
     inactivity_timeout=1,
     requeue=False
 )
 
-mrsal.start_consumer(fast_setup=False,
+mrsal.start_consumer(
     queue=QUEUE_2,
     callback=consumer_callback,
-    callback_args=(test_config.HOST, QUEUE_2),
+    callback_args=('localhost', QUEUE_2),
     inactivity_timeout=1,
     requeue=False
 )
@@ -405,6 +398,9 @@ mrsal.start_consumer(fast_setup=False,
 </p>
 
 ```py
+def consumer_callback(host_param: str, queue_param: str, message_param: str):
+    return True
+
 EXCHANGE: str = 'agreements'
 EXCHANGE_TYPE: str = 'topic'
 
@@ -444,42 +440,35 @@ mrsal.setup_queue_binding(exchange=EXCHANGE,
 # ----------------------------------
 
 # Publisher:
-prop = {
-        'content_type': 'text/plain',
-        'content_encoding': 'utf-8',
-        'delivery_mode': pika.DeliveryMode.Persistent
-        }
 
 # Message ("uuid1") is published to the exchange will be routed to queue1
 message1 = 'uuid1'
-mrsal.publish_message(fast_setup=False
+mrsal.publish_message(
                         exchange=EXCHANGE,
                         routing_key=ROUTING_KEY_1,
-                        message=json.dumps(message1),
-                        **prop)
+                        message=json.dumps(message1))
 
 # Message ("uuid2") is published to the exchange will be routed to queue2
 message2 = 'uuid2'
-mrsal.publish_message(fast_setup=False
+mrsal.publish_message(
                         exchange=EXCHANGE,
                         routing_key=ROUTING_KEY_2,
-                        message=json.dumps(message2),
-                        **properties)
+                        message=json.dumps(message2))
 # ------------------------------------------
 
 # Start consumer for every queue
-mrsal.start_consumer(fast_setup=False
+mrsal.start_consumer(
     queue=QUEUE_1,
     callback=consumer_callback,
-    callback_args=(test_config.HOST, QUEUE_1),
+    callback_args=('localhost', QUEUE_1),
     inactivity_timeout=1,
     requeue=False
 )
 
-mrsal.start_consumer(fast_setup=False
+mrsal.start_consumer(
     queue=QUEUE_2,
     callback=consumer_callback,
-    callback_args=(test_config.HOST, QUEUE_2),
+    callback_args=('localhost', QUEUE_2),
     inactivity_timeout=1,
     requeue=False
 )
@@ -521,6 +510,9 @@ mrsal.setup_exchange(exchange=EXCHANGE,
 </p>
 
 ```py
+def consumer_callback(host_param: str, queue_param: str, message_param: str):
+    return True
+
 EXCHANGE: str = 'agreements'
 EXCHANGE_TYPE: str = 'headers'
 
@@ -559,49 +551,37 @@ mrsal.setup_queue_binding(exchange=EXCHANGE,
 
 # Publisher:
 # Message ("uuid1") is published to the exchange with a set of headers
-prop1 = {
-        'content_type': 'text/plain',
-        'content_encoding': 'utf-8',
-        'headers': HEADERS1,
-        'delivery_mode': pika.DeliveryMode.Persistent
-        }
 
 message1 = 'uuid1'
-mrsal.publish_message(fast_setup=False,
+mrsal.publish_message(
                         exchange=EXCHANGE,
                         routing_key='',
                         message=json.dumps(message1),
-                        **prop1)
+                        headers=HEADERS1)
 
 # Message ("uuid2") is published to the exchange with a set of headers
-prop2 = {
-        'content_type': 'text/plain',
-        'content_encoding': 'utf-8',
-        'headers': HEADERS2,
-        'delivery_mode': pika.DeliveryMode.Persistent
-        }
 
 message2 = 'uuid2'
-mrsal.publish_message(fast_setup=False,
+mrsal.publish_message(
                         exchange=EXCHANGE,
                         routing_key='',
                         message=json.dumps(message2),
-                        **prop2)
+                        headers=HEADERS2)
 # ------------------------------------------
 
 # Start consumer for every queue
-mrsal.start_consumer(fast_setup=False,
+mrsal.start_consumer(
     queue=QUEUE_1,
     callback=consumer_callback,
-    callback_args=(test_config.HOST, QUEUE_1),
+    callback_args=('localhost', QUEUE_1),
     inactivity_timeout=2,
     requeue=False
 )
 
-mrsal.start_consumer(fast_setup=False,
+mrsal.start_consumer(
     queue=QUEUE_2,
     callback=consumer_callback,
-    callback_args=(test_config.HOST, QUEUE_2),
+    callback_args=('localhost', QUEUE_2),
     inactivity_timeout=2,
     requeue=False
 )
@@ -619,17 +599,55 @@ mrsal.start_consumer(fast_setup=False,
     - **NB** This plugin has known limitations: for more info check here https://github.com/rabbitmq/rabbitmq-delayed-message-exchange#limitations
 
 ```py
-EXCHANGE: str = 'agreements' 
-EXCHANGE_TYPE: str = 'x-delayed-message' 
-EXCHANGE_ARGS: Dict[str, str] = {'x-delayed-type': 'direct'}
+def consumer_callback(host: str, queue: str, message: str):
+    return True
 
 # Setup exchange with delay message type
-mrsal.setup_exchange(exchange=EXCHANGE,
-                    exchange_type=EXCHANGE_TYPE,
-                    arguments=EXCHANGE_ARGS)
+mrsal.setup_exchange(exchange='agreements',
+                    exchange_type='x-delayed-message',
+                    arguments={'x-delayed-type': 'direct'})
 
-# Message is published to the exchange with headers specifying x-delay in ms
-headers={'x-delay': x_delay}
+# Setup queue
+mrsal.setup_queue(queue='agreements_queue')                    
+
+# Bind queue to exchange with routing_key
+qb_result: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
+                                                        routing_key='agreements_key',
+                                                        queue='agreements_queue')
+
+"""
+Publisher:
+    Message ("uuid1") is published with x-delay=3000
+    Message ("uuid2") is published with x-delay=1000
+"""
+x_delay1: int = 3000
+message1 = 'uuid1'
+mrsal.publish_message(exchange='agreements',
+                        routing_key='agreements_key',
+                        message=json.dumps(message1),
+                        headers={'x-delay': x_delay1})
+
+x_delay2: int = 1000
+message2 = 'uuid2'
+mrsal.publish_message(exchange='agreements',
+                        routing_key='agreements_key',
+                        message=json.dumps(message2),
+                        headers={'x-delay': x_delay2})
+
+
+"""
+Consumer from main queue
+    Message ("uuid2"): Consumed first because its delivered from exchange to the queue
+    after x-delay=1000ms which is the shortest time.
+    Message ("uuid1"): Consumed at second place because its x-delay = 3000 ms.
+"""
+mrsal.start_consumer(
+    queue='agreements_queue',
+    callback=consumer_callback,
+    callback_args=('localhost', 'agreements_queue'),
+    inactivity_timeout=3,
+    requeue=False
+)
 ```
 ---
 <div id='queueWithDeadLetters'/>
@@ -645,15 +663,114 @@ Dead messages are:
 - Such a message is called a `dead message`.
 
 ```py
-dl_exchange: str = 'dl_exchange' 
-dl_routing_key: str = 'dl_routing_key' 
-queue: str = 'queue'
+def consumer_callback(host: str, queue: str, message: str):
+    if message == b'"\\"uuid3\\""':
+        time.sleep(3)
+    return message != b'"\\"uuid2\\""'
 
-queue_args = {'x-dead-letter-exchange': dl_exchange,
-                'x-dead-letter-routing-key': dl_routing_key,
-                'x-message-ttl': 2000}
+def consumer_dead_letters_callback(host_param: str, queue_param: str, message_param: str):
+    return True
+# ------------------------------------------    
+# Setup dead letters exchange
+mrsal.setup_exchange(exchange='dl_agreements',
+                     exchange_type='direct')
+
+# Setup main exchange
+mrsal.setup_exchange(exchange='agreements',
+                     exchange_type='direct')
+# ------------------------------------------
+# Setup main queue with arguments where we specify DL_EXCHANGE, DL_ROUTING_KEY and TTL
+mrsal.setup_queue(queue='agreements_queue',
+                    arguments={'x-dead-letter-exchange': 'dl_agreements',
+                                'x-dead-letter-routing-key': 'dl_agreements_key',
+                                'x-message-ttl': 2000})
 mrsal.setup_queue(queue=queue,
                 arguments=queue_args)
+
+mrsal.setup_queue_binding(exchange='agreements',
+                            routing_key='agreements_key',
+                            queue='agreements_queue') 
+# ------------------------------------------
+
+# Bind DL_QUEUE to DL_EXCHANGE with DL_ROUTING_KEY
+mrsal.setup_queue(queue='dl_agreements_queue')
+
+mrsal.setup_queue_binding(exchange='dl_agreements',
+                            routing_key='dl_agreements_key',
+                            queue='dl_agreements_queue')
+# ------------------------------------------
+
+"""
+Publisher:
+    Message ("uuid1") is published
+    Message ("uuid2") is published
+    Message ("uuid3") is published
+    Message ("uuid4") is published
+"""
+message1 = 'uuid1'
+mrsal.publish_message(exchange='agreements',
+                        routing_key='agreements_key',
+                        message=json.dumps(message1))
+
+message2 = 'uuid2'
+mrsal.publish_message(exchange='agreements',
+                        routing_key='agreements_key',
+                        message=json.dumps(message2))
+
+message3 = 'uuid3'
+mrsal.publish_message(exchange='agreements',
+                        routing_key='agreements_key',
+                        message=json.dumps(message3))
+
+message4 = 'uuid4'
+mrsal.publish_message(exchange='agreements',
+                        routing_key='agreements_key',
+                        message=json.dumps(message4))                        
+
+"""
+Consumer from main queue
+    Message ("uuid1"):
+        - This message is positively-acknowledged by consumer.
+        - Then it will be deleted from queue.
+    Message ("uuid2"):
+        - This message is rejected by consumer's callback.
+        - Therefor it will be negatively-acknowledged by consumer.
+        - Then it will be forwarded to dead-letters-exchange (x-first-death-reason: rejected).
+    Message ("uuid3"):
+        - This message has processing time in the consumer's callback equal to 3s
+            which is greater that TTL=2s.
+        - After processing will be positively-acknowledged by consumer.
+        - Then it will be deleted from queue.
+    Message ("uuid4"):
+        - This message will be forwarded to dead-letters-exchange
+            because it spent in the queue more than TTL=2s waiting "uuid3" to be processed
+            (x-first-death-reason: expired).
+"""
+mrsal.start_consumer(
+    queue='agreements_queue',
+    callback=consumer_callback,
+    callback_args=('localhost', 'agreements_queue'),
+    inactivity_timeout=6,
+    requeue=False
+)
+# ------------------------------------------                   
+"""
+Consumer from dead letters queue
+    Message ("uuid2"):
+        - This message is positively-acknowledged by consumer.
+        - Then it will be deleted from dl-queue.
+    Message ("uuid4"):
+        - This message is positively-acknowledged by consumer.
+        - Then it will be deleted from dl-queue.
+"""
+mrsal.start_consumer(
+    queue='dl_agreements_queue',
+    callback=consumer_dead_letters_callback,
+    callback_args=('localhost', 'dl_agreements_queue'),
+    inactivity_timeout=3,
+    requeue=False
+)     
+                                                                                                       
 ```
 ---
 <div id='deadAndDelayLetters'/>
@@ -665,160 +782,126 @@ mrsal.setup_queue(queue=queue,
 </p>
 
 ```py
-MESSAGE_TTL: int = 2000  # ms
+def consumer_callback(host: str, queue: str, message: str):
+    if message == b'"\\"uuid3\\""':
+        time.sleep(3)
+    return message != b'"\\"uuid2\\""'
 
-EXCHANGE: str = 'agreements'
-EXCHANGE_TYPE: str = 'x-delayed-message'
-EXCHANGE_ARGS: str = {'x-delayed-type': 'direct'}
-QUEUE: str = 'agreements_queue'
-ROUTING_KEY: str = 'agreements_key'
+def consumer_dead_letters_callback(host_param: str, queue_param: str, message_param: str):
+    return True
 
-DL_EXCHANGE: str = 'dl_agreements'
-DL_EXCHANGE_TYPE: str = 'direct'
-DL_QUEUE: str = 'dl_agreements_queue'
-DL_ROUTING_KEY: str = 'dl_agreements_key'
-
-# Specify dl exchange and dl routing key for queue
-QUEUE_ARGS = {'x-dead-letter-exchange': DL_EXCHANGE,
-                'x-dead-letter-routing-key': DL_ROUTING_KEY}
-# Set time to live for messages in queue
-if MESSAGE_TTL != None:
-    QUEUE_ARGS['x-message-ttl'] = MESSAGE_TTL
 # ------------------------------------------
 
 # Setup dead letters exchange
-mrsal.setup_exchange(exchange=DL_EXCHANGE,
-                    exchange_type=DL_EXCHANGE_TYPE)
+mrsal.setup_exchange(exchange='dl_agreements',
+                    exchange_type='direct')
 
 # Setup main exchange with 'x-delayed-message' type
 # and arguments where we specify how the messages will be routed after the delay period specified
-mrsal.setup_exchange(exchange=EXCHANGE,
-                    exchange_type=EXCHANGE_TYPE,
-                    arguments=EXCHANGE_ARGS)
+mrsal.setup_exchange(exchange='agreements',
+                    exchange_type='x-delayed-message',
+                    arguments={'x-delayed-type': 'direct'})
 # ------------------------------------------
 
-# Setup main queue with arguments where we specify DL_EXCHANGE and DL_ROUTING_KEY
-mrsal.setup_queue(queue=QUEUE,
-                arguments=QUEUE_ARGS)
+# Setup main queue with arguments where we specify DL_EXCHANGE, DL_ROUTING_KEY and TTL
+mrsal.setup_queue(queue='agreements_queue',
+                    arguments={'x-dead-letter-exchange': 'dl_agreements',
+                            'x-dead-letter-routing-key': 'dl_agreements_key',
+                            'x-message-ttl': test_config.MESSAGE_TTL})
 
 # Bind main queue to the main exchange with routing_key
-mrsal.setup_queue_binding(exchange=EXCHANGE,
-                        routing_key=ROUTING_KEY,
-                        queue=QUEUE)
+mrsal.setup_queue_binding(exchange='agreements',
+                            routing_key='agreements_key',
+                            queue='agreements_queue')
 # ------------------------------------------
 
 # Bind DL_QUEUE to DL_EXCHANGE with DL_ROUTING_KEY
-mrsal.setup_queue(queue=DL_QUEUE)
+mrsal.setup_queue(queue='dl_agreements_queue')
 
-mrsal.setup_queue_binding(exchange=DL_EXCHANGE,
-                        routing_key=DL_ROUTING_KEY,
-                        queue=DL_QUEUE)
+mrsal.setup_queue_binding(exchange='dl_agreements',
+                            routing_key='dl_agreements_key',
+                            queue='dl_agreements_queue')
 # ------------------------------------------
 
-# Publisher:
-#   Message ("uuid1") is published with x-delay=2000
-#   Message ("uuid2") is published with x-delay=1000
-#   Message ("uuid3") is published with x-delay=3000
-#   Message ("uuid4") is published with x-delay=4000
-x_delay1: int = 2000
-prop1 = {
-        'content_type': 'text/plain',
-        'content_encoding': 'utf-8',
-        'headers': 'x-delay': x_delay1},
-        'delivery_mode': pika.DeliveryMode.Persistent
-        }
-        
+"""
+Publisher:
+    Message ("uuid1") is published with x-delay=2000
+    Message ("uuid2") is published with x-delay=1000
+    Message ("uuid3") is published with x-delay=3000
+    Message ("uuid4") is published with x-delay=4000
+"""
+x_delay1: int = 2000  # ms
 message1 = 'uuid1'
-mrsal.publish_message(fast_setup=False,
-                        exchange=EXCHANGE,
-                        routing_key=ROUTING_KEY,
+mrsal.publish_message(exchange='agreements',
+                        routing_key='agreements_key',
                         message=json.dumps(message1),
-                        **prop1)
+                        headers={'x-delay': x_delay1})
 
 x_delay2: int = 1000
-prop2 = {
-        'content_type': 'text/plain',
-        'content_encoding': 'utf-8',
-        'headers': 'x-delay': x_delay2},
-        'delivery_mode': pika.DeliveryMode.Persistent
-        }
 message2 = 'uuid2'
-mrsal.publish_message(fast_setup=False,
-                        exchange=EXCHANGE,
-                        routing_key=ROUTING_KEY,
+mrsal.publish_message(exchange='agreements',
+                        routing_key='agreements_key',
                         message=json.dumps(message2),
-                        **prop2)
+                        headers={'x-delay': x_delay2})
 
 x_delay3: int = 3000
-prop3 = {
-        'content_type': 'text/plain',
-        'content_encoding': 'utf-8',
-        'headers': 'x-delay': x_delay3},
-        'delivery_mode': pika.DeliveryMode.Persistent
-        }
 message3 = 'uuid3'
-mrsal.publish_message(fast_setup=False,
-                        exchange=EXCHANGE,
-                        routing_key=ROUTING_KEY,
+mrsal.publish_message(exchange='agreements',
+                        routing_key='agreements_key',
                         message=json.dumps(message3),
-                        **prop3)
+                        headers={'x-delay': x_delay3})
 
 x_delay4: int = 4000
-prop4 = {
-        'content_type': 'text/plain',
-        'content_encoding': 'utf-8',
-        'headers': 'x-delay': x_delay4,
-        'delivery_mode': pika.DeliveryMode.Persistent
-        }
 message4 = 'uuid4'
-mrsal.publish_message(fast_setup=False
-                        exchange=EXCHANGE,
-                        routing_key=ROUTING_KEY,
+mrsal.publish_message(exchange='agreements',
+                        routing_key='agreements_key',
                         message=json.dumps(message4),
-                        properties=prop4)
+                        headers={'x-delay': x_delay4})
 # ------------------------------------------
 
-log.info(f'===== Start consuming from {QUEUE} ========')
-# Consumer from main queue
-#   Message ("uuid2"): Consumed first because its delivered from exchange to the queue
-#     after x-delay=1000ms which is the shortest time.
-#       - This message is rejected by consumer's callback.
-#       - Therefor it will be negatively-acknowledged by consumer.
-#       - Then it will be forwarded to dead-letters-exchange (x-first-death-reason: rejected).
-#   Message ("uuid1"): Consumed at second place because its x-delay = 2000 ms.
-#       - This message is positively-acknowledged by consumer.
-#       - Then it will be deleted from queue.
-#   Message ("uuid3"): Consumed at third place because its x-delay = 3000 ms.
-#       - This message has processing time in the consumer's callback equal to 3s
-#           which is greater that TTL=2s.
-#       - After processing will be positively-acknowledged by consumer.
-#       - Then it will be deleted from queue.
-#   Message ("uuid4"): Consumed at fourth place because its x-delay = 4000 ms.
-#       - This message will be forwarded to dead-letters-exchange
-#           because it spent in the queue more than TTL=2s waiting "uuid3" to be processed
-#           (x-first-death-reason: expired).
-mrsal.start_consumer(fast_setup=False,
-    queue=QUEUE,
+"""
+Consumer from main queue
+    Message ("uuid2"): Consumed first because its delivered from exchange to the queue
+    after x-delay=1000ms which is the shortest time.
+        - This message is rejected by consumer's callback.
+        - Therefor it will be negatively-acknowledged by consumer.
+        - Then it will be forwarded to dead-letters-exchange (x-first-death-reason: rejected).
+    Message ("uuid1"): Consumed at second place because its x-delay = 2000 ms.
+        - This message is positively-acknowledged by consumer.
+        - Then it will be deleted from queue.
+    Message ("uuid3"): Consumed at third place because its x-delay = 3000 ms.
+        - This message has processing time in the consumer's callback equal to 3s
+            which is greater that TTL=2s.
+        - After processing will be positively-acknowledged by consumer.
+        - Then it will be deleted from queue.
+    Message ("uuid4"): Consumed at fourth place because its x-delay = 4000 ms.
+        - This message will be forwarded to dead-letters-exchange
+            because it spent in the queue more than TTL=2s waiting "uuid3" to be processed
+            (x-first-death-reason: expired).
+"""
+mrsal.start_consumer(
+    queue='agreements_queue',
     callback=consumer_callback,
-    callback_args=(test_config.HOST, QUEUE),
+    callback_args=('localhost', 'agreements_queue'),
     inactivity_timeout=6,
     requeue=False
 )
 # ------------------------------------------
 
-log.info(f'===== Start consuming from {DL_QUEUE} ========')
-# Consumer from dead letters queue
-#   Message ("uuid2"):
-#       - This message is positively-acknowledged by consumer.
-#       - Then it will be deleted from dl-queue.
-#   Message ("uuid4"):
-#       - This message is positively-acknowledged by consumer.
-#       - Then it will be deleted from dl-queue.
+"""
+Consumer from dead letters queue
+    Message ("uuid2"):
+        - This message is positively-acknowledged by consumer.
+        - Then it will be deleted from dl-queue.
+    Message ("uuid4"):
+        - This message is positively-acknowledged by consumer.
+        - Then it will be deleted from dl-queue.
+"""
 
-mrsal.start_consumer(fast_setup=False,
-    queue=DL_QUEUE,
+mrsal.start_consumer(
+    queue='dl_agreements_queue',
     callback=consumer_dead_letters_callback,
-    callback_args=(test_config.HOST, DL_QUEUE),
+    callback_args=('localhost', 'dl_agreements_queue'),
     inactivity_timeout=3,
     requeue=False
 )

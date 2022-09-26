@@ -59,10 +59,6 @@ def test_topic_exchange_workflow():
     # ----------------------------------
 
     # Publisher:
-    prop = pika.BasicProperties(
-        content_type=test_config.CONTENT_TYPE,
-        content_encoding=test_config.CONTENT_ENCODING,
-        delivery_mode=pika.DeliveryMode.Persistent)
 
     # Message ("uuid1") is published to the exchange will be routed to queue1
     message1 = 'uuid1'

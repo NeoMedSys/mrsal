@@ -20,7 +20,7 @@ def test_delay_letter():
     mrsal.exchange_delete(exchange='agreements')
     mrsal.queue_delete(queue='agreements_queue')
     # ------------------------------------------
-    # Setup main exchange with 'x-delayed-message' type
+    # Setup exchange with 'x-delayed-message' type
     # and arguments where we specify how the messages will be routed after the delay period specified
     exch_result: pika.frame.Method = mrsal.setup_exchange(exchange='agreements',
                                                           exchange_type='x-delayed-message',
@@ -28,11 +28,11 @@ def test_delay_letter():
     assert exch_result != None
     # ------------------------------------------
 
-    # Setup main queue with arguments where we specify DL_EXCHANGE and DL_ROUTING_KEY
+    # Setup queue
     q_result: pika.frame.Method = mrsal.setup_queue(queue='agreements_queue')
     assert q_result != None
 
-    # Bind main queue to the main exchange with routing_key
+    # Bind queue to exchange with routing_key
     qb_result: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
                                                              routing_key='agreements_key',
                                                              queue='agreements_queue')
