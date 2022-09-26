@@ -61,15 +61,13 @@ def test_direct_exchange_workflow():
     message2 = 'uuid2'
     mrsal.publish_message(exchange='agreements',
                          routing_key='madrid agreements',
-                         message=json.dumps(message2),
-                         properties=prop)
+                         message=json.dumps(message2))
 
     # Message ("uuid1") is published to the exchange and it's routed to queue1
     message1 = 'uuid1'
     mrsal.publish_message(exchange='agreements',
                          routing_key='berlin agreements',
-                         message=json.dumps(message1),
-                         properties=prop)
+                         message=json.dumps(message1))
     # ------------------------------------------
 
     time.sleep(1)

@@ -35,7 +35,7 @@ def test_dead_letters():
     assert exch_result2 != None
     # ------------------------------------------
 
-    # Setup main queue with arguments where we specify DL_EXCHANGE and DL_ROUTING_KEY
+    # Setup main queue with arguments where we specify DL_EXCHANGE, DL_ROUTING_KEY and TTL
     q_result1: pika.frame.Method = mrsal.setup_queue(queue='agreements_queue',
                                                     arguments={'x-dead-letter-exchange': 'dl_agreements',
                                                                'x-dead-letter-routing-key': 'dl_agreements_key',
@@ -66,45 +66,25 @@ def test_dead_letters():
       Message ("uuid3") is published
       Message ("uuid4") is published
     """
-    prop1 = pika.BasicProperties(
-        content_type=test_config.CONTENT_TYPE,
-        content_encoding=test_config.CONTENT_ENCODING,
-        delivery_mode=pika.DeliveryMode.Persistent)
     message1 = 'uuid1'
     mrsal.publish_message(exchange='agreements',
                          routing_key='agreements_key',
-                         message=json.dumps(message1),
-                         properties=prop1)
+                         message=json.dumps(message1))
 
-    prop2 = pika.BasicProperties(
-        content_type=test_config.CONTENT_TYPE,
-        content_encoding=test_config.CONTENT_ENCODING,
-        delivery_mode=pika.DeliveryMode.Persistent)
     message2 = 'uuid2'
     mrsal.publish_message(exchange='agreements',
                          routing_key='agreements_key',
-                         message=json.dumps(message2),
-                         properties=prop2)
+                         message=json.dumps(message2))
 
-    prop3 = pika.BasicProperties(
-        content_type=test_config.CONTENT_TYPE,
-        content_encoding=test_config.CONTENT_ENCODING,
-        delivery_mode=pika.DeliveryMode.Persistent)
     message3 = 'uuid3'
     mrsal.publish_message(exchange='agreements',
                          routing_key='agreements_key',
-                         message=json.dumps(message3),
-                         properties=prop3)
+                         message=json.dumps(message3))
 
-    prop4 = pika.BasicProperties(
-        content_type=test_config.CONTENT_TYPE,
-        content_encoding=test_config.CONTENT_ENCODING,
-        delivery_mode=pika.DeliveryMode.Persistent)
     message4 = 'uuid4'
     mrsal.publish_message(exchange='agreements',
                          routing_key='agreements_key',
-                         message=json.dumps(message4),
-                         properties=prop4)
+                         message=json.dumps(message4))
     # ------------------------------------------
 
     log.info(f'===== Start consuming from "agreements_queue" ========')
@@ -168,9 +148,9 @@ def test_dead_letters():
     assert message_count == 0
 
 def consumer_callback(host: str, queue: str, message: str):
-    if message == 'uuid3':
+    if message == b'"\\"uuid3\\""':
         time.sleep(3)
-    return message != 'uuid2'
+    return message != b'"\\"uuid2\\""'
 
 def consumer_dead_letters_callback(host_param: str, queue_param: str, message_param: str):
     return True

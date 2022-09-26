@@ -68,15 +68,13 @@ def test_topic_exchange_workflow():
     message1 = 'uuid1'
     mrsal.publish_message(exchange='agreements',
                          routing_key=ROUTING_KEY_1,
-                         message=json.dumps(message1),
-                         properties=prop)
+                         message=json.dumps(message1))
 
     # Message ("uuid2") is published to the exchange will be routed to queue2
     message2 = 'uuid2'
     mrsal.publish_message(exchange='agreements',
                          routing_key=ROUTING_KEY_2,
-                         message=json.dumps(message2),
-                         properties=prop)
+                         message=json.dumps(message2))
     # ----------------------------------
 
     time.sleep(1)

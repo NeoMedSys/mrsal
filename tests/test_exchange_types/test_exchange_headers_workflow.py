@@ -10,9 +10,9 @@ from mrsal.mrsal import Mrsal
 log = get_logger(__name__)
 
 mrsal = Mrsal(host=test_config.HOST,
-             port=config.RABBITMQ_PORT,
-             credentials=config.RABBITMQ_CREDENTIALS,
-             virtual_host=config.V_HOST)
+              port=config.RABBITMQ_PORT,
+              credentials=config.RABBITMQ_CREDENTIALS,
+              virtual_host=config.V_HOST)
 mrsal.connect_to_server()
 
 def test_headers_exchange_workflow():
@@ -25,7 +25,7 @@ def test_headers_exchange_workflow():
 
     # Setup exchange
     exch_result: pika.frame.Method = mrsal.setup_exchange(exchange='agreements',
-                                                         exchange_type='headers')
+                                                          exchange_type='headers')
     assert exch_result != None
     # ------------------------------------------
 
@@ -35,8 +35,8 @@ def test_headers_exchange_workflow():
 
     # Bind queue to exchange with arguments
     qb_result1: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
-                                                             queue='zip_report',
-                                                             arguments={'x-match': 'all', 'format': 'zip', 'type': 'report'})
+                                                              queue='zip_report',
+                                                              arguments={'x-match': 'all', 'format': 'zip', 'type': 'report'})
     assert qb_result1 != None
     # ------------------------------------------
 
@@ -46,37 +46,27 @@ def test_headers_exchange_workflow():
 
     # Bind queue to exchange with arguments
     qb_result2: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
-                                                             queue='pdf_report',
-                                                             arguments={'x-match': 'any', 'format': 'pdf', 'type': 'log'})
+                                                              queue='pdf_report',
+                                                              arguments={'x-match': 'any', 'format': 'pdf', 'type': 'log'})
     assert qb_result2 != None
     # ------------------------------------------
 
     # Publisher:
     # Message ("uuid1") is published to the exchange with a set of headers
-    prop1 = pika.BasicProperties(
-        content_type=test_config.CONTENT_TYPE,
-        content_encoding=test_config.CONTENT_ENCODING,
-        headers={'format': 'zip', 'type': 'report'},
-        delivery_mode=pika.DeliveryMode.Persistent)
 
     message1 = 'uuid1'
     mrsal.publish_message(exchange='agreements',
-                         routing_key='',
-                         message=json.dumps(message1),
-                         properties=prop1)
+                          routing_key='',
+                          message=json.dumps(message1),
+                          headers={'format': 'zip', 'type': 'report'})
 
     # Message ("uuid2") is published to the exchange with a set of headers
-    prop2 = pika.BasicProperties(
-        content_type=test_config.CONTENT_TYPE,
-        content_encoding=test_config.CONTENT_ENCODING,
-        headers={'format': 'pdf', 'date': '2022'},
-        delivery_mode=pika.DeliveryMode.Persistent)
 
     message2 = 'uuid2'
     mrsal.publish_message(exchange='agreements',
-                         routing_key='',
-                         message=json.dumps(message2),
-                         properties=prop2)
+                          routing_key='',
+                          message=json.dumps(message2),
+                          headers={'format': 'pdf', 'date': '2022'})
     # ------------------------------------------
 
     time.sleep(1)
