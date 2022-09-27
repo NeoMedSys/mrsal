@@ -10,9 +10,9 @@ from mrsal.mrsal import Mrsal
 log = get_logger(__name__)
 
 mrsal = Mrsal(host=test_config.HOST,
-             port=config.RABBITMQ_PORT,
-             credentials=config.RABBITMQ_CREDENTIALS,
-             virtual_host=config.V_HOST)
+              port=config.RABBITMQ_PORT,
+              credentials=config.RABBITMQ_CREDENTIALS,
+              virtual_host=config.V_HOST)
 mrsal.connect_to_server()
 
 
@@ -27,28 +27,28 @@ def test_delay_and_dead_letters():
 
     # Setup dead letters exchange
     exch_result1: pika.frame.Method = mrsal.setup_exchange(exchange='dl_agreements',
-                                                          exchange_type='direct')
+                                                           exchange_type='direct')
     assert exch_result1 != None
 
     # Setup main exchange with 'x-delayed-message' type
     # and arguments where we specify how the messages will be routed after the delay period specified
     exch_result2: pika.frame.Method = mrsal.setup_exchange(exchange='agreements',
-                                                          exchange_type='x-delayed-message',
-                                                          arguments={'x-delayed-type': 'direct'})
+                                                           exchange_type='x-delayed-message',
+                                                           arguments={'x-delayed-type': 'direct'})
     assert exch_result2 != None
     # ------------------------------------------
 
-    # Setup main queue with arguments where we specify DL_EXCHANGE and DL_ROUTING_KEY
+    # Setup main queue with arguments where we specify DL_EXCHANGE, DL_ROUTING_KEY and TTL
     q_result1: pika.frame.Method = mrsal.setup_queue(queue='agreements_queue',
-                                                    arguments={'x-dead-letter-exchange': 'dl_agreements',
-                                                               'x-dead-letter-routing-key': 'dl_agreements_key',
-                                                               'x-message-ttl': test_config.MESSAGE_TTL})
+                                                     arguments={'x-dead-letter-exchange': 'dl_agreements',
+                                                                'x-dead-letter-routing-key': 'dl_agreements_key',
+                                                                'x-message-ttl': test_config.MESSAGE_TTL})
     assert q_result1 != None
 
     # Bind main queue to the main exchange with routing_key
     qb_result1: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
-                                                             routing_key='agreements_key',
-                                                             queue='agreements_queue')
+                                                              routing_key='agreements_key',
+                                                              queue='agreements_queue')
     assert qb_result1 != None
     # ------------------------------------------
 
@@ -57,8 +57,8 @@ def test_delay_and_dead_letters():
     assert q_result2 != None
 
     qb_result2: pika.frame.Method = mrsal.setup_queue_binding(exchange='dl_agreements',
-                                                             routing_key='dl_agreements_key',
-                                                             queue='dl_agreements_queue')
+                                                              routing_key='dl_agreements_key',
+                                                              queue='dl_agreements_queue')
     assert qb_result2 != None
     # ------------------------------------------
 
@@ -70,50 +70,32 @@ def test_delay_and_dead_letters():
       Message ("uuid4") is published with x-delay=4000
     """
     x_delay1: int = 2000  # ms
-    prop1 = pika.BasicProperties(
-        content_type=test_config.CONTENT_TYPE,
-        content_encoding=test_config.CONTENT_ENCODING,
-        headers={'x-delay': x_delay1},
-        delivery_mode=pika.DeliveryMode.Persistent)
     message1 = 'uuid1'
     mrsal.publish_message(exchange='agreements',
-                         routing_key='agreements_key',
-                         message=json.dumps(message1),
-                         properties=prop1)
+                          routing_key='agreements_key',
+                          message=json.dumps(message1),
+                          headers={'x-delay': x_delay1})
 
     x_delay2: int = 1000
-    prop2 = pika.BasicProperties(
-        content_type=test_config.CONTENT_TYPE,
-        content_encoding=test_config.CONTENT_ENCODING,
-        headers={'x-delay': x_delay2},
-        delivery_mode=pika.DeliveryMode.Persistent)
     message2 = 'uuid2'
     mrsal.publish_message(exchange='agreements',
-                         routing_key='agreements_key',
-                         message=json.dumps(message2),
-                         properties=prop2)
+                          routing_key='agreements_key',
+                          message=json.dumps(message2),
+                          headers={'x-delay': x_delay2})
 
     x_delay3: int = 3000
-    prop3 = pika.BasicProperties(
-        content_type=test_config.CONTENT_TYPE,
-        headers={'x-delay': x_delay3},
-        delivery_mode=pika.DeliveryMode.Persistent)
     message3 = 'uuid3'
     mrsal.publish_message(exchange='agreements',
-                         routing_key='agreements_key',
-                         message=json.dumps(message3),
-                         properties=prop3)
+                          routing_key='agreements_key',
+                          message=json.dumps(message3),
+                          headers={'x-delay': x_delay3})
 
     x_delay4: int = 4000
-    prop4 = pika.BasicProperties(
-        content_encoding=test_config.CONTENT_ENCODING,
-        headers={'x-delay': x_delay4},
-        delivery_mode=pika.DeliveryMode.Persistent)
     message4 = 'uuid4'
     mrsal.publish_message(exchange='agreements',
-                         routing_key='agreements_key',
-                         message=json.dumps(message4),
-                         properties=prop4)
+                          routing_key='agreements_key',
+                          message=json.dumps(message4),
+                          headers={'x-delay': x_delay4})
     # ------------------------------------------
 
     log.info('===== Start consuming from "agreements_queue" ========')
@@ -137,7 +119,6 @@ def test_delay_and_dead_letters():
               because it spent in the queue more than TTL=2s waiting "uuid3" to be processed
               (x-first-death-reason: expired).
     """
-    breakpoint()
     mrsal.start_consumer(
         queue='agreements_queue',
         callback=consumer_callback,
@@ -180,9 +161,9 @@ def test_delay_and_dead_letters():
     assert message_count == 0
 
 def consumer_callback(host: str, queue: str, message: str):
-    if message == 'uuid3':
+    if message == b'"\\"uuid3\\""':
         time.sleep(3)
-    return message != 'uuid2'
+    return message != b'"\\"uuid2\\""'
 
 def consumer_dead_letters_callback(host_param: str, queue_param: str, message_param: str):
     return True
