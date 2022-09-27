@@ -55,7 +55,7 @@ mrsal.connect_to_server()
 
 ### 2 Consume
 
-Before publishing our first message, lets setup a consumer that will listen to our very important messages. If you are using scripts rather than noterbooks then it's advisable to run consume and publish in separately. We are going to need callback functions which is triggered on receiving the message from the queue we subscribe to.
+Before publishing our first message, lets setup a consumer that will listen to our very important messages. If you are using scripts rather than notebooks then it's advisable to run consume and publish in separately. We are going to need callback functions which is triggered on receiving the message from the queue we subscribe to.
 
 
 ```python
