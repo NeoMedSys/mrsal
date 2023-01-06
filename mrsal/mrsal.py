@@ -1,9 +1,11 @@
 import json
+import os
+import pika
+import ssl
 from dataclasses import dataclass
 from socket import gaierror
 from typing import Callable, Dict, NoReturn, Tuple, Any
-
-import pika
+from pika import SSLOptions
 from retry import retry
 
 from mrsal.config.logging import get_logger
@@ -12,7 +14,7 @@ from mrsal.config.logging import get_logger
 @dataclass
 class Mrsal:
     """
-    Mrsal creates a layer on top of Pika's core, providing methods to setup a 
+    Mrsal creates a layer on top of Pika's core, providing methods to setup a
     RabbitMQ broker with multiple functionalities.
 
     Properties:
@@ -22,12 +24,13 @@ class Mrsal:
         :prop str virtual_host: RabbitMQ virtual host to use
         :prop bool verbose: If True then more INFO logs will be printed
         :prop int heartbeat: Controls RabbitMQ's server heartbeat timeout negotiation during connection tuning.
-        :prop int blocked_connection_timeout: blocked_connection_timeout is the timeout, in seconds, 
+        :prop int blocked_connection_timeout: blocked_connection_timeout is the timeout, in seconds,
             for the connection to remain blocked; if the timeout expires, the connection will be torn down
         :prop int prefetch_count: Specifies a prefetch window in terms of whole messages.
     """
     host: str
     port: str
+    ssl: bool
     credentials: Tuple[str, str]
     virtual_host: str
     verbose: bool = False
@@ -43,14 +46,19 @@ class Mrsal:
         """
         Establish connection to RabbitMQ server specifying connection parameters.
         """
-        connection_info = f'host={self.host}, virtual_host={self.virtual_host}, port={self.port}, heartbeat={self.heartbeat}'
+        connection_info = f'host={self.host}, virtual_host={self.virtual_host}, port={self.port}, heartbeat={self.heartbeat}, ssl={self.ssl}'
         if self.verbose:
             self.log.info(f'Establishing connection to RabbitMQ on {connection_info}')
+        if self.ssl:
+            self.log.info('setting up TLS connection')
+            context = self.__ssl_setup()
+        ssl_options = SSLOptions(context, self.host) if context else None
         try:
             self._connection = pika.BlockingConnection(
                 pika.ConnectionParameters(
                     host=self.host,
                     port=self.port,
+                    ssl_options=ssl_options,
                     virtual_host=self.virtual_host,
                     credentials=pika.PlainCredentials(*self.credentials),
                     heartbeat=self.heartbeat,
@@ -184,6 +192,16 @@ class Mrsal:
         except pika.exceptions.ChannelClosedByBroker as err:
             self.log.error(f'Caught ChannelClosedByBroker: {err}')
             raise pika.exceptions.ChannelClosedByBroker(503, str(err))
+
+    def __ssl_setup(self) -> Dict[str, str]:
+        context = ssl.create_defualt_context(
+            cafile=os.environ.get('RABBIT_CAFILE')
+        )
+        context.load_cert_chain(
+            certfile=os.environ.get('RABBIT_CERT'),
+            keyfile=os.environ.get('RABBIT_KEY')
+        )
+        return context
 
     def __stop_consuming(self, consumer_tag: str) -> NoReturn:
         self._channel.stop_consuming(consumer_tag=consumer_tag)
@@ -397,5 +415,5 @@ class Mrsal:
                 self.log.info(f'Dead letter was published: message= {message}, exchange= {dead_letters_exchange}, routing_key= {dead_letters_routing_key}')
                 return True
             except pika.exceptions.UnroutableError:
-                log.error('Dead letter was returned')
+                self.log.error('Dead letter was returned')
                 return False

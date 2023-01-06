@@ -5,6 +5,7 @@ RABBITMQ_SERVICE_NAME_DOCKER_COMPOSE: str = os.environ.get('RABBITMQ_SERVICE_NAM
 RABBITMQ_SERVER: str = 'localhost'
 V_HOST: str = 'v_host'
 RABBITMQ_PORT: int = 5673
+RABBITMQ_PORT_TLS: int = 5671
 
 RABBITMQ_USER = os.environ.get('RABBITMQ_DEFAULT_USER', 'root')
 RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_DEFAULT_PASS', 'password')
