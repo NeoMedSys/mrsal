@@ -8,10 +8,14 @@ from mrsal.mrsal import Mrsal
 
 log = get_logger(__name__)
 
-mrsal = Mrsal(host=test_config.HOST,
-             port=config.RABBITMQ_PORT,
-             credentials=config.RABBITMQ_CREDENTIALS,
-             virtual_host=config.V_HOST)
+mrsal = Mrsal(
+    # host=test_config.HOST,
+    host='rabbitmq.neomodels.app',
+    port=config.RABBITMQ_PORT_TLS,
+    ssl=True,
+    credentials=config.RABBITMQ_CREDENTIALS,
+    virtual_host=config.V_HOST
+)
 mrsal.connect_to_server()
 
 def test_fast_setup():

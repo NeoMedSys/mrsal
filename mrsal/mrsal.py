@@ -30,9 +30,9 @@ class Mrsal:
     """
     host: str
     port: str
-    ssl: bool
     credentials: Tuple[str, str]
     virtual_host: str
+    ssl: bool = False
     verbose: bool = False
     prefetch_count: int = 1
     heartbeat: int = 5 * 60 * 60  # 5 hours
@@ -42,7 +42,7 @@ class Mrsal:
     log = get_logger(__name__)
 
     @retry((pika.exceptions.AMQPConnectionError, TypeError, gaierror), tries=2, delay=5, jitter=(1, 3))
-    def connect_to_server(self):
+    def connect_to_server(self, context: Dict[str, str] = None):
         """
         Establish connection to RabbitMQ server specifying connection parameters.
         """
@@ -194,7 +194,7 @@ class Mrsal:
             raise pika.exceptions.ChannelClosedByBroker(503, str(err))
 
     def __ssl_setup(self) -> Dict[str, str]:
-        context = ssl.create_defualt_context(
+        context = ssl.create_default_context(
             cafile=os.environ.get('RABBIT_CAFILE')
         )
         context.load_cert_chain(
