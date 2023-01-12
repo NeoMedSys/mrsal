@@ -16,6 +16,7 @@ mrsal = Mrsal(
     credentials=config.RABBITMQ_CREDENTIALS,
     virtual_host=config.V_HOST
 )
+
 mrsal.connect_to_server()
 
 def test_fast_setup():
