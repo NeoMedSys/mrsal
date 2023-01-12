@@ -49,7 +49,7 @@ The first thing we need to do is to setup our rabbit server before we can subscr
 from mrsal import Mrsal
 
 # if you want to use SSL for external listening then set it to True
-ssl = False
+SSL = False
 port = 5671 if SSL else 5672
 host = 'mydomain.com' if ssl else 'localhost'
 
@@ -58,7 +58,7 @@ mrsal = Mrsal(
     port=port, # Note RabbitMQ container is listening on the default port 5672 which is exposed to the port 5673 in docker-compose
     credentials=('username', 'password'),
     virtual_host='v_host',  # Use this to connect to specific part of the rabbit server. It should match with the env specifications
-    ssl=ssl
+    ssl=SSL
 )
 
 mrsal.connect_to_server()
