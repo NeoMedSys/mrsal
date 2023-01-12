@@ -3,9 +3,10 @@ import os
 
 RABBITMQ_SERVICE_NAME_DOCKER_COMPOSE: str = os.environ.get('RABBITMQ_SERVICE_NAME')  # Service name in docker-compose.yaml
 RABBITMQ_SERVER: str = 'localhost'
-V_HOST: str = 'myMrsalHost'
-RABBITMQ_PORT: int = 5672
-RABBITMQ_PORT_TLS: int = 5671
+V_HOST: str = os.environ.get('RABBITMQ_DEFAULT_VHOST', 'myMrsalHost')
+RABBITMQ_PORT: int = os.environ.get('RABBITMQ_PORT', 5672)
+RABBITMQ_PORT_TLS: int = os.environ.get('RABBITMQ_PORT_TLS', 5671)
+RABBIT_DOMAIN: str = os.environ.get('RABBITMQ_DOMAIN', 'localhost')
 
 RABBITMQ_USER = os.environ.get('RABBITMQ_DEFAULT_USER', 'root')
 RABBITMQ_PASSWORD = os.environ.get('RABBITMQ_DEFAULT_PASS', 'password')

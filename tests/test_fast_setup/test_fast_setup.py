@@ -10,7 +10,7 @@ log = get_logger(__name__)
 
 mrsal = Mrsal(
     # host=test_config.HOST,
-    host='rabbitmq.neomodels.app',
+    host=config.RABBIT_DOMAIN,
     port=config.RABBITMQ_PORT_TLS,
     ssl=True,
     credentials=config.RABBITMQ_CREDENTIALS,

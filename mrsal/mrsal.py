@@ -27,6 +27,7 @@ class Mrsal:
         :prop int blocked_connection_timeout: blocked_connection_timeout is the timeout, in seconds,
             for the connection to remain blocked; if the timeout expires, the connection will be torn down
         :prop int prefetch_count: Specifies a prefetch window in terms of whole messages.
+        :prop bool ssl: Set this flag to true if you want to connect externally to the rabbitserver. 
     """
     host: str
     port: str
@@ -43,8 +44,14 @@ class Mrsal:
 
     @retry((pika.exceptions.AMQPConnectionError, TypeError, gaierror), tries=2, delay=5, jitter=(1, 3))
     def connect_to_server(self, context: Dict[str, str] = None):
-        """
-        Establish connection to RabbitMQ server specifying connection parameters.
+        """ We can use connect_to_server for establishing a connection to
+        RabbitMQ server specifying connection parameters.
+
+        Parameters
+        ----------
+        context : Dict[str, str]
+            context is the structured map with information regarding the SSL
+            options for connecting with rabbitserver via TLS.
         """
         connection_info = f'host={self.host}, virtual_host={self.virtual_host}, port={self.port}, heartbeat={self.heartbeat}, ssl={self.ssl}'
         if self.verbose:
@@ -195,6 +202,17 @@ class Mrsal:
             raise pika.exceptions.ChannelClosedByBroker(503, str(err))
 
     def __ssl_setup(self) -> Dict[str, str]:
+        """__ssl_setup is private method we are using to connect with rabbitserver
+        via signed certificates and some TLS settings.
+
+        Parameters
+        ----------
+
+        Returns
+        -------
+        Dict[str, str]
+
+        """
         context = ssl.create_default_context(
             cafile=os.environ.get('RABBIT_CAFILE')
         )
