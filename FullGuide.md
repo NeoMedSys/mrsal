@@ -58,53 +58,60 @@ pip install mrsal
 
 ## Start RabbitMQ Container
 
-We are using **docker** to start a `RabbitMQ container` listening on the port `"5673"` with `"Delayed Message Plugin"` installed and enabled.
+We are using **docker** to start a `RabbitMQ container` listening on the port `"5672"` for localhost and `5671` for SSL with `"Delayed Message Plugin"` installed and enabled. If you want to use SSL for external listnening then you have to create certifactes with e.g. OpenSSL and either have them signed by yourself or an offical authenticator. Lastly you need to add a `rabbitmq.conf` that declares SSL connection with your specifications, see the official [walkthrough](https://www.rabbitmq.com/ssl.html) for guidance. Get the plugin for `x-delayed-message` by dowloading it with `wget` (not curl) and binding it to the docker image. You can find the plugin binary [here](https://github.com/rabbitmq/rabbitmq-delayed-message-exchange/releases)
 
-- Dockerfile
-```Dockerfile
-FROM rabbitmq:3.9.21-management
-
-RUN apt-get update && \
-    apt-get install -y curl unzip
-
-# Add RabbitMQ Delayed Message Plugin
-# Resource: Check limitaions https://github.com/rabbitmq/rabbitmq-delayed-message-exchange
-RUN curl -L https://github.com/rabbitmq/rabbitmq-delayed-message-exchange/releases/download/3.9.0/rabbitmq_delayed_message_exchange-3.9.0.ez > $RABBITMQ_HOME/plugins/rabbitmq_delayed_message_exchange-3.9.0.ez && \
-    chown rabbitmq:rabbitmq $RABBITMQ_HOME/plugins/rabbitmq_delayed_message_exchange-3.9.0.ez
-
-# Enable plugin
-RUN rabbitmq-plugins enable rabbitmq_delayed_message_exchange
-
-# You can disable this plugin by calling 
-# rabbitmq-plugins disable rabbitmq_delayed_message_exchange 
-# PS!! ALL DELAYED MESSAGES THAT HAVEN'T BEEN DELIVERED WILL BE LOST.
+- env file
+```env
+RABBITMQ_DEFAULT_PASS = <password> 
+RABBITMQ_DEFAULT_USER = <username>
+RABBITMQ_DEFAULT_VHOST = <virtualHost>
 ```
+
 
 - docker-compose.yml
 ```Dockerfile
-version: "3.8"
+version: '3.9'
 
 services:
-  rabbitmq_server:
-    image: mrsal
-    build:
-      context: .
+  rabbitmq:
+    image: rabbitmq:3.11.6-management-alpine
     container_name: mrsal
-    environment:
-      - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER}
-      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_DEFAULT_PASS}
-      - RABBITMQ_DEFAULT_VHOST=${RABBITMQ_DEFAULT_VHOST}
+    volumes:
+      # bind the volume
+      - 'rabbitmq_vol:/var/lib/rabbitmq/'
+      - 'rabbitmq_vol:/var/log/rabbitmq/'
+      # For TLS connection
+      - '~/rabbitmq/rabbit-server.crt:/etc/rabbitmq/rabbit-server.crt'
+      - '~/rabbitmq/rabbit-server.key:/etc/rabbitmq/rabbit-server.key'
+      - '~/rabbitmq/rabbit-ca.crt:/etc/rabbitmq/rabbit-ca.crt'
+      # You need to specify the TLS connection for rabbitmq with the config file
+      - '~/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf'
+      # This is to enable x-delayed-messages 
+      - '~/rabbitmq/rabbitmq_delayed_message_exchange-3.11.1.ez:/opt/rabbitmq/plugins/rabbitmq_delayed_message_exchange-3.11.1.ez'
+    env_file:
+      - '~/rabbitmq/rabbitmq.env'
     ports:
-      # RabbitMQ container listening on port 5672.
-      # Expose default port to the port 5673
-      - "5673:5672"
-      # OPTIONAL: Expose the GUI port
-      - "15673:15672"
+      - '5672:5672'
+      - '15672:15672'
+      - '5671:5671'
+    restart: always
+
+volumes:
+  rabbitmq_vol:
 ```
 
 - Install image and start RabbitMQ container
 ```bash
-docker-compose -f docker-compose.yml up
+docker compose -f docker-compose.yml up -d
+```
+
+- Lastly enable the plugin the docker image
+```bash
+docker exec -it <docker-image-tag> sh
+```
+inside the docker image run the enable command
+```bash
+rabbitmq-plugins enable rabbitmq_delayed_message_exchange
 ```
 
 ---

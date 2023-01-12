@@ -3,7 +3,7 @@ TEST_MESSAGE: str = '4f02964a-876a-419c-b309-d784da4b040a'
 TEST_MESSAGE_INDEX: int = 3
 
 HOST: str = 'localhost'
-PORT: int = 5673
+PORT: int = 5672
 QUEUE: str = 'emergency_queue'
 DEAD_LETTER_QUEUE: str = 'dl_queue'
 

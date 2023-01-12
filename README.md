@@ -29,6 +29,11 @@ RABBITMQ_DEFAULT_SERVICE_NAME=****
 RABBITMQ_DEFAULT_VHOST=****
 RABBITMQ_CONTAINER_PORT=****
 RABBITMQ_GUI_PORT=****
+
+# FOR TLS
+RABBIT_CAFILE=<pathtocafile>
+RABBIT_CERTFILE=<pathtocertfile>
+RABBIT_KEYFILE=<pathtokeyfile>
 ```
 
 Please read the [full guide](https://github.com/NeoMedSys/mrsal/blob/main/FullGuide.md) to understand what Mrsal currently can and can't do.
@@ -43,11 +48,17 @@ The first thing we need to do is to setup our rabbit server before we can subscr
 ```python
 from mrsal import Mrsal
 
+# if you want to use SSL for external listening then set it to True
+SSL = False
+port = 5671 if SSL else 5672
+host = 'mydomain.com' if ssl else 'localhost'
+
 mrsal = Mrsal(
-    host='localhost',
-    port=5673, # Note RabbitMQ container is listening on the default port 5672 which is exposed to the port 5673 in docker-compose
+    host=host,
+    port=port, # Note RabbitMQ container is listening on the default port 5672 which is exposed to the port 5673 in docker-compose
     credentials=('username', 'password'),
-    virtual_host='v_host'  # Use this to connect to specific part of the rabbit server
+    virtual_host='v_host',  # Use this to connect to specific part of the rabbit server. It should match with the env specifications
+    ssl=SSL
 )
 
 mrsal.connect_to_server()
