@@ -53,7 +53,6 @@ class Mrsal:
             self.log.info('setting up TLS connection')
             context = self.__ssl_setup()
         ssl_options = SSLOptions(context, self.host) if context else None
-        # credentials = pika.credentials.ExternalCredentials() if context else pika.PlainCredentials(*self.credentials)
         credentials = pika.PlainCredentials(*self.credentials)
         try:
             self._connection = pika.BlockingConnection(
