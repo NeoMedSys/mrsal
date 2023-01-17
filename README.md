@@ -31,9 +31,9 @@ RABBITMQ_CONTAINER_PORT=****
 RABBITMQ_GUI_PORT=****
 
 # FOR TLS
-RABBIT_CAFILE=<pathtocafile>
-RABBIT_CERTFILE=<pathtocertfile>
-RABBIT_KEYFILE=<pathtokeyfile>
+RABBIT_CA=<pathtocafile>
+RABBIT_CERT=<pathtocertfile>
+RABBIT_KEY=<pathtokeyfile>
 ```
 
 Please read the [full guide](https://github.com/NeoMedSys/mrsal/blob/main/FullGuide.md) to understand what Mrsal currently can and can't do.
