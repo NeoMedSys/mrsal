@@ -66,7 +66,7 @@ mrsal.connect_to_server()
 
 ### 2 Consume
 
-Before publishing our first message, lets setup a consumer that will listen to our very important messages. If you are using scripts rather than notebooks then it's advisable to run consume and publish in separately. We are going to need callback functions which is triggered on receiving the message from the queue we subscribe to.
+Before publishing our first message, lets setup a consumer that will listen to our very important messages. If you are using scripts rather than notebooks then it's advisable to run consume and publish separately. We are going to need callback functions which is triggered upon receiving the message from the queue we subscribe to.
 
 
 ```python
@@ -74,7 +74,8 @@ import json
 
 def consumer_callback(host: str, queue: str, bin_message: str):
     str_message = json.loads(bin_message).replace('"', '')
-    if 'Salaam' in str_message:
+    if 'Shalom' in str_message:
+        print('Salaam habibi')
         return True  # Consumed message processed correctly
     return False
 
@@ -98,7 +99,7 @@ mrsal.publish_message(
         exchange_type='direct',
         routing_key='friendship_key',
         queue='friendship_queue',
-        message=json.dumps('Salaam habibi')
+        message=json.dumps('Shalom habibi')
     )
 ```
 
