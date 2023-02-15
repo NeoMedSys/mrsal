@@ -51,7 +51,7 @@ from mrsal import Mrsal
 # if you want to use SSL for external listening then set it to True
 SSL = False
 port = 5671 if SSL else 5672
-host = 'mydomain.com' if ssl else 'localhost'
+host = 'mydomain.com' if SSL else 'localhost'
 
 mrsal = Mrsal(
     host=host,
