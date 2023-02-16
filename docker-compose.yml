@@ -16,3 +16,12 @@ services:
       - "${RABBITMQ_PORT}:5672"
       # OPTIONAL: Expose the GUI port
       - "${RABBITMQ_GUI_PORT}:15672"
+    networks:
+      - gateway
+
+# Make the externally created network "gateway" available as network "default" 
+# If "gateway" not exists then create it with
+# docker network create --internal=false --attachable --driver=bridge gateway
+networks:
+  gateway:
+    external: true

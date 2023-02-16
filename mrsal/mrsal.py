@@ -345,7 +345,7 @@ class Mrsal:
                                 delivery_tag= {method_frame.delivery_tag},
                                 properties= {properties},
                                 consumer_tags= {consumer_tags},
-                                consumer_tag= {consumer_tag}
+                                consumer_tag= {self.consumer_tag}
                                 """)
                         is_processed = callback(*callback_args, method_frame, properties, body) if callback_args else callback(method_frame, properties, body)
                         if is_processed:

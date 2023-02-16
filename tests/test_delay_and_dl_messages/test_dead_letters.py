@@ -12,7 +12,8 @@ log = get_logger(__name__)
 mrsal = Mrsal(host=test_config.HOST,
              port=config.RABBITMQ_PORT,
              credentials=config.RABBITMQ_CREDENTIALS,
-             virtual_host=config.V_HOST)
+             virtual_host=config.V_HOST,
+             verbose=True)
 mrsal.connect_to_server()
 
 def test_dead_letters():
