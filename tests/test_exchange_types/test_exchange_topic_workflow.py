@@ -62,15 +62,29 @@ def test_topic_exchange_workflow():
 
     # Message ("uuid1") is published to the exchange will be routed to queue1
     message1 = 'uuid1'
+    prop1 = pika.BasicProperties(
+        app_id='test_exchange_topic',
+        message_id='berlin',
+        content_type=test_config.CONTENT_TYPE,
+        content_encoding=test_config.CONTENT_ENCODING,
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers=None)
     mrsal.publish_message(exchange='agreements',
                          routing_key=ROUTING_KEY_1,
-                         message=json.dumps(message1))
+                         message=json.dumps(message1), prop=prop1)
 
     # Message ("uuid2") is published to the exchange will be routed to queue2
     message2 = 'uuid2'
+    prop2 = pika.BasicProperties(
+        app_id='test_exchange_topic',
+        message_id='september',
+        content_type=test_config.CONTENT_TYPE,
+        content_encoding=test_config.CONTENT_ENCODING,
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers=None)
     mrsal.publish_message(exchange='agreements',
                          routing_key=ROUTING_KEY_2,
-                         message=json.dumps(message2))
+                         message=json.dumps(message2), prop=prop2)
     # ----------------------------------
 
     time.sleep(1)
@@ -111,7 +125,7 @@ def test_topic_exchange_workflow():
     message_count2 = result2.method.message_count
     assert message_count2 == 0
 
-def consumer_callback(host_param: str, queue_param: str, message_param: str):
+def consumer_callback(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
     return True
 
 

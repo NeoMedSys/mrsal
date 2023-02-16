@@ -13,6 +13,6 @@ services:
     ports:
       # RabbitMQ container listening on the default port of 5672.
       # Expose default port to the port 5673
-      - "${RABBITMQ_CONTAINER_PORT}:5672"
+      - "${RABBITMQ_PORT}:5672"
       # OPTIONAL: Expose the GUI port
       - "${RABBITMQ_GUI_PORT}:15672"

@@ -322,18 +322,22 @@ class Mrsal:
         self.log.info(f'Consuming messages: queue= {queue}, requeue= {requeue}, inactivity_timeout= {inactivity_timeout}')
 
         try:
+            method_frame: spec.Basic.Deliver 
+            prop: spec.BasicProperties 
+            body: Any
             for method_frame, properties, body in \
                     self._channel.consume(queue=queue, inactivity_timeout=inactivity_timeout):
                 try:
                     if (method_frame, properties, body) != (None, None, None):
                         consumer_tags = self._channel.consumer_tags
-                        consumer_tag = method_frame.consumer_tag
+                        self.consumer_tag = method_frame.consumer_tag
+                        app_id = properties.app_id
+                        msg_id = properties.message_id
                         # let the message be whatever it needs to be
                         if self.verbose:
                             self.log.info(
                                 f"""
                                 Consumed message:
-                                message= {body},
                                 method_frame= {method_frame},
                                 redelivered= {method_frame.redelivered},
                                 exchange= {method_frame.exchange},
@@ -343,12 +347,12 @@ class Mrsal:
                                 consumer_tags= {consumer_tags},
                                 consumer_tag= {consumer_tag}
                                 """)
-                        is_processed = callback(*callback_args, body) if callback_args else callback(body)
+                        is_processed = callback(*callback_args, method_frame, properties, body) if callback_args else callback(method_frame, properties, body)
                         if is_processed:
                             self._channel.basic_ack(delivery_tag=method_frame.delivery_tag)
-                            self.log.info(f'Message {body} is acknowledged')
+                            self.log.info(f'Message coming from the app={app_id} with messageId={msg_id} is acknowledged.')
                         else:
-                            self.log.warning(f'Could not process the message= {body}. This will be rejected and sent to dead-letters-exchange if it configured or deleted if not.')
+                            self.log.warning(f'Could not process the message coming from the app={app_id} with messageId={msg_id}. This will be rejected and sent to dead-letters-exchange if it configured or deleted if not.')
                             self._channel.basic_nack(delivery_tag=method_frame.delivery_tag, requeue=requeue)
                             self.log.warning('Message rejected')
                             pass
@@ -360,8 +364,8 @@ class Mrsal:
                     self.log.error('I lost the connection with the Mrsal.', exc_info=True)
                     pass
                 except KeyboardInterrupt:
-                    self.log('Stopping mrsal consumption.')
-                    self.__stop_consuming()
+                    self.log('Stopping Mrsal consumption.')
+                    self.__stop_consuming(self.consumer_tag)
                     self.__close_connection()
                     break
         except pika.exceptions.ChannelClosed as err2:
@@ -373,8 +377,7 @@ class Mrsal:
     @retry((pika.exceptions.UnroutableError), tries=2, delay=5, jitter=(1, 3))
     def publish_message(
             self, exchange: str, routing_key: str, message: Any, exchange_type: str = None,
-            queue: str = None, content_type: str = 'text/plain', content_encoding: str = 'utf-8',
-            delivery_mode: pika.DeliveryMode = pika.DeliveryMode.Persistent, headers: Dict[str, Any] = None, fast_setup: bool = False
+            queue: str = None, fast_setup: bool = False, prop: pika.BasicProperties = None
     ):
         """Publish message to the exchange specifying routing key and properties.
 
@@ -398,13 +401,6 @@ class Mrsal:
             self.setup_queue(queue=queue)
             self.setup_queue_binding(exchange=exchange, queue=queue, routing_key=routing_key)
 
-        # configuring the parsing information for the message
-        prop = pika.BasicProperties(
-            content_type=content_type,
-            content_encoding=content_encoding,
-            delivery_mode=delivery_mode,
-            headers=headers
-        )
         try:
             # Publish the message by serializing it in json dump
             self._channel.basic_publish(exchange=exchange,

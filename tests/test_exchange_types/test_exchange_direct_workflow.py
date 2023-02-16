@@ -52,22 +52,32 @@ def test_direct_exchange_workflow():
     # ------------------------------------------
 
     # Publisher:
-    prop = pika.BasicProperties(
+    prop1 = pika.BasicProperties(
+        app_id='test_exchange_direct',
+        message_id='madrid_uuid',
         content_type=test_config.CONTENT_TYPE,
         content_encoding=test_config.CONTENT_ENCODING,
-        delivery_mode=pika.DeliveryMode.Persistent)
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers=None)
 
     # Message ("uuid2") is published to the exchange and it's routed to queue2
     message2 = 'uuid2'
     mrsal.publish_message(exchange='agreements',
                          routing_key='madrid agreements',
-                         message=json.dumps(message2))
+                         message=json.dumps(message2), prop=prop1)
 
+    prop2 = pika.BasicProperties(
+        app_id='test_exchange_direct',
+        message_id='berlin_uuid',
+        content_type=test_config.CONTENT_TYPE,
+        content_encoding=test_config.CONTENT_ENCODING,
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers=None)
     # Message ("uuid1") is published to the exchange and it's routed to queue1
     message1 = 'uuid1'
     mrsal.publish_message(exchange='agreements',
                          routing_key='berlin agreements',
-                         message=json.dumps(message1))
+                         message=json.dumps(message1), prop=prop2)
     # ------------------------------------------
 
     time.sleep(1)
@@ -108,7 +118,7 @@ def test_direct_exchange_workflow():
     message_count2 = result2.method.message_count
     assert message_count2 == 0
 
-def consumer_callback(host_param: str, queue_param: str, message_param: str):
+def consumer_callback(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
     return True
 
 
