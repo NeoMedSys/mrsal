@@ -284,9 +284,10 @@ class Mrsal:
             self._channel.stop_consuming()
 
     def start_consumer(
-            self, queue: str, callback: Callable, callback_args: Tuple[str, Any] = None,
+            self, queue: str, callback: Callable, callback_args: Tuple[str, Any] = None, 
             exchange: str = None, exchange_type: str = None, routing_key: str = None,
-            inactivity_timeout: int = None, requeue: bool = False, fast_setup: bool = False
+            inactivity_timeout: int = None, requeue: bool = False, fast_setup: bool = False,
+            callback_with_delivery_info: bool = False
     ):
         """
         Setup consumer:
@@ -312,6 +313,9 @@ class Mrsal:
                              requeue the message. If requeue is false or the
                              requeue attempt fails the messages are discarded or
                              dead-lettered.
+        :param bool callback_with_delivery_info: Specify whether the callback method need delivery info.
+                - spec.Basic.Deliver: Captures the fields for delivered message. E.g:(consumer_tag, delivery_tag, redelivered, exchange, routing_key).
+                - spec.BasicProperties: Captures the client message sent to the server. E.g:(CONTENT_TYPE, DELIVERY_MODE, MESSAGE_ID, APP_ID). 
         """
         if fast_setup:
             # setting up the necessary connections
@@ -347,7 +351,10 @@ class Mrsal:
                                 consumer_tags= {consumer_tags},
                                 consumer_tag= {self.consumer_tag}
                                 """)
-                        is_processed = callback(*callback_args, method_frame, properties, body) if callback_args else callback(method_frame, properties, body)
+                        if callback_with_delivery_info:
+                            is_processed = callback(*callback_args, method_frame, properties, body) if callback_args else callback(method_frame, properties, body)
+                        else:    
+                            is_processed = callback(*callback_args, body) if callback_args else callback(body)
                         if is_processed:
                             self._channel.basic_ack(delivery_tag=method_frame.delivery_tag)
                             self.log.info(f'Message coming from the app={app_id} with messageId={msg_id} is acknowledged.')

@@ -119,6 +119,6 @@ def test_bind_exceptions():
 
 
 if __name__ == '__main__':
-    # test_connection_exceptions()
+    test_connection_exceptions()
     test_exchange_exceptions()
-    # test_bind_exceptions()
+    test_bind_exceptions()

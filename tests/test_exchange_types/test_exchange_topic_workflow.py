@@ -104,7 +104,8 @@ def test_topic_exchange_workflow():
         callback=consumer_callback,
         callback_args=(test_config.HOST, 'berlin_agreements'),
         inactivity_timeout=1,
-        requeue=False
+        requeue=False,
+        callback_with_delivery_info=True
     )
 
     mrsal.start_consumer(
@@ -112,7 +113,8 @@ def test_topic_exchange_workflow():
         callback=consumer_callback,
         callback_args=(test_config.HOST, 'september_agreements'),
         inactivity_timeout=1,
-        requeue=False
+        requeue=False,
+        callback_with_delivery_info=True
     )
     # ------------------------------------------
 

@@ -94,10 +94,11 @@ def test_direct_exchange_workflow():
     # Start consumer for every queue
     mrsal.start_consumer(
         queue='agreements_berlin_queue',
-        callback=consumer_callback,
+        callback=consumer_callback_with_delivery_info,
         callback_args=(test_config.HOST, 'agreements_berlin_queue'),
         inactivity_timeout=1,
-        requeue=False
+        requeue=False,
+        callback_with_delivery_info=True
     )
 
     mrsal.start_consumer(
@@ -105,7 +106,7 @@ def test_direct_exchange_workflow():
         callback=consumer_callback,
         callback_args=(test_config.HOST, 'agreements_madrid_queue'),
         inactivity_timeout=1,
-        requeue=False
+        requeue=False,
     )
     # ------------------------------------------
 
@@ -118,9 +119,11 @@ def test_direct_exchange_workflow():
     message_count2 = result2.method.message_count
     assert message_count2 == 0
 
-def consumer_callback(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
+def consumer_callback_with_delivery_info(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
     return True
 
+def consumer_callback(host_param: str, queue_param: str, message_param: str):
+    return True
 
 if __name__ == '__main__':
     test_direct_exchange_workflow()

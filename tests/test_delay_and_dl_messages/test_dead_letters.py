@@ -141,7 +141,8 @@ def test_dead_letters():
         callback=consumer_callback,
         callback_args=(test_config.HOST, 'agreements_queue'),
         inactivity_timeout=6,
-        requeue=False
+        requeue=False,
+        callback_with_delivery_info=True
     )
     # ------------------------------------------
 
@@ -166,7 +167,8 @@ def test_dead_letters():
         callback=consumer_dead_letters_callback,
         callback_args=(test_config.HOST, 'dl_agreements_queue'),
         inactivity_timeout=3,
-        requeue=False
+        requeue=False,
+        callback_with_delivery_info=True
     )
     # ------------------------------------------
 

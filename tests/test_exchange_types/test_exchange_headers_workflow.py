@@ -98,7 +98,8 @@ def test_headers_exchange_workflow():
         callback=consumer_callback,
         callback_args=(test_config.HOST, 'zip_report'),
         inactivity_timeout=2,
-        requeue=False
+        requeue=False,
+        callback_with_delivery_info=True
     )
 
     mrsal.start_consumer(
@@ -106,7 +107,8 @@ def test_headers_exchange_workflow():
         callback=consumer_callback,
         callback_args=(test_config.HOST, 'pdf_report'),
         inactivity_timeout=2,
-        requeue=False
+        requeue=False,
+        callback_with_delivery_info=True
     )
     # ------------------------------------------
 
