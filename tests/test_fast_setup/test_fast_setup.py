@@ -9,19 +9,16 @@ from mrsal.mrsal import Mrsal
 
 log = get_logger(__name__)
 
-# mrsal = Mrsal(
-#     # host=test_config.HOST,
-#     host=config.RABBIT_DOMAIN,
-#     port=config.RABBITMQ_PORT_TLS,
-#     ssl=True,
-#     credentials=config.RABBITMQ_CREDENTIALS,
-#     virtual_host=config.V_HOST
-# )
+mrsal = Mrsal(
+    # host=test_config.HOST,
+    host=config.RABBIT_DOMAIN,
+    port=config.RABBITMQ_PORT_TLS,
+    ssl=True,
+    credentials=config.RABBITMQ_CREDENTIALS,
+    virtual_host=config.V_HOST
+)
 
-mrsal = Mrsal(host=test_config.HOST,
-              port=config.RABBITMQ_PORT,
-              credentials=config.RABBITMQ_CREDENTIALS,
-              virtual_host=config.V_HOST)
+
 mrsal.connect_to_server()
 
 def test_fast_setup():
@@ -64,7 +61,8 @@ def test_fast_setup():
         queue='friendship_queue',
         callback=consumer_callback,
         callback_args=('localhost', 'friendship_queue'),
-        inactivity_timeout=1
+        inactivity_timeout=1,
+        callback_with_delivery_info=True
     )
     # ------------------------------------------
 
