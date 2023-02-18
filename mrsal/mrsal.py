@@ -313,7 +313,7 @@ class Mrsal:
                              requeue the message. If requeue is false or the
                              requeue attempt fails the messages are discarded or
                              dead-lettered.
-        :param bool callback_with_delivery_info: Specify whether the callback method need delivery info.
+        :param bool callback_with_delivery_info: Specify whether the callback method needs delivery info.
                 - spec.Basic.Deliver: Captures the fields for delivered message. E.g:(consumer_tag, delivery_tag, redelivered, exchange, routing_key).
                 - spec.BasicProperties: Captures the client message sent to the server. E.g:(CONTENT_TYPE, DELIVERY_MODE, MESSAGE_ID, APP_ID). 
         """
