@@ -53,20 +53,32 @@ def test_headers_exchange_workflow():
 
     # Publisher:
     # Message ("uuid1") is published to the exchange with a set of headers
+    prop1 = pika.BasicProperties(
+        app_id='test_exchange_headers',
+        message_id='zip_report',
+        content_type=test_config.CONTENT_TYPE,
+        content_encoding=test_config.CONTENT_ENCODING,
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers={'format': 'zip', 'type': 'report'})
 
     message1 = 'uuid1'
     mrsal.publish_message(exchange='agreements',
                           routing_key='',
-                          message=json.dumps(message1),
-                          headers={'format': 'zip', 'type': 'report'})
+                          message=json.dumps(message1), prop=prop1
+                          )
 
     # Message ("uuid2") is published to the exchange with a set of headers
-
+    prop2 = pika.BasicProperties(
+        app_id='test_exchange_headers',
+        message_id='pdf_date',
+        content_type=test_config.CONTENT_TYPE,
+        content_encoding=test_config.CONTENT_ENCODING,
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers={'format': 'pdf', 'date': '2022'})
     message2 = 'uuid2'
     mrsal.publish_message(exchange='agreements',
                           routing_key='',
-                          message=json.dumps(message2),
-                          headers={'format': 'pdf', 'date': '2022'})
+                          message=json.dumps(message2), prop=prop2)
     # ------------------------------------------
 
     time.sleep(1)
@@ -86,7 +98,8 @@ def test_headers_exchange_workflow():
         callback=consumer_callback,
         callback_args=(test_config.HOST, 'zip_report'),
         inactivity_timeout=2,
-        requeue=False
+        requeue=False,
+        callback_with_delivery_info=True
     )
 
     mrsal.start_consumer(
@@ -94,7 +107,8 @@ def test_headers_exchange_workflow():
         callback=consumer_callback,
         callback_args=(test_config.HOST, 'pdf_report'),
         inactivity_timeout=2,
-        requeue=False
+        requeue=False,
+        callback_with_delivery_info=True
     )
     # ------------------------------------------
 
@@ -108,7 +122,7 @@ def test_headers_exchange_workflow():
     assert message_count2 == 0
 
 
-def consumer_callback(host_param: str, queue_param: str, message_param: str):
+def consumer_callback(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
     return True
 
 

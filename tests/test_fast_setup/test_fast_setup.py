@@ -1,5 +1,6 @@
 import json
 import time
+import pika
 
 import mrsal.config.config as config
 import tests.config as test_config
@@ -17,6 +18,7 @@ mrsal = Mrsal(
     virtual_host=config.V_HOST
 )
 
+
 mrsal.connect_to_server()
 
 def test_fast_setup():
@@ -26,13 +28,22 @@ def test_fast_setup():
     mrsal.queue_delete(queue='friendship_queue')
     # ------------------------------------------
 
+    prop = pika.BasicProperties(
+            app_id='test_fast_setup',
+            message_id='fast_setup',
+            content_type=test_config.CONTENT_TYPE,
+            content_encoding=test_config.CONTENT_ENCODING,
+            delivery_mode=pika.DeliveryMode.Persistent,
+            headers=None)
+
     mrsal.publish_message(
         exchange='friendship',
         exchange_type='direct',
         routing_key='friendship_key',
         queue='friendship_queue',
         message=json.dumps('Salaam habibi'),
-        fast_setup=True
+        fast_setup=True,
+        prop=prop
     )
     # ------------------------------------------
 
@@ -50,7 +61,8 @@ def test_fast_setup():
         queue='friendship_queue',
         callback=consumer_callback,
         callback_args=('localhost', 'friendship_queue'),
-        inactivity_timeout=1
+        inactivity_timeout=1,
+        callback_with_delivery_info=True
     )
     # ------------------------------------------
 
@@ -60,7 +72,7 @@ def test_fast_setup():
     assert message_count == 0
 
 
-def consumer_callback(host: str, queue: str, bin_message: str):
+def consumer_callback(host: str, queue: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, bin_message: str):
     str_message = json.loads(bin_message).replace('"', '')
     if 'Salaam' in str_message:
         return True  # Consumed message processed correctly

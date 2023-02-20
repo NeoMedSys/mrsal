@@ -12,7 +12,8 @@ log = get_logger(__name__)
 mrsal = Mrsal(host=test_config.HOST,
              port=config.RABBITMQ_PORT,
              credentials=config.RABBITMQ_CREDENTIALS,
-             virtual_host=config.V_HOST)
+             virtual_host=config.V_HOST,
+             verbose=True)
 mrsal.connect_to_server()
 
 def test_dead_letters():
@@ -67,24 +68,52 @@ def test_dead_letters():
       Message ("uuid4") is published
     """
     message1 = 'uuid1'
+    prop1 = pika.BasicProperties(
+        app_id='test_exchange_dead_letters',
+        message_id='msg_uuid1',
+        content_type=test_config.CONTENT_TYPE,
+        content_encoding=test_config.CONTENT_ENCODING,
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers=None)
     mrsal.publish_message(exchange='agreements',
                          routing_key='agreements_key',
-                         message=json.dumps(message1))
+                         message=json.dumps(message1), prop=prop1)
 
     message2 = 'uuid2'
+    prop2 = pika.BasicProperties(
+        app_id='test_exchange_dead_letters',
+        message_id='msg_uuid2',
+        content_type=test_config.CONTENT_TYPE,
+        content_encoding=test_config.CONTENT_ENCODING,
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers=None)
     mrsal.publish_message(exchange='agreements',
                          routing_key='agreements_key',
-                         message=json.dumps(message2))
+                         message=json.dumps(message2), prop=prop2)
 
     message3 = 'uuid3'
+    prop3 = pika.BasicProperties(
+        app_id='test_exchange_dead_letters',
+        message_id='msg_uuid3',
+        content_type=test_config.CONTENT_TYPE,
+        content_encoding=test_config.CONTENT_ENCODING,
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers=None)
     mrsal.publish_message(exchange='agreements',
                          routing_key='agreements_key',
-                         message=json.dumps(message3))
+                         message=json.dumps(message3), prop=prop3)
 
     message4 = 'uuid4'
+    prop4 = pika.BasicProperties(
+        app_id='test_exchange_dead_letters',
+        message_id='msg_uuid4',
+        content_type=test_config.CONTENT_TYPE,
+        content_encoding=test_config.CONTENT_ENCODING,
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers=None)
     mrsal.publish_message(exchange='agreements',
                          routing_key='agreements_key',
-                         message=json.dumps(message4))
+                         message=json.dumps(message4), prop=prop4)
     # ------------------------------------------
 
     log.info(f'===== Start consuming from "agreements_queue" ========')
@@ -112,7 +141,8 @@ def test_dead_letters():
         callback=consumer_callback,
         callback_args=(test_config.HOST, 'agreements_queue'),
         inactivity_timeout=6,
-        requeue=False
+        requeue=False,
+        callback_with_delivery_info=True
     )
     # ------------------------------------------
 
@@ -137,7 +167,8 @@ def test_dead_letters():
         callback=consumer_dead_letters_callback,
         callback_args=(test_config.HOST, 'dl_agreements_queue'),
         inactivity_timeout=3,
-        requeue=False
+        requeue=False,
+        callback_with_delivery_info=True
     )
     # ------------------------------------------
 
@@ -147,12 +178,12 @@ def test_dead_letters():
     log.info(f'Message count in queue "dl_agreements_queue" after consuming= {message_count}')
     assert message_count == 0
 
-def consumer_callback(host: str, queue: str, message: str):
+def consumer_callback(host: str, queue: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message: str):
     if message == b'"\\"uuid3\\""':
         time.sleep(3)
     return message != b'"\\"uuid2\\""'
 
-def consumer_dead_letters_callback(host_param: str, queue_param: str, message_param: str):
+def consumer_dead_letters_callback(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
     return True
 
 

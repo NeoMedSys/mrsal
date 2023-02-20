@@ -71,31 +71,55 @@ def test_delay_and_dead_letters():
     """
     x_delay1: int = 2000  # ms
     message1 = 'uuid1'
+    prop1 = pika.BasicProperties(
+        app_id='test_exchange_dead_and_delay_letters',
+        message_id='uuid1_2000ms',
+        content_type=test_config.CONTENT_TYPE,
+        content_encoding=test_config.CONTENT_ENCODING,
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers={'x-delay': x_delay1})
     mrsal.publish_message(exchange='agreements',
                           routing_key='agreements_key',
-                          message=json.dumps(message1),
-                          headers={'x-delay': x_delay1})
+                          message=json.dumps(message1), prop=prop1)
 
     x_delay2: int = 1000
     message2 = 'uuid2'
+    prop2 = pika.BasicProperties(
+        app_id='test_exchange_dead_and_delay_letters',
+        message_id='uuid2_1000ms',
+        content_type=test_config.CONTENT_TYPE,
+        content_encoding=test_config.CONTENT_ENCODING,
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers={'x-delay': x_delay2})
     mrsal.publish_message(exchange='agreements',
                           routing_key='agreements_key',
-                          message=json.dumps(message2),
-                          headers={'x-delay': x_delay2})
+                          message=json.dumps(message2), prop=prop2)
 
     x_delay3: int = 3000
     message3 = 'uuid3'
+    prop3 = pika.BasicProperties(
+        app_id='test_exchange_dead_and_delay_letters',
+        message_id='uuid3_3000ms',
+        content_type=test_config.CONTENT_TYPE,
+        content_encoding=test_config.CONTENT_ENCODING,
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers={'x-delay': x_delay3})
     mrsal.publish_message(exchange='agreements',
                           routing_key='agreements_key',
-                          message=json.dumps(message3),
-                          headers={'x-delay': x_delay3})
+                          message=json.dumps(message3), prop=prop3)
 
     x_delay4: int = 4000
     message4 = 'uuid4'
+    prop4 = pika.BasicProperties(
+        app_id='test_exchange_dead_and_delay_letters',
+        message_id='uuid4_4000ms',
+        content_type=test_config.CONTENT_TYPE,
+        content_encoding=test_config.CONTENT_ENCODING,
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers={'x-delay': x_delay4})
     mrsal.publish_message(exchange='agreements',
                           routing_key='agreements_key',
-                          message=json.dumps(message4),
-                          headers={'x-delay': x_delay4})
+                          message=json.dumps(message4), prop=prop4)
     # ------------------------------------------
 
     log.info('===== Start consuming from "agreements_queue" ========')
@@ -124,7 +148,8 @@ def test_delay_and_dead_letters():
         callback=consumer_callback,
         callback_args=(test_config.HOST, 'agreements_queue'),
         inactivity_timeout=6,
-        requeue=False
+        requeue=False,
+        callback_with_delivery_info=True
     )
     # ------------------------------------------
 
@@ -150,7 +175,8 @@ def test_delay_and_dead_letters():
         callback=consumer_dead_letters_callback,
         callback_args=(test_config.HOST, 'dl_agreements_queue'),
         inactivity_timeout=3,
-        requeue=False
+        requeue=False,
+        callback_with_delivery_info=True
     )
     # ------------------------------------------
 
@@ -160,12 +186,12 @@ def test_delay_and_dead_letters():
     log.info(f'Message count in queue "dl_agreements_queue" after consuming= {message_count}')
     assert message_count == 0
 
-def consumer_callback(host: str, queue: str, message: str):
+def consumer_callback(host: str, queue: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message: str):
     if message == b'"\\"uuid3\\""':
         time.sleep(3)
     return message != b'"\\"uuid2\\""'
 
-def consumer_dead_letters_callback(host_param: str, queue_param: str, message_param: str):
+def consumer_dead_letters_callback(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties,message_param: str):
     return True
 
 

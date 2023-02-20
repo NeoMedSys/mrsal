@@ -46,17 +46,29 @@ def test_delay_letter():
     """
     x_delay1: int = 3000
     message1 = 'uuid1'
+    prop1 = pika.BasicProperties(
+        app_id='test_exchange_delay_letters',
+        message_id='uuid1_3000ms',
+        content_type=test_config.CONTENT_TYPE,
+        content_encoding=test_config.CONTENT_ENCODING,
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers={'x-delay': x_delay1})
     mrsal.publish_message(exchange='agreements',
                           routing_key='agreements_key',
-                          message=json.dumps(message1),
-                          headers={'x-delay': x_delay1})
+                          message=json.dumps(message1), prop=prop1)
 
     x_delay2: int = 1000
     message2 = 'uuid2'
+    prop2 = pika.BasicProperties(
+        app_id='test_exchange_delay_letters',
+        message_id='uuid2_1000ms',
+        content_type=test_config.CONTENT_TYPE,
+        content_encoding=test_config.CONTENT_ENCODING,
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers={'x-delay': x_delay2})
     mrsal.publish_message(exchange='agreements',
                           routing_key='agreements_key',
-                          message=json.dumps(message2),
-                          headers={'x-delay': x_delay2})
+                          message=json.dumps(message2), prop=prop2)
     # ------------------------------------------
 
     log.info('===== Start consuming from "agreements_queue" ========')
