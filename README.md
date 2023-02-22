@@ -23,17 +23,20 @@ Next set the default username, password and servername for your RabbitMQ setup. 
 
 ```bash
 [RabbitEnvVars]
-RABBITMQ_DEFAULT_USER=****
-RABBITMQ_DEFAULT_PASS=****
-RABBITMQ_DEFAULT_SERVICE_NAME=****
-RABBITMQ_DEFAULT_VHOST=****
-RABBITMQ_CONTAINER_PORT=****
-RABBITMQ_GUI_PORT=****
+RABBITMQ_DEFAULT_USER=******
+RABBITMQ_DEFAULT_PASS=******
+RABBITMQ_DEFAULT_VHOST=******
+RABBITMQ_DOMAIN=******
+RABBITMQ_DOMAIN_TLS=******
+
+RABBITMQ_GUI_PORT=******
+RABBITMQ_PORT=******
+RABBITMQ_PORT_TLS=******
 
 # FOR TLS
-RABBIT_CA=<pathtocafile>
-RABBIT_CERT=<pathtocertfile>
-RABBIT_KEY=<pathtokeyfile>
+RABBITMQ_CAFILE=/path/to/file
+RABBITMQ_CERT=/path/to/file
+RABBITMQ_KEY=/path/to/file
 ```
 
 Please read the [full guide](https://github.com/NeoMedSys/mrsal/blob/main/FullGuide.md) to understand what Mrsal currently can and can't do.
@@ -46,60 +49,97 @@ Please read the [full guide](https://github.com/NeoMedSys/mrsal/blob/main/FullGu
 The first thing we need to do is to setup our rabbit server before we can subscribe and publish to it. Lets set up a server on our localhost with the port and credentials we used when spinning up the docker-compose
 
 ```python
-from mrsal import Mrsal
+import json
+import pika
+from mrsal.mrsal import Mrsal
 
-# if you want to use SSL for external listening then set it to True
+# If you want to use SSL for external listening then set it to True
 SSL = False
-port = 5671 if SSL else 5672
-host = 'mydomain.com' if SSL else 'localhost'
+
+# Note RabbitMQ container is listening on:
+# 1. When SSL is False the default port 5672 which is exposed to RABBITMQ_PORT in docker-compose
+# 2. When SSL is True the default port 5671 which is exposed to RABBITMQ_PORT_TLS in docker-compose
+port = RABBITMQ_PORT_TLS if SSL else RABBITMQ_PORT
+host = RABBITMQ_DOMAIN_TLS if SSL else RABBITMQ_DOMAIN
+
+# It should match with the env specifications (RABBITMQ_DEFAULT_USER, RABBITMQ_DEFAULT_PASS)
+credentials=(RABBITMQ_DEFAULT_USER, RABBITMQ_DEFAULT_PASS)
+
+# It should match with the env specifications (RABBITMQ_DEFAULT_VHOST)
+v_host = RABBITMQ_DEFAULT_VHOST
 
 mrsal = Mrsal(
     host=host,
-    port=port, # Note RabbitMQ container is listening on the default port 5672 which is exposed to the port 5673 in docker-compose
-    credentials=('username', 'password'),
-    virtual_host='v_host',  # Use this to connect to specific part of the rabbit server. It should match with the env specifications
+    port=port,
+    credentials=credentials,
+    virtual_host=v_host,
     ssl=SSL
 )
 
 mrsal.connect_to_server()
 ```
 
-### 2 Consume
+### 2 Publish
+Now lets publish our message of friendship on the friendship exchange.
+Note: When `fast_setup=True` that means Mrsal will create the specified `exchange` and `queue`, then bind them together using `routing_key`.
 
-Before publishing our first message, lets setup a consumer that will listen to our very important messages. If you are using scripts rather than notebooks then it's advisable to run consume and publish separately. We are going to need a callback function which is triggered upon receiving the message from the queue we subscribe to. You can use the callback function to activate something in your system.
+```python
+# BasicProperties is used to set the message properties
+prop = pika.BasicProperties(
+        app_id='friendship_app',
+        message_id='friendship_msg',
+        content_type='text/plain',
+        content_encoding='utf-8',
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers=None)
 
+message_body = 'Hello'
+
+# Publish the message to the exchange to be routed to queue
+mrsal.publish_message(exchange='friendship',
+                        exchange_type='direct',
+                        queue='friendship_queue',
+                        routing_key='friendship_key',
+                        message=json.dumps(message_body), 
+                        prop=prop,
+                        fast_setup=True)
+```
+
+### 3 Consume
+
+Now lets setup a consumer that will listen to our very important messages. If you are using scripts rather than notebooks then it's advisable to run consume and publish separately. We are going to need a callback function which is triggered upon receiving the message from the queue we subscribe to. You can use the callback function to activate something in your system.
+
+Note: 
+- If you start a consumer with `callback_with_delivery_info=True` then your callback function should to have at least these params `(method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str)`. 
+- If not, then it should have at least `(message_param: str)`
 
 ```python
 import json
 
-def consumer_callback(host: str, queue: str, bin_message: str):
-    str_message = json.loads(bin_message).replace('"', '')
-    if 'Shalom' in str_message:
+def consumer_callback_with_delivery_info(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
+    str_message = json.loads(message_param).replace('"', '')
+    if 'Hello' in str_message:
+        app_id = properties.app_id
+        msg_id = properties.message_id
+        print(f'app_id={app_id}, msg_id={msg_id}')
+        print('Salaam habibi')
+        return True  # Consumed message processed correctly
+    return False
+
+def consumer_callback(host_param: str, queue_param: str, message_param: str):
+    str_message = json.loads(message_param).replace('"', '')
+    if 'Hello' in str_message:
         print('Salaam habibi')
         return True  # Consumed message processed correctly
     return False
 
 mrsal.start_consumer(
-        exchange='friendship',
-        exchange_type='direct',
-        routing_key='friendship_key',
         queue='friendship_queue',
-        callback=consumer_callback,
-        callback_args=('localhost', 'friendship_queue'),
-        fast_setup=True
-    )
-```
-
-### 3 Publish
-Now lets publish our message of friendship on the friendship exchange that a friend is currently listening to.
-
-```python
-mrsal.publish_message(
-        exchange='friendship',
-        exchange_type='direct',
-        routing_key='friendship_key',
-        queue='friendship_queue',
-        message=json.dumps('Shalom habibi')
+        callback=consumer_callback_with_delivery_info,
+        callback_args=(test_config.HOST, 'friendship_queue'),
+        inactivity_timeout=1,
+        requeue=False,
+        callback_with_delivery_info=True
     )
 ```
 

@@ -62,9 +62,20 @@ We are using **docker** to start a `RabbitMQ container` listening on the port `"
 
 - env file
 ```env
-RABBITMQ_DEFAULT_PASS = <password> 
-RABBITMQ_DEFAULT_USER = <username>
-RABBITMQ_DEFAULT_VHOST = <virtualHost>
+RABBITMQ_DEFAULT_USER=******
+RABBITMQ_DEFAULT_PASS=******
+RABBITMQ_DEFAULT_VHOST=******
+RABBITMQ_DOMAIN=******
+RABBITMQ_DOMAIN_TLS=******
+
+RABBITMQ_GUI_PORT=******
+RABBITMQ_PORT=******
+RABBITMQ_PORT_TLS=******
+
+# FOR TLS
+RABBITMQ_CAFILE=/path/to/file
+RABBITMQ_CERT=/path/to/file
+RABBITMQ_KEY=/path/to/file
 ```
 
 
@@ -88,12 +99,18 @@ services:
       - '~/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf'
       # This is to enable x-delayed-messages 
       - '~/rabbitmq/rabbitmq_delayed_message_exchange-3.11.1.ez:/opt/rabbitmq/plugins/rabbitmq_delayed_message_exchange-3.11.1.ez'
-    env_file:
-      - '~/rabbitmq/rabbitmq.env'
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_DEFAULT_PASS}
+      - RABBITMQ_DEFAULT_VHOST=${RABBITMQ_DEFAULT_VHOST}
     ports:
-      - '5672:5672'
-      - '15672:15672'
-      - '5671:5671'
+      # RabbitMQ container listening on the default port of 5672.
+      - "${RABBITMQ_PORT}:5672"
+      - "${RABBITMQ_PORT_TLS}:5671"
+      # OPTIONAL: Expose the GUI port
+      - "${RABBITMQ_GUI_PORT}:15672"
+    networks:
+      - gateway
     restart: always
 
 volumes:
@@ -154,12 +171,30 @@ This tutorial assumes RabbitMQ is installed and running on localhost on the port
     - Different users can have different permissions to different vhost and queues and exchanges can be created, so they only exist in one vhost. 
     - When a client establishes a connection to the RabbitMQ server, it specifies the vhost within which it will operate
 ```py
-from mrsal import Mrsal
+from mrsal.mrsal import Mrsal
 
-mrsal = Mrsal(host='localhost',
-            port=5673,
-            credentials=('root', 'password'),
-            virtual_host='v_host')
+# If you want to use SSL for external listening then set it to True
+SSL = False
+
+# Note RabbitMQ container is listening on:
+# 1. When SSL is False the default port 5672 which is exposed to RABBITMQ_PORT in docker-compose
+# 2. When SSL is True the default port 5671 which is exposed to RABBITMQ_PORT_TLS in docker-compose
+port = RABBITMQ_PORT_TLS if SSL else RABBITMQ_PORT
+host = RABBITMQ_DOMAIN_TLS if SSL else RABBITMQ_DOMAIN
+
+# It should match with the env specifications (RABBITMQ_DEFAULT_USER, RABBITMQ_DEFAULT_PASS)
+credentials=(RABBITMQ_DEFAULT_USER, RABBITMQ_DEFAULT_PASS)
+
+# It should match with the env specifications (RABBITMQ_DEFAULT_VHOST)
+v_host = RABBITMQ_DEFAULT_VHOST
+
+mrsal = Mrsal(
+    host=host,
+    port=port,
+    credentials=credentials,
+    virtual_host=v_host,
+    ssl=SSL
+)
 
 mrsal.connect_to_server()
 ```
@@ -257,20 +292,31 @@ Publish message to the exchange specifying routing key and properties
 - `exchange`: The exchange to publish to
 - `routing_key`: The routing key to bind on
 - `body`: The message body; empty string if no body
+- `prop`: BasicProperties is used to set the message properties
 - `headers`: Is useful when we want to send message with headers. E.g:
         - When exchange's type is `x-delayed-message` then we need to send messages to the exchange with `x-delay` header to specify delay time for message in exchange before route it to bound queue ([see example](#delayExchange)).
         - When exchange's type is `headers`, then we need to send messages with headers which match the binding-key of bound queues to the exchange ([see example](#headersExchange)).
 ```py
-message: str = 'uuid'
+message: str = 'agreement123'
 
 # publish messages with  header x-delay expressing in milliseconds a delay time for the message.
 headers={'x-delay': 2000}, 
 
-mrsal.publish_message(fast_setup=False,
+# BasicProperties is used to set the message properties
+prop = pika.BasicProperties(
+        app_id='agreements_app',
+        message_id='agreements_msg',
+        content_type='text/plain',
+        content_encoding='utf-8',
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers=headers)
+
+mrsal.publish_message(
                 exchange='agreements',
                 routing_key='agreements_key',
                 message=json.dumps(message),
-                headers=headers
+                prop=prop,
+                fast_setup=False
                 )
 ```                        
 --- 
@@ -281,6 +327,7 @@ mrsal.publish_message(fast_setup=False,
 - Setup consumer:
     - Consumer start consuming the messages from the queue.
     - If `inactivity_timeout` is given the consumer will be canceled when inactivity_timeout is exceeded.
+    - If you start a consumer with `callback_with_delivery_info=True` then your callback function should to have at least these params `(method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str)`. If not, then it should have at least `(message_param: str)`
     - Send the consumed message to callback method to be processed, and then the message can be either:
         - Processed, then **correctly-acknowledge** and deleted from queue or 
         - Failed to process, **negatively-acknowledged** and then will be either
@@ -290,8 +337,22 @@ mrsal.publish_message(fast_setup=False,
                 - requeue is True and requeue attempt fails.
 
 ```py
+def consumer_callback_with_delivery_info(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
+    str_message = json.loads(message_param).replace('"', '')
+    if 'agreement123' in str_message:
+        app_id = properties.app_id
+        msg_id = properties.message_id
+        print(f'app_id={app_id}, msg_id={msg_id}')
+        print('Message processed')
+        return True  # Consumed message processed correctly
+    return False
+
 def consumer_callback(host: str, queue: str, message: str):
-    return True
+    str_message = json.loads(message_param).replace('"', '')
+    if 'agreement123' in str_message:
+        print('Message processed')
+        return True  # Consumed message processed correctly
+    return False
 
 QUEUE: str = 'agreements_queue'
 
@@ -302,6 +363,17 @@ mrsal.start_consumer(
         inactivity_timeout=6,
         requeue=False
     )
+
+# NOTE: If you want to use callback with delivery info then use this code
+
+# mrsal.start_consumer(
+#         queue='agreements_queue',
+#         callback=consumer_callback_with_delivery_info,
+#         callback_args=(test_config.HOST, 'agreements_queue'),
+#         inactivity_timeout=6,
+#         requeue=False,
+#         callback_with_delivery_info=True
+#     )
 ```
 ---
 <div id='exchangeTypes'/>
@@ -361,18 +433,34 @@ mrsal.setup_queue_binding(exchange=EXCHANGE,
 # Publisher:
 
 # Message ("uuid2") is published to the exchange and it's routed to queue2
+prop1 = pika.BasicProperties(
+        app_id='test_exchange_direct',
+        message_id='madrid_uuid',
+        content_type='text/plain',
+        content_encoding='utf-8',
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers=None)
 message2 = 'uuid2'
 mrsal.publish_message(
                         exchange=EXCHANGE,
                         routing_key=ROUTING_KEY_2,
-                        message=json.dumps(message2))
+                        message=json.dumps(message2),
+                        prop=prop1)
 
+prop2 = pika.BasicProperties(
+        app_id='test_exchange_direct',
+        message_id='berlin_uuid',
+        content_type='text/plain',
+        content_encoding='utf-8',
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers=None)
 # Message ("uuid1") is published to the exchange and it's routed to queue1
 message1 = 'uuid1'
 mrsal.publish_message(
                         exchange=EXCHANGE,
                         routing_key=ROUTING_KEY_1,
-                        message=json.dumps(message1))
+                        message=json.dumps(message1),
+                        prop=prop2)
 # ------------------------------------------
 
 # Start consumer for every queue
@@ -452,17 +540,33 @@ mrsal.setup_queue_binding(exchange=EXCHANGE,
 
 # Message ("uuid1") is published to the exchange will be routed to queue1
 message1 = 'uuid1'
+prop1 = pika.BasicProperties(
+        app_id='test_exchange_topic',
+        message_id='berlin',
+        content_type='text/plain',
+        content_encoding='utf-8',
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers=None)
 mrsal.publish_message(
                         exchange=EXCHANGE,
                         routing_key=ROUTING_KEY_1,
-                        message=json.dumps(message1))
+                        message=json.dumps(message1),
+                        prop=prop1)
 
 # Message ("uuid2") is published to the exchange will be routed to queue2
 message2 = 'uuid2'
+prop2 = pika.BasicProperties(
+        app_id='test_exchange_topic',
+        message_id='september',
+        content_type='text/plain',
+        content_encoding='utf-8',
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers=None)
 mrsal.publish_message(
                         exchange=EXCHANGE,
                         routing_key=ROUTING_KEY_2,
-                        message=json.dumps(message2))
+                        message=json.dumps(message2),
+                        prop=prop2)
 # ------------------------------------------
 
 # Start consumer for every queue
@@ -560,22 +664,34 @@ mrsal.setup_queue_binding(exchange=EXCHANGE,
 
 # Publisher:
 # Message ("uuid1") is published to the exchange with a set of headers
-
+prop1 = pika.BasicProperties(
+        app_id='test_exchange_headers',
+        message_id='zip_report',
+        content_type='text/plain',
+        content_encoding='utf-8',
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers={'format': 'zip', 'type': 'report'})
 message1 = 'uuid1'
 mrsal.publish_message(
                         exchange=EXCHANGE,
                         routing_key='',
                         message=json.dumps(message1),
-                        headers=HEADERS1)
+                        prop=prop1)
 
 # Message ("uuid2") is published to the exchange with a set of headers
-
+prop2 = pika.BasicProperties(
+        app_id='test_exchange_headers',
+        message_id='pdf_date',
+        content_type='text/plain',
+        content_encoding='utf-8',
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers={'format': 'pdf', 'date': '2022'})
 message2 = 'uuid2'
 mrsal.publish_message(
                         exchange=EXCHANGE,
                         routing_key='',
                         message=json.dumps(message2),
-                        headers=HEADERS2)
+                        prop=prop2)
 # ------------------------------------------
 
 # Start consumer for every queue
@@ -631,17 +747,31 @@ Publisher:
 """
 x_delay1: int = 3000
 message1 = 'uuid1'
+prop1 = pika.BasicProperties(
+        app_id='test_exchange_delay_letters',
+        message_id='uuid1_3000ms',
+        content_type='text/plain',
+        content_encoding='utf-8',
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers={'x-delay': x_delay1})
 mrsal.publish_message(exchange='agreements',
                         routing_key='agreements_key',
                         message=json.dumps(message1),
-                        headers={'x-delay': x_delay1})
+                        prop=prop1)
 
 x_delay2: int = 1000
 message2 = 'uuid2'
+prop2 = pika.BasicProperties(
+        app_id='test_exchange_delay_letters',
+        message_id='uuid2_1000ms',
+        content_type='text/plain',
+        content_encoding='utf-8',
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers={'x-delay': x_delay2})
 mrsal.publish_message(exchange='agreements',
                         routing_key='agreements_key',
                         message=json.dumps(message2),
-                        headers={'x-delay': x_delay2})
+                        prop=prop2)
 
 
 """
@@ -717,24 +847,56 @@ Publisher:
     Message ("uuid4") is published
 """
 message1 = 'uuid1'
+prop1 = pika.BasicProperties(
+        app_id='test_exchange_dead_letters',
+        message_id='msg_uuid1',
+        content_type='text/plain',
+        content_encoding='utf-8',
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers=None)
 mrsal.publish_message(exchange='agreements',
                         routing_key='agreements_key',
-                        message=json.dumps(message1))
+                        message=json.dumps(message1),
+                        prop=prop1)
 
 message2 = 'uuid2'
+prop2 = pika.BasicProperties(
+        app_id='test_exchange_dead_letters',
+        message_id='msg_uuid2',
+        content_type='text/plain',
+        content_encoding='utf-8',
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers=None)
 mrsal.publish_message(exchange='agreements',
                         routing_key='agreements_key',
-                        message=json.dumps(message2))
+                        message=json.dumps(message2),
+                        prop=prop2)
 
 message3 = 'uuid3'
+prop3 = pika.BasicProperties(
+        app_id='test_exchange_dead_letters',
+        message_id='msg_uuid3',
+        content_type='text/plain',
+        content_encoding='utf-8',
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers=None)
 mrsal.publish_message(exchange='agreements',
                         routing_key='agreements_key',
-                        message=json.dumps(message3))
+                        message=json.dumps(message3),
+                        prop=prop3)
 
 message4 = 'uuid4'
+prop4 = pika.BasicProperties(
+        app_id='test_exchange_dead_letters',
+        message_id='msg_uuid4',
+        content_type='text/plain',
+        content_encoding='utf-8',
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers=None)
 mrsal.publish_message(exchange='agreements',
                         routing_key='agreements_key',
-                        message=json.dumps(message4))                        
+                        message=json.dumps(message4),
+                        prop=prop4)                        
 
 """
 Consumer from main queue
@@ -816,7 +978,7 @@ mrsal.setup_exchange(exchange='agreements',
 mrsal.setup_queue(queue='agreements_queue',
                     arguments={'x-dead-letter-exchange': 'dl_agreements',
                             'x-dead-letter-routing-key': 'dl_agreements_key',
-                            'x-message-ttl': test_config.MESSAGE_TTL})
+                            'x-message-ttl': 2000})
 
 # Bind main queue to the main exchange with routing_key
 mrsal.setup_queue_binding(exchange='agreements',
@@ -841,31 +1003,59 @@ Publisher:
 """
 x_delay1: int = 2000  # ms
 message1 = 'uuid1'
+prop1 = pika.BasicProperties(
+        app_id='test_exchange_dead_and_delay_letters',
+        message_id='uuid1_2000ms',
+        content_type='text/plain',
+        content_encoding='utf-8',
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers={'x-delay': x_delay1})
 mrsal.publish_message(exchange='agreements',
                         routing_key='agreements_key',
                         message=json.dumps(message1),
-                        headers={'x-delay': x_delay1})
+                        prop=prop1)
 
 x_delay2: int = 1000
 message2 = 'uuid2'
+prop2 = pika.BasicProperties(
+        app_id='test_exchange_dead_and_delay_letters',
+        message_id='uuid2_1000ms',
+        content_type='text/plain',
+        content_encoding='utf-8',
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers={'x-delay': x_delay2})
 mrsal.publish_message(exchange='agreements',
                         routing_key='agreements_key',
                         message=json.dumps(message2),
-                        headers={'x-delay': x_delay2})
+                        prop=prop2)
 
 x_delay3: int = 3000
 message3 = 'uuid3'
+prop3 = pika.BasicProperties(
+        app_id='test_exchange_dead_and_delay_letters',
+        message_id='uuid3_3000ms',
+        content_type='text/plain',
+        content_encoding='utf-8',
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers={'x-delay': x_delay3})
 mrsal.publish_message(exchange='agreements',
                         routing_key='agreements_key',
                         message=json.dumps(message3),
-                        headers={'x-delay': x_delay3})
+                        prop=prop3)
 
 x_delay4: int = 4000
 message4 = 'uuid4'
+prop4 = pika.BasicProperties(
+        app_id='test_exchange_dead_and_delay_letters',
+        message_id='uuid4_4000ms',
+        content_type='text/plain',
+        content_encoding='utf-8',
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers={'x-delay': x_delay4})
 mrsal.publish_message(exchange='agreements',
                         routing_key='agreements_key',
                         message=json.dumps(message4),
-                        headers={'x-delay': x_delay4})
+                        rop=prop4)
 # ------------------------------------------
 
 """

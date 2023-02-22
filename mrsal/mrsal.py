@@ -214,11 +214,11 @@ class Mrsal:
 
         """
         context = ssl.create_default_context(
-            cafile=os.environ.get('RABBIT_CAFILE')
+            cafile=os.environ.get('RABBITMQ_CAFILE')
         )
         context.load_cert_chain(
-            certfile=os.environ.get('RABBIT_CERT'),
-            keyfile=os.environ.get('RABBIT_KEY')
+            certfile=os.environ.get('RABBITMQ_CERT'),
+            keyfile=os.environ.get('RABBITMQ_KEY')
         )
         return context
 
