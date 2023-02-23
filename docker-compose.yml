@@ -12,10 +12,12 @@ services:
       - RABBITMQ_DEFAULT_VHOST=${RABBITMQ_DEFAULT_VHOST}
     ports:
       # RabbitMQ container listening on the default port of 5672.
-      # Expose default port to the port 5673
       - "${RABBITMQ_PORT}:5672"
+      - "${RABBITMQ_PORT_TLS}:5671"
       # OPTIONAL: Expose the GUI port
       - "${RABBITMQ_GUI_PORT}:15672"
+    volumes:
+      - ${BASE_PATH}/storage/rabbitmq_conf/rabbitmq.conf/:/etc/rabbitmq/rabbitmq.config
     networks:
       - gateway
 
