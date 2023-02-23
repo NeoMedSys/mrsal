@@ -110,7 +110,7 @@ mrsal.publish_message(exchange='friendship',
 Now lets setup a consumer that will listen to our very important messages. If you are using scripts rather than notebooks then it's advisable to run consume and publish separately. We are going to need a callback function which is triggered upon receiving the message from the queue we subscribe to. You can use the callback function to activate something in your system.
 
 Note: 
-- If you start a consumer with `callback_with_delivery_info=True` then your callback function should to have at least these params `(method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str)`. 
+- If you start a consumer with `callback_with_delivery_info=True` then your callback function should have at least these params `(method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str)`. 
 - If not, then it should have at least `(message_param: str)`
 
 ```python
