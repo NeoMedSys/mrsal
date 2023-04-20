@@ -16,8 +16,8 @@ services:
       - "${RABBITMQ_PORT_TLS}:5671"
       # OPTIONAL: Expose the GUI port
       - "${RABBITMQ_GUI_PORT}:15672"
-    volumes:
-      - ${BASE_PATH}/storage/rabbitmq_conf/rabbitmq.conf/:/etc/rabbitmq/rabbitmq.config
+    # volumes:
+      # - ${BASE_PATH}/storage/rabbitmq_conf/rabbitmq.conf/:/etc/rabbitmq/rabbitmq.config
     networks:
       - gateway
 

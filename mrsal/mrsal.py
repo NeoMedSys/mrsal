@@ -222,16 +222,16 @@ class Mrsal:
         )
         return context
 
-    def __stop_consuming(self, consumer_tag: str) -> NoReturn:
+    def stop_consuming(self, consumer_tag: str) -> NoReturn:
         self._channel.stop_consuming(consumer_tag=consumer_tag)
         self.log.info('Consumer is stopped, carry on')
 
-    def __close_channel(self) -> NoReturn:
+    def close_channel(self) -> NoReturn:
         self._channel.close()
         self.log.info('Channel is closed, carry on')
 
-    def __close_connection(self) -> NoReturn:
-        self.__close_channel()
+    def close_connection(self) -> NoReturn:
+        self.close_channel()
         self._connection.close()
         self.log.info('Connection is closed, carry on')
 
@@ -372,8 +372,8 @@ class Mrsal:
                     pass
                 except KeyboardInterrupt:
                     self.log('Stopping Mrsal consumption.')
-                    self.__stop_consuming(self.consumer_tag)
-                    self.__close_connection()
+                    self.stop_consuming(self.consumer_tag)
+                    self.close_connection()
                     break
         except pika.exceptions.ChannelClosed as err2:
             self.log.error(f'ChannelClosed is caught while consuming. Channel is closed by broker. Cancel consumer. {str(err2)}')
