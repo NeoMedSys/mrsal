@@ -1,0 +1,101 @@
+import concurrent.futures
+import json
+import time
+
+import pika
+from pika.exchange_type import ExchangeType
+
+import mrsal.config.config as config
+import tests.config as test_config
+from mrsal.concurrent_consumer import ConcurrentConsumer
+from mrsal.config.logging import get_logger
+from mrsal.mrsal import Mrsal
+
+log = get_logger(__name__)
+
+mrsal = Mrsal(host=test_config.HOST,
+              port=config.RABBITMQ_PORT,
+              credentials=config.RABBITMQ_CREDENTIALS,
+              virtual_host=config.V_HOST)
+mrsal.connect_to_server()
+
+APP_ID = "TEST_CONCURRENT_CONSUMERS"
+EXCHANGE = "CLINIC"
+EXCHANGE_TYPE = ExchangeType.direct
+QUEUE_EMERGENCY = "EMERGENCY"
+NUM_THREADS = 3
+NUM_MESSAGES = 10
+ROUTING_KEY = "PROCESS FOR EMERGENCY"
+MESSAGE_ID = "HOSPITAL_EMERGENCY"
+
+def test_concurrent_consumer():
+    # Delete existing queues and exchanges to use
+    mrsal.exchange_delete(exchange=EXCHANGE)
+    mrsal.queue_delete(queue=QUEUE_EMERGENCY)
+    # ------------------------------------------
+    # Setup exchange
+    exch_result: pika.frame.Method = mrsal.setup_exchange(exchange=EXCHANGE,
+                                                          exchange_type=EXCHANGE_TYPE)
+    assert exch_result != None
+    # ------------------------------------------
+    # Setup queue for madrid agreements
+    q_result: pika.frame.Method = mrsal.setup_queue(queue=QUEUE_EMERGENCY)
+    assert q_result != None
+
+    # Bind queue to exchange with binding key
+    qb_result: pika.frame.Method = mrsal.setup_queue_binding(exchange=EXCHANGE,
+                                                             routing_key=ROUTING_KEY,
+                                                             queue=QUEUE_EMERGENCY)
+    assert qb_result != None
+    # ------------------------------------------
+    # Publisher:
+    # Publish 10 messages to QUEUE_MADRID
+    for msg_index in range(NUM_MESSAGES):
+        prop = pika.BasicProperties(
+            app_id=APP_ID,
+            message_id=MESSAGE_ID + str(msg_index),
+            content_type=test_config.CONTENT_TYPE,
+            content_encoding=test_config.CONTENT_ENCODING,
+            delivery_mode=pika.DeliveryMode.Persistent,
+            headers=None)
+        message = "uuid_" + str(msg_index)
+        mrsal.publish_message(exchange=EXCHANGE,
+                              routing_key=ROUTING_KEY,
+                              message=json.dumps(message), prop=prop)
+    # ------------------------------------------
+    time.sleep(1)
+    # Confirm messages are routed to respected queue
+    result1 = mrsal.setup_queue(queue=QUEUE_EMERGENCY, passive=True)
+    message_count1 = result1.method.message_count
+    assert message_count1 == 10
+    # ------------------------------------------
+    # Start concurrent consumers
+    start_time = time.time()
+    concurrent_consumer = ConcurrentConsumer(mrsal=mrsal, queue=QUEUE_EMERGENCY,
+                                             callback=consumer_callback_with_delivery_info,
+                                             callback_args=(test_config.HOST, QUEUE_EMERGENCY),
+                                             inactivity_timeout=1,
+                                             num_threads=NUM_THREADS,
+                                             callback_with_delivery_info=True)
+    concurrent_consumer.start_concurrence_consumer()
+    duration = time.time() - start_time
+    log.info(f"Concurrent consumer are done in {duration} seconds")
+    # ------------------------------------------
+    # Confirm messages are consumed
+    result2 = mrsal.setup_queue(queue=QUEUE_EMERGENCY, passive=True)
+    message_count2 = result2.method.message_count
+    assert message_count2 == 0
+
+    mrsal.close_connection()
+
+def consumer_callback_with_delivery_info(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
+    time.sleep(5)
+    return True
+
+def consumer_callback(host_param: str, queue_param: str, message_param: str):
+    time.sleep(5)
+    return True
+
+
+if __name__ == "__main__":
+    test_concurrent_consumer()
