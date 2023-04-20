@@ -79,7 +79,7 @@ def test_concurrent_consumer():
                                              callback_with_delivery_info=True)
     concurrent_consumer.start_concurrence_consumer()
     duration = time.time() - start_time
-    log.info(f"Concurrent consumer are done in {duration} seconds")
+    log.info(f"Concurrent consumers are done in {duration} seconds")
     # ------------------------------------------
     # Confirm messages are consumed
     result2 = mrsal.setup_queue(queue=QUEUE_EMERGENCY, passive=True)
