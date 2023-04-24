@@ -49,7 +49,7 @@ def test_concurrent_consumer():
     assert qb_result != None
     # ------------------------------------------
     # Publisher:
-    # Publish 10 messages to QUEUE_MADRID
+    # Publish 10 messages to the queue
     for msg_index in range(NUM_MESSAGES):
         prop = pika.BasicProperties(
             app_id=APP_ID,
@@ -64,7 +64,7 @@ def test_concurrent_consumer():
                               message=json.dumps(message), prop=prop)
     # ------------------------------------------
     time.sleep(1)
-    # Confirm messages are routed to respected queue
+    # Confirm messages are routed to the queue
     result1 = mrsal.setup_queue(queue=QUEUE_EMERGENCY, passive=True)
     message_count1 = result1.method.message_count
     assert message_count1 == 10
