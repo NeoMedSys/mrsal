@@ -1,10 +1,12 @@
+import concurrent.futures
 import json
 import os
-import pika
 import ssl
 from dataclasses import dataclass
 from socket import gaierror
-from typing import Callable, Dict, NoReturn, Tuple, Any
+from typing import Any, Callable, Dict, NoReturn, Tuple
+
+import pika
 from pika import SSLOptions
 from retry import retry
 
@@ -284,7 +286,7 @@ class Mrsal:
             self._channel.stop_consuming()
 
     def start_consumer(
-            self, queue: str, callback: Callable, callback_args: Tuple[str, Any] = None, 
+            self, queue: str, callback: Callable, callback_args: Tuple[str, Any] = None,
             exchange: str = None, exchange_type: str = None, routing_key: str = None,
             inactivity_timeout: int = None, requeue: bool = False, fast_setup: bool = False,
             callback_with_delivery_info: bool = False
@@ -326,8 +328,8 @@ class Mrsal:
         self.log.info(f'Consuming messages: queue= {queue}, requeue= {requeue}, inactivity_timeout= {inactivity_timeout}')
 
         try:
-            method_frame: spec.Basic.Deliver 
-            prop: spec.BasicProperties 
+            method_frame: spec.Basic.Deliver
+            prop: spec.BasicProperties
             body: Any
             for method_frame, properties, body in \
                     self._channel.consume(queue=queue, inactivity_timeout=inactivity_timeout):
@@ -353,13 +355,14 @@ class Mrsal:
                                 """)
                         if callback_with_delivery_info:
                             is_processed = callback(*callback_args, method_frame, properties, body) if callback_args else callback(method_frame, properties, body)
-                        else:    
+                        else:
                             is_processed = callback(*callback_args, body) if callback_args else callback(body)
                         if is_processed:
                             self._channel.basic_ack(delivery_tag=method_frame.delivery_tag)
                             self.log.info(f'Message coming from the app={app_id} with messageId={msg_id} is acknowledged.')
                         else:
-                            self.log.warning(f'Could not process the message coming from the app={app_id} with messageId={msg_id}. This will be rejected and sent to dead-letters-exchange if it configured or deleted if not.')
+                            self.log.warning(
+                                f'Could not process the message coming from the app={app_id} with messageId={msg_id}. This will be rejected and sent to dead-letters-exchange if it configured or deleted if not.')
                             self._channel.basic_nack(delivery_tag=method_frame.delivery_tag, requeue=requeue)
                             self.log.warning('Message rejected')
                             pass
@@ -381,6 +384,50 @@ class Mrsal:
 
     # --------------------------------------------------------------
     # --------------------------------------------------------------
+    def _spawn_mrsal_and_start_new_consumer(self, thread_num: int, queue: str, callback: Callable, callback_args: Tuple[str, Any] = None,
+                                            exchange: str = None, exchange_type: str = None, routing_key: str = None,
+                                            inactivity_timeout: int = None, requeue: bool = False, fast_setup: bool = False,
+                                            callback_with_delivery_info: bool = False):
+        try:
+            self.log.info(f"Start consumer: thread_num={thread_num}")
+            mrsal_obj = Mrsal(host=self.host,
+                              port=self.port,
+                              credentials=self.credentials,
+                              virtual_host=self.virtual_host,
+                              ssl=self.ssl,
+                              verbose=self.verbose,
+                              prefetch_count=self.prefetch_count,
+                              heartbeat=self.heartbeat,
+                              blocked_connection_timeout=self.blocked_connection_timeout)
+            mrsal_obj.connect_to_server()
+
+            mrsal_obj.start_consumer(
+                callback=callback,
+                callback_args=callback_args,
+                queue=queue,
+                requeue=requeue,
+                exchange=exchange,
+                exchange_type=exchange_type,
+                routing_key=routing_key,
+                fast_setup=fast_setup,
+                inactivity_timeout=inactivity_timeout,
+                callback_with_delivery_info=callback_with_delivery_info
+            )
+            mrsal_obj.close_connection()
+            self.log.info(f"End consumer: thread_num={thread_num}")
+        except Exception as e:
+            self.log.error(f"Failed to consumer: {e}")
+
+    def start_concurrence_consumer(self, total_threads: int, queue: str, callback: Callable, callback_args: Tuple[str, Any] = None,
+                                   exchange: str = None, exchange_type: str = None, routing_key: str = None,
+                                   inactivity_timeout: int = None, requeue: bool = False, fast_setup: bool = False,
+                                   callback_with_delivery_info: bool = False):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=total_threads) as executor:
+            executor.map(self._spawn_mrsal_and_start_new_consumer, range(total_threads), [queue]*total_threads, [callback]*total_threads, [callback_args]*total_threads,
+                         [exchange]*total_threads, [exchange_type]*total_threads, [routing_key]*total_threads,
+                         [inactivity_timeout]*total_threads, [requeue]*total_threads, [fast_setup]*total_threads,
+                         [callback_with_delivery_info]*total_threads)
+
     @retry((pika.exceptions.UnroutableError), tries=2, delay=5, jitter=(1, 3))
     def publish_message(
             self, exchange: str, routing_key: str, message: Any, exchange_type: str = None,

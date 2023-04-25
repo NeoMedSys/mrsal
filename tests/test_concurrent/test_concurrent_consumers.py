@@ -71,13 +71,13 @@ def test_concurrent_consumer():
     # ------------------------------------------
     # Start concurrent consumers
     start_time = time.time()
-    concurrent_consumer = ConcurrentConsumer(mrsal=mrsal, queue=QUEUE_EMERGENCY,
-                                             callback=consumer_callback_with_delivery_info,
-                                             callback_args=(test_config.HOST, QUEUE_EMERGENCY),
-                                             inactivity_timeout=1,
-                                             num_threads=NUM_THREADS,
-                                             callback_with_delivery_info=True)
-    concurrent_consumer.start_concurrence_consumer()
+    mrsal.start_concurrence_consumer(total_threads=NUM_THREADS, queue=QUEUE_EMERGENCY,
+                                     callback=consumer_callback_with_delivery_info,
+                                     callback_args=(test_config.HOST, QUEUE_EMERGENCY),
+                                     exchange=EXCHANGE, exchange_type=EXCHANGE_TYPE,
+                                     routing_key=ROUTING_KEY,
+                                     inactivity_timeout=1,
+                                     callback_with_delivery_info=True)
     duration = time.time() - start_time
     log.info(f"Concurrent consumers are done in {duration} seconds")
     # ------------------------------------------
