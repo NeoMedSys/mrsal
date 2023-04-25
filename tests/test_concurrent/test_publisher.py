@@ -31,12 +31,12 @@ NUM_THREADS = 3
 NUM_MESSAGES = 2
 INACTIVITY_TIMEOUT = 10
 ROUTING_KEY = "PROCESS FOR EMERGENCY"
-MESSAGE_ID = "HOSPITAL_EMERGENCY"
+MESSAGE_ID = "HOSPITAL_EMERGENCY_CT_"
 
 def test_concurrent_consumer():
     # ------------------------------------------
     # Publisher:
-    # Publish 10 messages to the queue
+    # Publish NUM_MESSAGES to the queue
     for msg_index in range(NUM_MESSAGES):
         prop = pika.BasicProperties(
             app_id=APP_ID,
@@ -45,10 +45,11 @@ def test_concurrent_consumer():
             content_encoding=test_config.CONTENT_ENCODING,
             delivery_mode=pika.DeliveryMode.Persistent,
             headers=None)
-        message = "uuid_" + str(msg_index)
+        message = "CT_" + str(msg_index)
         mrsal.publish_message(exchange=EXCHANGE,
                               routing_key=ROUTING_KEY,
                               message=json.dumps(message), prop=prop)
+    # ------------------------------------------
 
     mrsal.close_connection()
 

@@ -1,4 +1,3 @@
-import concurrent.futures
 import json
 import time
 
@@ -26,7 +25,7 @@ NUM_THREADS = 3
 NUM_MESSAGES = 3
 INACTIVITY_TIMEOUT = 3
 ROUTING_KEY = "PROCESS FOR EMERGENCY"
-MESSAGE_ID = "HOSPITAL_EMERGENCY"
+MESSAGE_ID = "HOSPITAL_EMERGENCY_MRI_"
 
 def test_concurrent_consumer():
     # Delete existing queues and exchanges to use
@@ -58,7 +57,7 @@ def test_concurrent_consumer():
             content_encoding=test_config.CONTENT_ENCODING,
             delivery_mode=pika.DeliveryMode.Persistent,
             headers=None)
-        message = "uuid_" + str(msg_index)
+        message = "MRI_" + str(msg_index)
         mrsal.publish_message(exchange=EXCHANGE,
                               routing_key=ROUTING_KEY,
                               message=json.dumps(message), prop=prop)

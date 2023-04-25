@@ -328,6 +328,7 @@ class Mrsal:
         self.log.info(f'{print_thread_index} Consuming messages queue= {queue}, requeue= {requeue}, inactivity_timeout= {inactivity_timeout}')
 
         try:
+            self.consumer_tag = None
             method_frame: spec.Basic.Deliver
             prop: spec.BasicProperties
             body: Any
