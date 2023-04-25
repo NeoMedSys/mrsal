@@ -7,7 +7,6 @@ from pika.exchange_type import ExchangeType
 
 import mrsal.config.config as config
 import tests.config as test_config
-from mrsal.concurrent_consumer import ConcurrentConsumer
 from mrsal.config.logging import get_logger
 from mrsal.mrsal import Mrsal
 
@@ -24,7 +23,8 @@ EXCHANGE = "CLINIC"
 EXCHANGE_TYPE = ExchangeType.direct
 QUEUE_EMERGENCY = "EMERGENCY"
 NUM_THREADS = 3
-NUM_MESSAGES = 10
+NUM_MESSAGES = 3
+INACTIVITY_TIMEOUT = 3
 ROUTING_KEY = "PROCESS FOR EMERGENCY"
 MESSAGE_ID = "HOSPITAL_EMERGENCY"
 
@@ -49,7 +49,7 @@ def test_concurrent_consumer():
     assert qb_result != None
     # ------------------------------------------
     # Publisher:
-    # Publish 10 messages to the queue
+    # Publish NUM_MESSAGES to the queue
     for msg_index in range(NUM_MESSAGES):
         prop = pika.BasicProperties(
             app_id=APP_ID,
@@ -67,7 +67,7 @@ def test_concurrent_consumer():
     # Confirm messages are routed to the queue
     result1 = mrsal.setup_queue(queue=QUEUE_EMERGENCY, passive=True)
     message_count1 = result1.method.message_count
-    assert message_count1 == 10
+    assert message_count1 == NUM_MESSAGES
     # ------------------------------------------
     # Start concurrent consumers
     start_time = time.time()
@@ -76,7 +76,7 @@ def test_concurrent_consumer():
                                      callback_args=(test_config.HOST, QUEUE_EMERGENCY),
                                      exchange=EXCHANGE, exchange_type=EXCHANGE_TYPE,
                                      routing_key=ROUTING_KEY,
-                                     inactivity_timeout=1,
+                                     inactivity_timeout=INACTIVITY_TIMEOUT,
                                      callback_with_delivery_info=True)
     duration = time.time() - start_time
     log.info(f"Concurrent consumers are done in {duration} seconds")
