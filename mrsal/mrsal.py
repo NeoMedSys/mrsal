@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, NoReturn, Tuple
 
 import pika
 from pika import SSLOptions
+from pika.exchange_type import ExchangeType
 from retry import retry
 
 from mrsal.config.logging import get_logger
@@ -132,8 +133,11 @@ class Mrsal:
         except AttributeError as err:
             self.log.error(f'Caught a attribute error: {err}')
             raise AttributeError
+        except pika.exceptions.ChannelClosedByBroker as err:
+            self.log.error(f'Caught ChannelClosedByBroker error: {err}')
+            raise pika.exceptions.ChannelClosedByBroker(404, str(err))
         except pika.exceptions.ConnectionClosedByBroker as err:
-            self.log.error(f'Caught a connection closed by broker error: {err}')
+            self.log.error(f'Caught ConnectionClosedByBroker error: {err}')
             raise pika.exceptions.ConnectionClosedByBroker(503, str(err))
 
     def setup_queue(self, queue: str, arguments: Dict[str, str] = None, durable: bool = True,
@@ -172,9 +176,9 @@ class Mrsal:
                                                                passive=passive)
             self.log.success(f'Queue is declared successfully: {queue_declare_info}, result={queue_declare_result.method}')
             return queue_declare_result
-        except pika.exceptions.ChannelClosedByBroker as err:
+        except (pika.exceptions.ChannelClosedByBroker, pika.exceptions.ChannelWrongStateError) as err:
             self.log.error(f'Caught ChannelClosedByBroker: {err}')
-            raise pika.exceptions.ChannelClosedByBroker(503, str(err))
+            raise pika.exceptions.ChannelClosedByBroker(404, str(err))
 
     def setup_queue_binding(self, exchange: str, queue: str, routing_key: str = None, arguments=None):
         """Bind queue to exchange.
@@ -245,6 +249,17 @@ class Mrsal:
 
     def confirm_delivery(self):
         self._channel.confirm_delivery()
+
+    def exchange_exist(self, exchange: str, exchange_type: ExchangeType):
+        exch_result: pika.frame.Method = self.setup_exchange(
+            exchange=exchange, exchange_type=exchange_type, passive=True
+        )
+        return exch_result
+
+    def queue_exist(self, queue: str):
+        queue_result = self.setup_queue(queue=queue, passive=True)
+        # message_count1 = result1.method.message_count
+        return queue_result
 
     # --------------------------------------------------------------
     # --------------------------------------------------------------
@@ -318,15 +333,29 @@ class Mrsal:
         :param bool callback_with_delivery_info: Specify whether the callback method needs delivery info.
                 - spec.Basic.Deliver: Captures the fields for delivered message. E.g:(consumer_tag, delivery_tag, redelivered, exchange, routing_key).
                 - spec.BasicProperties: Captures the client message sent to the server. E.g:(CONTENT_TYPE, DELIVERY_MODE, MESSAGE_ID, APP_ID). 
+        :param bool fast_setup: 
+                - when True, the method will create the specified exchange, queue 
+                and bind them together using the routing kye. 
+                - If False, this method will check if the specified exchange and queue 
+                are already exist before start consuming.
         """
+        print_thread_index = f"thread={str(thread_num)} -> " if thread_num is not None else ""
+        self.log.info(f'{print_thread_index} Consuming messages queue= {queue}, requeue= {requeue}, inactivity_timeout= {inactivity_timeout}')
         if fast_setup:
             # setting up the necessary connections
             self.setup_exchange(exchange=exchange, exchange_type=exchange_type)
             self.setup_queue(queue=queue)
             self.setup_queue_binding(exchange=exchange, queue=queue, routing_key=routing_key)
-        print_thread_index = f"thread={str(thread_num)} -> " if thread_num is not None else ""
-        self.log.info(f'{print_thread_index} Consuming messages queue= {queue}, requeue= {requeue}, inactivity_timeout= {inactivity_timeout}')
-
+        else:
+            # Check if the necessary resources (exch & queue) are active
+            try:
+                if exchange is not None and exchange_type is not None:
+                    self.exchange_exist(exchange=exchange, exchange_type=exchange_type)
+                self.queue_exist(queue=queue)
+            except (pika.exceptions.ChannelClosedByBroker, pika.exceptions.ConnectionClosedByBroker) as err:
+                self.log.error(f'{print_thread_index} Failed to check active resources. Cancel consumer. {str(err)}')
+                self._channel.cancel()
+                raise pika.exceptions.ChannelClosedByBroker(404, str(err))
         try:
             self.consumer_tag = None
             method_frame: spec.Basic.Deliver
@@ -435,7 +464,7 @@ class Mrsal:
 
     @retry((pika.exceptions.UnroutableError), tries=2, delay=5, jitter=(1, 3))
     def publish_message(
-            self, exchange: str, routing_key: str, message: Any, exchange_type: str = None,
+            self, exchange: str, routing_key: str, message: Any, exchange_type: ExchangeType = ExchangeType.direct,
             queue: str = None, fast_setup: bool = False, prop: pika.BasicProperties = None
     ):
         """Publish message to the exchange specifying routing key and properties.
@@ -444,6 +473,11 @@ class Mrsal:
         :param str routing_key: The routing key to bind on
         :param bytes body: The message body; empty string if no body
         :param pika.spec.BasicProperties properties: message properties
+        :param bool fast_setup: 
+                - when True, will the method create the specified exchange, queue 
+                and bind them together using the routing kye. 
+                - If False, this method will check if the specified exchange and queue 
+                are already exist before publishing. 
 
         :raises UnroutableError: raised when a message published in
             publisher-acknowledgments mode (see
@@ -459,6 +493,16 @@ class Mrsal:
             self.setup_exchange(exchange=exchange, exchange_type=exchange_type)
             self.setup_queue(queue=queue)
             self.setup_queue_binding(exchange=exchange, queue=queue, routing_key=routing_key)
+        else:
+            # Check if the necessary resources (exch & queue) are active
+            try:
+                self.exchange_exist(exchange=exchange, exchange_type=exchange_type)
+                if queue is not None:
+                    self.queue_exist(queue=queue)
+            except (pika.exceptions.ChannelClosedByBroker, pika.exceptions.ConnectionClosedByBroker) as err:
+                self.log.error(f'Failed to check active resources. Cancel consumer. {str(err)}')
+                self._channel.cancel()
+                raise pika.exceptions.ChannelClosedByBroker(404, str(err))
 
         try:
             # Publish the message by serializing it in json dump

@@ -1,9 +1,11 @@
 import os
 from socket import gaierror
 
-import mrsal.config.config as config
 import pika
 import pytest
+from pika.exchange_type import ExchangeType
+
+import mrsal.config.config as config
 import tests.config as test_config
 from mrsal.config.logging import get_logger
 from mrsal.mrsal import Mrsal
@@ -118,7 +120,30 @@ def test_bind_exceptions():
         assert (f'Caught a AttributeError exception caused by "NoneType" object has no attribute "queue_bind": {err2}')
 
 
+def test_active_exchange_exceptions():
+    mrsal = Mrsal(host=test_config.HOST,
+                  port=config.RABBITMQ_PORT,
+                  credentials=config.RABBITMQ_CREDENTIALS,
+                  virtual_host=config.V_HOST)
+    mrsal.connect_to_server()
+    exchange = 'not_exist_exch'
+    with pytest.raises(pika.exceptions.ChannelClosedByBroker) as err1:
+        mrsal.exchange_exist(exchange=exchange, exchange_type=ExchangeType.direct)
+
+def test_active_queue_exceptions():
+    mrsal = Mrsal(host=test_config.HOST,
+                  port=config.RABBITMQ_PORT,
+                  credentials=config.RABBITMQ_CREDENTIALS,
+                  virtual_host=config.V_HOST)
+    mrsal.connect_to_server()
+    queue = 'not_exist_queue'
+    with pytest.raises(pika.exceptions.ChannelClosedByBroker) as err1:
+        mrsal.queue_exist(queue=queue)
+
+
 if __name__ == '__main__':
     test_connection_exceptions()
     test_exchange_exceptions()
     test_bind_exceptions()
+    test_active_exchange_exceptions()
+    test_active_queue_exceptions()
