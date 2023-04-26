@@ -139,6 +139,7 @@ mrsal.start_consumer(
         callback_args=(test_config.HOST, 'friendship_queue'),
         inactivity_timeout=1,
         requeue=False,
+        fast_setup=True,
         callback_with_delivery_info=True
     )
 ```
@@ -188,6 +189,7 @@ def test_concurrent_consumer():
                                      exchange=EXCHANGE, exchange_type=EXCHANGE_TYPE,
                                      routing_key=ROUTING_KEY,
                                      inactivity_timeout=INACTIVITY_TIMEOUT,
+                                     fast_setup=True,
                                      callback_with_delivery_info=True)
     print(f"Concurrent consumers are done")
 
