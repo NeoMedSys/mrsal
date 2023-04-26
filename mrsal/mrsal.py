@@ -337,7 +337,7 @@ class Mrsal:
                 - when True, the method will create the specified exchange, queue 
                 and bind them together using the routing kye. 
                 - If False, this method will check if the specified exchange and queue 
-                are already exist before start consuming.
+                already exist before start consuming.
         """
         print_thread_index = f"thread={str(thread_num)} -> " if thread_num is not None else ""
         self.log.info(f'{print_thread_index} Consuming messages queue= {queue}, requeue= {requeue}, inactivity_timeout= {inactivity_timeout}')
@@ -477,7 +477,7 @@ class Mrsal:
                 - when True, will the method create the specified exchange, queue 
                 and bind them together using the routing kye. 
                 - If False, this method will check if the specified exchange and queue 
-                are already exist before publishing. 
+                already exist before publishing. 
 
         :raises UnroutableError: raised when a message published in
             publisher-acknowledgments mode (see
