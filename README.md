@@ -202,4 +202,4 @@ def consumer_callback_with_delivery_info(host_param: str, queue_param: str, meth
 
 That simple! You have now setup a full advanced message queueing protocol that you can use to promote friendship or other necessary communication between your services.
 
-###### Note! Please refer to the full guide on how to use customize Mrsal to meet specific needs. There are many parameters and settings that you can use to set up a more sophisticated communication protocol.
+###### Note! Please refer to the >>>`FULL GUIDE`<<< on how to use customize Mrsal to meet specific needs. There are many parameters and settings that you can use to set up a more sophisticated communication protocol.
