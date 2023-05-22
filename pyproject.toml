@@ -1,10 +1,10 @@
 [tool.poetry]
 name = "mrsal"
-version = "0.4.2-alpha"
+version = "0.5.0-alpha"
 description = "Mrsal is a simple to use message broker abstraction on top of RabbitMQ and Pika."
 authors = ["Raafat <rafatzahran90@gmail.com>", "Jon E Nesvold <jnesvold@pm.me>"]
 maintainers = ["Raafat <rafatzahran90@gmail.com>", "Jon E Nesvold <jnesvold@pm.me>"]
-keywords = ["RabbitMQ", "Pika", "Mrsal"]
+keywords = ["message broker", "RabbitMQ", "Pika", "Mrsal"]
 readme = "README.md"
 license = ""
 

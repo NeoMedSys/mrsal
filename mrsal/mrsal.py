@@ -10,6 +10,8 @@ import pika
 from pika import SSLOptions
 from pika.exchange_type import ExchangeType
 from retry import retry
+import mrsal.config.config as config
+from mrsal.utils.utils import is_redelivery_configured
 
 from mrsal.config.logging import get_logger
 
@@ -313,11 +315,14 @@ class Mrsal:
                 exceeds inactivity_timeout.
             3- Send the consumed message to callback method to be processed, and then the message can be either:
                 - Processed, then correctly-acknowledge and deleted from QUEUE or 
-                - Failed to process, negatively-acknowledged and then will be either
-                    - `Requeued` if requeue is True
-                    - `Dead letter` and deleted from queue if 
+                - Failed to process, negatively-acknowledged and then the message will be rejected and either
+                    - Redelivered if 'x-retry-limit' and 'x-retry' are configured in 'BasicProperties.headers'.
+                    - Requeued if requeue is True
+                    - Sent to dead-letters-exchange if it configured and 
                         - requeue is False
                         - requeue is True and requeue attempt fails.
+                    - Unless deleted.
+
 
         :param str queue: The queue name to consume
         :param Callable callback: Method where received messages are sent to be processed
@@ -369,7 +374,7 @@ class Mrsal:
                         self.consumer_tag = method_frame.consumer_tag
                         app_id = properties.app_id
                         msg_id = properties.message_id
-                        # let the message be whatever it needs to be
+                        
                         if self.verbose:
                             self.log.info(
                                 f"""
@@ -391,11 +396,29 @@ class Mrsal:
                             self._channel.basic_ack(delivery_tag=method_frame.delivery_tag)
                             self.log.info(f'{print_thread_index} Message coming from the app={app_id} with messageId={msg_id} is acknowledged.')
                         else:
-                            self.log.warning(
-                                f'{print_thread_index} Could not process the message coming from the app={app_id} with messageId={msg_id}. This will be rejected and sent to dead-letters-exchange if it configured or deleted if not.')
+                            self.log.warning(f'{print_thread_index} Could not process the message coming from the app={app_id} with messageId={msg_id}.')
                             self._channel.basic_nack(delivery_tag=method_frame.delivery_tag, requeue=requeue)
                             self.log.warning(f'{print_thread_index} Message rejected')
-                            pass
+                            
+                            if is_redelivery_configured(properties):
+                                msg_headers = properties.headers
+                                x_retry = msg_headers[config.RETRY_KEY]
+                                x_retry_limit = msg_headers[config.RETRY_LIMIT_KEY]
+                                self.log.warning(f'{print_thread_index} Redelivery options are configured in message headers: x-retry={x_retry}, x-retry-limit={x_retry_limit}')
+                                if x_retry < x_retry_limit:
+                                    self.log.warning(f'{print_thread_index} Redelivering the message with messageId={msg_id}.')
+                                    msg_headers[config.RETRY_KEY] = x_retry + 1
+                                    prop_redeliver = pika.BasicProperties(
+                                        app_id=app_id,
+                                        message_id=msg_id,
+                                        content_type=config.CONTENT_TYPE,
+                                        content_encoding=config.CONTENT_ENCODING,
+                                        delivery_mode=pika.DeliveryMode.Persistent,
+                                        headers=msg_headers)
+                                    self._channel.basic_publish(exchange=method_frame.exchange, routing_key=method_frame.routing_key, body=body, properties=prop_redeliver)
+                                    self.log.warning(f'{print_thread_index} Message with messageId={msg_id} is successfully redelivered.')
+                                else:
+                                    self.log.warning(f'{print_thread_index} Max number of redeliveries ({x_retry_limit}) are reached for messageId={msg_id}.')
                         self.log.info(f'[*] {print_thread_index} keep listening on {queue}...')
                     else:
                         self.log.warning(f'{print_thread_index} Given period of inactivity {inactivity_timeout} is exceeded. Cancel consumer.')

@@ -22,3 +22,10 @@ RABBITMQ_DEAD_LETTER_QUEUE: str = 'dead_letter-queue'
 DELAY_EXCHANGE_TYPE: str = 'x-delayed-message'
 DELAY_EXCHANGE_ARGS: Dict[str, str] = {'x-delayed-type': 'direct'}
 DEAD_LETTER_QUEUE_ARGS: Dict[str, str] = {'x-dead-letter-exchange': '', 'x-dead-letter-routing-key': ''}
+
+CONTENT_TYPE: str = 'text/plain'
+CONTENT_ENCODING: str = 'utf-8'
+
+RETRY_LIMIT_KEY: str = 'x-retry-limit'
+RETRY_KEY: str = 'x-retry'
+MESSAGE_HEADERS_KEY: str = 'headers'
