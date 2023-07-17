@@ -24,6 +24,7 @@ mrsal = Mrsal(host=test_config.HOST,
               verbose=True)
 mrsal.connect_to_server()
 
+
 def test_quorum_delivery_limit():
 
     # Delete existing queues and exchanges to use
@@ -125,8 +126,10 @@ def test_quorum_delivery_limit():
     log.info(f'Message count in queue "agreements_queue" after consuming= {message_count}')
     assert message_count == 0
 
+
 def consumer_callback(host: str, queue: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message: str):
     return message != b'"\\"uuid2\\""'
+
 
 def consumer_dead_letters_callback(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
     return True

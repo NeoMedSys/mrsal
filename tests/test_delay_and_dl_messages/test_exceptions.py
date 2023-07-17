@@ -12,6 +12,7 @@ from mrsal.mrsal import Mrsal
 
 log = get_logger(__name__)
 
+
 def test_connection_exceptions():
     failed_host = 'failelocalhost'
     mrsal1 = Mrsal(host=failed_host,
@@ -83,6 +84,7 @@ def test_exchange_exceptions():
                                  exchange_type=test_config.EXCHANGE_TYPE)
         assert (f'Caught a AttributeError exception caused by "NoneType" object has no attribute "exchange_declare": {err2}')
 
+
 def test_queue_exceptions():
     host = os.environ.get('RABBITMQ_HOST', 'localhost')
     mrsal = Mrsal(host=host,
@@ -99,6 +101,7 @@ def test_queue_exceptions():
         with pytest.raises(AttributeError) as err2:
             mrsal.setup_queue(queue='queue')
         assert (f'Caught a AttributeError exception caused by "NoneType" object has no attribute "queue_declare": {err2}')
+
 
 def test_bind_exceptions():
     host = os.environ.get('RABBITMQ_HOST', 'localhost')
@@ -129,6 +132,7 @@ def test_active_exchange_exceptions():
     exchange = 'not_exist_exch'
     with pytest.raises(pika.exceptions.ChannelClosedByBroker):
         mrsal.exchange_exist(exchange=exchange, exchange_type=ExchangeType.direct)
+
 
 def test_active_queue_exceptions():
     mrsal = Mrsal(host=test_config.HOST,

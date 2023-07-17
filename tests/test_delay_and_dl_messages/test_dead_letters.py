@@ -16,6 +16,7 @@ mrsal = Mrsal(host=test_config.HOST,
               verbose=True)
 mrsal.connect_to_server()
 
+
 def test_dead_letters():
 
     # Delete existing queues and exchanges to use
@@ -178,10 +179,12 @@ def test_dead_letters():
     log.info(f'Message count in queue "dl_agreements_queue" after consuming= {message_count}')
     assert message_count == 0
 
+
 def consumer_callback(host: str, queue: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message: str):
     if message == b'"\\"uuid3\\""':
         time.sleep(3)
     return message != b'"\\"uuid2\\""'
+
 
 def consumer_dead_letters_callback(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
     return True

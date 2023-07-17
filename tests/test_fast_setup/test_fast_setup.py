@@ -24,6 +24,7 @@ mrsal = Mrsal(host=test_config.HOST,
 
 mrsal.connect_to_server()
 
+
 def test_fast_setup():
 
     # Delete existing queues and exchanges to use

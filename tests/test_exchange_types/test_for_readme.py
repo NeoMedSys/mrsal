@@ -15,6 +15,7 @@ mrsal = Mrsal(host=test_config.HOST,
               virtual_host=config.V_HOST)
 mrsal.connect_to_server()
 
+
 def test_basic_workflow():
 
     # Delete existing queues and exchanges to use
@@ -76,6 +77,7 @@ def consumer_callback_with_delivery_info(host_param: str, queue_param: str, meth
         print('Salaam habibi')
         return True  # Consumed message processed correctly
     return False
+
 
 def consumer_callback(host_param: str, queue_param: str, message_param: str):
     str_message = json.loads(message_param).replace('"', '')

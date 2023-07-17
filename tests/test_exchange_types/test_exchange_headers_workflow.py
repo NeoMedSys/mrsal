@@ -15,6 +15,7 @@ mrsal = Mrsal(host=test_config.HOST,
               virtual_host=config.V_HOST)
 mrsal.connect_to_server()
 
+
 def test_headers_exchange_workflow():
 
     # Delete existing queues and exchanges to use

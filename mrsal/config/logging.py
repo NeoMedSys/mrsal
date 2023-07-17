@@ -85,6 +85,7 @@ file_handler.setLevel(LOG_LEVEL)
 stream.setFormatter(formatter)
 file_handler.setFormatter(e_formatter)
 
+
 def get_logger(name):
     log = logging.getLogger(name)
     log.setLevel(LOG_LEVEL)

@@ -14,6 +14,7 @@ mrsal = Mrsal(host=test_config.HOST,
               virtual_host=config.V_HOST)
 mrsal.connect_to_server()
 
+
 def test_delay_letter():
 
     # Delete existing queues and exchanges to use
@@ -91,6 +92,7 @@ def test_delay_letter():
     result = mrsal.setup_queue(queue='agreements_queue')
     message_count = result.method.message_count
     assert message_count == 0
+
 
 def consumer_callback(host: str, queue: str, message: str):
     return True

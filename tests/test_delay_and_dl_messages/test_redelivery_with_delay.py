@@ -16,6 +16,7 @@ mrsal = Mrsal(host=test_config.HOST,
               verbose=True)
 mrsal.connect_to_server()
 
+
 def test_redelivery_with_delay():
 
     # Delete existing queues and exchanges to use
@@ -105,6 +106,7 @@ def test_redelivery_with_delay():
     message_count = result.method.message_count
     log.info(f'Message count in queue "agreements_queue" after consuming= {message_count}')
     assert message_count == 0
+
 
 def consumer_callback(host: str, queue: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message: str):
     return message != b'"\\"uuid2\\""'

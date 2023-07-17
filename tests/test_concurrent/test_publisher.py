@@ -31,6 +31,7 @@ INACTIVITY_TIMEOUT = 10
 ROUTING_KEY = "PROCESS FOR EMERGENCY"
 MESSAGE_ID = "HOSPITAL_EMERGENCY_CT_"
 
+
 def test_concurrent_consumer():
     # ------------------------------------------
     # Publisher:

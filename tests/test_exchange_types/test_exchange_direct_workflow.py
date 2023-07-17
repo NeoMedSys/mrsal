@@ -15,6 +15,7 @@ mrsal = Mrsal(host=test_config.HOST,
               virtual_host=config.V_HOST)
 mrsal.connect_to_server()
 
+
 def test_direct_exchange_workflow():
 
     # Delete existing queues and exchanges to use
@@ -119,8 +120,10 @@ def test_direct_exchange_workflow():
     message_count2 = result2.method.message_count
     assert message_count2 == 0
 
+
 def consumer_callback_with_delivery_info(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
     return True
+
 
 def consumer_callback(host_param: str, queue_param: str, message_param: str):
     return True
