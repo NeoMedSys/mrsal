@@ -10,9 +10,9 @@ from mrsal.mrsal import Mrsal
 log = get_logger(__name__)
 
 mrsal = Mrsal(host=test_config.HOST,
-             port=config.RABBITMQ_PORT,
-             credentials=config.RABBITMQ_CREDENTIALS,
-             virtual_host=config.V_HOST)
+              port=config.RABBITMQ_PORT,
+              credentials=config.RABBITMQ_CREDENTIALS,
+              virtual_host=config.V_HOST)
 mrsal.connect_to_server()
 
 def test_direct_exchange_workflow():
@@ -25,30 +25,30 @@ def test_direct_exchange_workflow():
 
     # Setup exchange
     exch_result: pika.frame.Method = mrsal.setup_exchange(exchange='agreements',
-                                                         exchange_type='direct')
-    assert exch_result != None
+                                                          exchange_type='direct')
+    assert exch_result is not None
     # ------------------------------------------
 
     # Setup queue for berlin agreements
     q_result1: pika.frame.Method = mrsal.setup_queue(queue='agreements_berlin_queue')
-    assert q_result1 != None
+    assert q_result1 is not None
 
     # Bind queue to exchange with binding key
     qb_result1: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
-                                                             routing_key='berlin agreements',
-                                                             queue='agreements_berlin_queue')
-    assert qb_result1 != None
+                                                              routing_key='berlin agreements',
+                                                              queue='agreements_berlin_queue')
+    assert qb_result1 is not None
     # ------------------------------------------
 
     # Setup queue for madrid agreements
     q_result2: pika.frame.Method = mrsal.setup_queue(queue='agreements_madrid_queue')
-    assert q_result2 != None
+    assert q_result2 is not None
 
     # Bind queue to exchange with binding key
     qb_result2: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
-                                                             routing_key='madrid agreements',
-                                                             queue='agreements_madrid_queue')
-    assert qb_result2 != None
+                                                              routing_key='madrid agreements',
+                                                              queue='agreements_madrid_queue')
+    assert qb_result2 is not None
     # ------------------------------------------
 
     # Publisher:
@@ -63,8 +63,8 @@ def test_direct_exchange_workflow():
     # Message ("uuid2") is published to the exchange and it's routed to queue2
     message2 = 'uuid2'
     mrsal.publish_message(exchange='agreements',
-                         routing_key='madrid agreements',
-                         message=json.dumps(message2), prop=prop1)
+                          routing_key='madrid agreements',
+                          message=json.dumps(message2), prop=prop1)
 
     prop2 = pika.BasicProperties(
         app_id='test_exchange_direct',
@@ -76,8 +76,8 @@ def test_direct_exchange_workflow():
     # Message ("uuid1") is published to the exchange and it's routed to queue1
     message1 = 'uuid1'
     mrsal.publish_message(exchange='agreements',
-                         routing_key='berlin agreements',
-                         message=json.dumps(message1), prop=prop2)
+                          routing_key='berlin agreements',
+                          message=json.dumps(message1), prop=prop2)
     # ------------------------------------------
 
     time.sleep(1)
@@ -124,6 +124,7 @@ def consumer_callback_with_delivery_info(host_param: str, queue_param: str, meth
 
 def consumer_callback(host_param: str, queue_param: str, message_param: str):
     return True
+
 
 if __name__ == '__main__':
     test_direct_exchange_workflow()

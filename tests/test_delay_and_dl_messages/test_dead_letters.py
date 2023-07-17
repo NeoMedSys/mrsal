@@ -10,10 +10,10 @@ from mrsal.mrsal import Mrsal
 log = get_logger(__name__)
 
 mrsal = Mrsal(host=test_config.HOST,
-             port=config.RABBITMQ_PORT,
-             credentials=config.RABBITMQ_CREDENTIALS,
-             virtual_host=config.V_HOST,
-             verbose=True)
+              port=config.RABBITMQ_PORT,
+              credentials=config.RABBITMQ_CREDENTIALS,
+              virtual_host=config.V_HOST,
+              verbose=True)
 mrsal.connect_to_server()
 
 def test_dead_letters():
@@ -27,37 +27,37 @@ def test_dead_letters():
 
     # Setup dead letters exchange
     exch_result1: pika.frame.Method = mrsal.setup_exchange(exchange='dl_agreements',
-                                                          exchange_type='direct')
-    assert exch_result1 != None
+                                                           exchange_type='direct')
+    assert exch_result1 is not None
 
     # Setup main exchange
     exch_result2: pika.frame.Method = mrsal.setup_exchange(exchange='agreements',
-                                                          exchange_type='direct')
-    assert exch_result2 != None
+                                                           exchange_type='direct')
+    assert exch_result2 is not None
     # ------------------------------------------
 
     # Setup main queue with arguments where we specify DL_EXCHANGE, DL_ROUTING_KEY and TTL
     q_result1: pika.frame.Method = mrsal.setup_queue(queue='agreements_queue',
-                                                    arguments={'x-dead-letter-exchange': 'dl_agreements',
-                                                               'x-dead-letter-routing-key': 'dl_agreements_key',
-                                                               'x-message-ttl': test_config.MESSAGE_TTL})
-    assert q_result1 != None
+                                                     arguments={'x-dead-letter-exchange': 'dl_agreements',
+                                                                'x-dead-letter-routing-key': 'dl_agreements_key',
+                                                                'x-message-ttl': test_config.MESSAGE_TTL})
+    assert q_result1 is not None
 
     # Bind main queue to the main exchange with routing_key
     qb_result1: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
-                                                             routing_key='agreements_key',
-                                                             queue='agreements_queue')
-    assert qb_result1 != None
+                                                              routing_key='agreements_key',
+                                                              queue='agreements_queue')
+    assert qb_result1 is not None
     # ------------------------------------------
 
     # Bind DL_QUEUE to DL_EXCHANGE with DL_ROUTING_KEY
     q_result2: pika.frame.Method = mrsal.setup_queue(queue='dl_agreements_queue')
-    assert q_result2 != None
+    assert q_result2 is not None
 
     qb_result2: pika.frame.Method = mrsal.setup_queue_binding(exchange='dl_agreements',
-                                                             routing_key='dl_agreements_key',
-                                                             queue='dl_agreements_queue')
-    assert qb_result2 != None
+                                                              routing_key='dl_agreements_key',
+                                                              queue='dl_agreements_queue')
+    assert qb_result2 is not None
     # ------------------------------------------
 
     """
@@ -76,8 +76,8 @@ def test_dead_letters():
         delivery_mode=pika.DeliveryMode.Persistent,
         headers=None)
     mrsal.publish_message(exchange='agreements',
-                         routing_key='agreements_key',
-                         message=json.dumps(message1), prop=prop1)
+                          routing_key='agreements_key',
+                          message=json.dumps(message1), prop=prop1)
 
     message2 = 'uuid2'
     prop2 = pika.BasicProperties(
@@ -88,8 +88,8 @@ def test_dead_letters():
         delivery_mode=pika.DeliveryMode.Persistent,
         headers=None)
     mrsal.publish_message(exchange='agreements',
-                         routing_key='agreements_key',
-                         message=json.dumps(message2), prop=prop2)
+                          routing_key='agreements_key',
+                          message=json.dumps(message2), prop=prop2)
 
     message3 = 'uuid3'
     prop3 = pika.BasicProperties(
@@ -100,8 +100,8 @@ def test_dead_letters():
         delivery_mode=pika.DeliveryMode.Persistent,
         headers=None)
     mrsal.publish_message(exchange='agreements',
-                         routing_key='agreements_key',
-                         message=json.dumps(message3), prop=prop3)
+                          routing_key='agreements_key',
+                          message=json.dumps(message3), prop=prop3)
 
     message4 = 'uuid4'
     prop4 = pika.BasicProperties(
@@ -112,11 +112,11 @@ def test_dead_letters():
         delivery_mode=pika.DeliveryMode.Persistent,
         headers=None)
     mrsal.publish_message(exchange='agreements',
-                         routing_key='agreements_key',
-                         message=json.dumps(message4), prop=prop4)
+                          routing_key='agreements_key',
+                          message=json.dumps(message4), prop=prop4)
     # ------------------------------------------
 
-    log.info(f'===== Start consuming from "agreements_queue" ========')
+    log.info('===== Start consuming from "agreements_queue" ========')
     """
     Consumer from main queue
       Message ("uuid1"):
@@ -152,7 +152,7 @@ def test_dead_letters():
     assert message_count == 2
     # ------------------------------------------
 
-    log.info(f'===== Start consuming from "dl_agreements_queue" ========')
+    log.info('===== Start consuming from "dl_agreements_queue" ========')
     """
     Consumer from dead letters queue
       Message ("uuid2"):

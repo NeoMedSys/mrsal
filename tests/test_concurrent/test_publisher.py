@@ -1,11 +1,9 @@
 """
-This test is just a message publisher that can be used after running 
-the concurrent consumers in "test_concurrent_consumers.py" to test "inactivity_timeout" 
+This test is just a message publisher that can be used after running\
+the concurrent consumers in "test_concurrent_consumers.py" to test "inactivity_timeout".
 """
 
-import concurrent.futures
 import json
-import time
 
 import pika
 from pika.exchange_type import ExchangeType
@@ -52,7 +50,6 @@ def test_concurrent_consumer():
     # ------------------------------------------
 
     mrsal.close_connection()
-
 
 
 if __name__ == "__main__":

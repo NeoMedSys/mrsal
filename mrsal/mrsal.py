@@ -32,7 +32,7 @@ class Mrsal:
         :prop int blocked_connection_timeout: blocked_connection_timeout is the timeout, in seconds,
             for the connection to remain blocked; if the timeout expires, the connection will be torn down
         :prop int prefetch_count: Specifies a prefetch window in terms of whole messages.
-        :prop bool ssl: Set this flag to true if you want to connect externally to the rabbitserver. 
+        :prop bool ssl: Set this flag to true if you want to connect externally to the rabbitserver.
     """
     host: str
     port: str
@@ -105,7 +105,7 @@ class Mrsal:
         exchange does not already exist, the server MUST raise a channel
         exception with reply code 404 (not found).
 
-        :param str exchange: The exchange name 
+        :param str exchange: The exchange name
         :param str exchange_type: The exchange type to use
         :param bool passive: Perform a declare or just check to see if it exists
         :param bool durable: Survive a reboot of RabbitMQ
@@ -311,14 +311,14 @@ class Mrsal:
         """
         Setup consumer:
             1- Consumer start consuming the messages from the queue.
-            2- If `inactivity_timeout` is given (in seconds) the consumer will be canceled when the time of inactivity 
+            2- If `inactivity_timeout` is given (in seconds) the consumer will be canceled when the time of inactivity
                 exceeds inactivity_timeout.
             3- Send the consumed message to callback method to be processed, and then the message can be either:
-                - Processed, then correctly-acknowledge and deleted from QUEUE or 
+                - Processed, then correctly-acknowledge and deleted from QUEUE or
                 - Failed to process, negatively-acknowledged and then the message will be rejected and either
                     - Redelivered if 'x-retry-limit' and 'x-retry' are configured in 'BasicProperties.headers'.
                     - Requeued if requeue is True
-                    - Sent to dead-letters-exchange if it configured and 
+                    - Sent to dead-letters-exchange if it configured and
                         - requeue is False
                         - requeue is True and requeue attempt fails.
                     - Unless deleted.
@@ -327,7 +327,7 @@ class Mrsal:
         :param str queue: The queue name to consume
         :param Callable callback: Method where received messages are sent to be processed
         :param Tuple callback_args: Tuple of arguments for callback method
-        :param float inactivity_timeout: 
+        :param float inactivity_timeout:
             - if a number is given (in seconds), will cause the method to yield (None, None, None) after the
                 given period of inactivity.
             - If None is given (default), then the method blocks until the next event arrives.
@@ -337,11 +337,11 @@ class Mrsal:
                              dead-lettered.
         :param bool callback_with_delivery_info: Specify whether the callback method needs delivery info.
                 - spec.Basic.Deliver: Captures the fields for delivered message. E.g:(consumer_tag, delivery_tag, redelivered, exchange, routing_key).
-                - spec.BasicProperties: Captures the client message sent to the server. E.g:(CONTENT_TYPE, DELIVERY_MODE, MESSAGE_ID, APP_ID). 
-        :param bool fast_setup: 
-                - when True, the method will create the specified exchange, queue 
-                and bind them together using the routing kye. 
-                - If False, this method will check if the specified exchange and queue 
+                - spec.BasicProperties: Captures the client message sent to the server. E.g:(CONTENT_TYPE, DELIVERY_MODE, MESSAGE_ID, APP_ID).
+        :param bool fast_setup:
+                - when True, the method will create the specified exchange, queue
+                and bind them together using the routing kye.
+                - If False, this method will check if the specified exchange and queue
                 already exist before start consuming.
         """
         print_thread_index = f"thread={str(thread_num)} -> " if thread_num is not None else ""
@@ -363,8 +363,8 @@ class Mrsal:
                 raise pika.exceptions.ChannelClosedByBroker(404, str(err))
         try:
             self.consumer_tag = None
-            method_frame: spec.Basic.Deliver
-            prop: spec.BasicProperties
+            method_frame: pika.spec.Basic.Deliver
+            properties: pika.spec.BasicProperties
             body: Any
             for method_frame, properties, body in \
                     self._channel.consume(queue=queue, inactivity_timeout=inactivity_timeout):
@@ -374,7 +374,6 @@ class Mrsal:
                         self.consumer_tag = method_frame.consumer_tag
                         app_id = properties.app_id
                         msg_id = properties.message_id
-                        
                         if self.verbose:
                             self.log.info(
                                 f"""
@@ -399,7 +398,6 @@ class Mrsal:
                             self.log.warning(f'{print_thread_index} Could not process the message coming from the app={app_id} with messageId={msg_id}.')
                             self._channel.basic_nack(delivery_tag=method_frame.delivery_tag, requeue=requeue)
                             self.log.warning(f'{print_thread_index} Message rejected')
-                            
                             if is_redelivery_configured(properties):
                                 msg_headers = properties.headers
                                 x_retry = msg_headers[config.RETRY_KEY]
@@ -496,11 +494,11 @@ class Mrsal:
         :param str routing_key: The routing key to bind on
         :param bytes body: The message body; empty string if no body
         :param pika.spec.BasicProperties properties: message properties
-        :param bool fast_setup: 
-                - when True, will the method create the specified exchange, queue 
-                and bind them together using the routing kye. 
-                - If False, this method will check if the specified exchange and queue 
-                already exist before publishing. 
+        :param bool fast_setup:
+                - when True, will the method create the specified exchange, queue
+                and bind them together using the routing kye.
+                - If False, this method will check if the specified exchange and queue
+                already exist before publishing.
 
         :raises UnroutableError: raised when a message published in
             publisher-acknowledgments mode (see

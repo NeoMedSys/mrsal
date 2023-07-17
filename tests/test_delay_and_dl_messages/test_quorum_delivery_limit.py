@@ -1,7 +1,7 @@
 """
-- The quorum queue is a modern queue type for RabbitMQ implementing a durable, replicated FIFO queue based on the Raft consensus algorithm. 
-- It is available as of RabbitMQ 3.8.0.
-- It is possible to set a delivery limit for a queue using a policy argument, delivery-limit.
+- The quorum queue is a modern queue type for RabbitMQ implementing a durable, replicated FIFO queue based on the Raft consensus algorithm. \
+- It is available as of RabbitMQ 3.8.0.\
+- It is possible to set a delivery limit for a queue using a policy argument, delivery-limit.\
 
 For more info: https://www.rabbitmq.com/quorum-queues.html
 """
@@ -34,27 +34,28 @@ def test_quorum_delivery_limit():
         # Queue of quorum type
         'x-queue-type': 'quorum',
         # Set a delivery limit for a queue using a policy argument, delivery-limit.
-        # When a message has been returned more times than the limit the message will be dropped 
+        # When a message has been returned more times than the limit the message will be dropped \
         # or dead-lettered(if a DLX is configured).
-        'x-delivery-limit': 3} 
+        'x-delivery-limit': 3}
+
     # ------------------------------------------
 
     # Setup main exchange
     exch_result1: pika.frame.Method = mrsal.setup_exchange(exchange='agreements',
                                                            exchange_type='direct')
-    assert exch_result1 != None
+    assert exch_result1 is not None
     # ------------------------------------------
 
     # Setup main queue with arguments
     q_result1: pika.frame.Method = mrsal.setup_queue(queue='agreements_queue',
                                                      arguments=queue_arguments)
-    assert q_result1 != None
+    assert q_result1 is not None
 
     # Bind main queue to the main exchange with routing_key
     qb_result1: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
                                                               routing_key='agreements_key',
                                                               queue='agreements_queue')
-    assert qb_result1 != None
+    assert qb_result1 is not None
     # ------------------------------------------
 
     """
@@ -96,7 +97,7 @@ def test_quorum_delivery_limit():
     log.info(f'Message count in queue "agreements_queue" before consuming= {message_count}')
     assert message_count == 2
 
-    log.info(f'===== Start consuming from "agreements_queue" ========')
+    log.info('===== Start consuming from "agreements_queue" ========')
     """
     Consumer from main queue
       Message ("uuid1"):

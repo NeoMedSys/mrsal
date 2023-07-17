@@ -35,17 +35,17 @@ def test_concurrent_consumer():
     # Setup exchange
     exch_result: pika.frame.Method = mrsal.setup_exchange(exchange=EXCHANGE,
                                                           exchange_type=EXCHANGE_TYPE)
-    assert exch_result != None
+    assert exch_result is not None
     # ------------------------------------------
     # Setup queue for madrid agreements
     q_result: pika.frame.Method = mrsal.setup_queue(queue=QUEUE_EMERGENCY)
-    assert q_result != None
+    assert q_result is not None
 
     # Bind queue to exchange with binding key
     qb_result: pika.frame.Method = mrsal.setup_queue_binding(exchange=EXCHANGE,
                                                              routing_key=ROUTING_KEY,
                                                              queue=QUEUE_EMERGENCY)
-    assert qb_result != None
+    assert qb_result is not None
     # ------------------------------------------
     # Publisher:
     # Publish NUM_MESSAGES to the queue

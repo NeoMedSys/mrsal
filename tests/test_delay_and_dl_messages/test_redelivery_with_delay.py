@@ -22,25 +22,22 @@ def test_redelivery_with_delay():
     mrsal.exchange_delete(exchange='agreements')
     mrsal.queue_delete(queue='agreements_queue')
     # ------------------------------------------
-    queue_arguments = None
-    # ------------------------------------------
 
     # Setup main exchange with delay type
     exch_result1: pika.frame.Method = mrsal.setup_exchange(exchange='agreements',
                                                            exchange_type='x-delayed-message',
                                                            arguments={'x-delayed-type': 'direct'})
-    assert exch_result1 != None
+    assert exch_result1 is not None
     # ------------------------------------------
-
     # Setup main queue
     q_result1: pika.frame.Method = mrsal.setup_queue(queue='agreements_queue')
-    assert q_result1 != None
+    assert q_result1 is not None
 
     # Bind main queue to the main exchange with routing_key
     qb_result1: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
                                                               routing_key='agreements_key',
                                                               queue='agreements_queue')
-    assert qb_result1 != None
+    assert qb_result1 is not None
     # ------------------------------------------
 
     """
@@ -82,7 +79,7 @@ def test_redelivery_with_delay():
     log.info(f'Message count in queue "agreements_queue" before consuming= {message_count}')
     assert message_count == 2
 
-    log.info(f'===== Start consuming from "agreements_queue" ========')
+    log.info('===== Start consuming from "agreements_queue" ========')
     """
     Consumer from main queue
       Message ("uuid1"):

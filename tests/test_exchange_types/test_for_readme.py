@@ -10,9 +10,9 @@ from mrsal.mrsal import Mrsal
 log = get_logger(__name__)
 
 mrsal = Mrsal(host=test_config.HOST,
-             port=config.RABBITMQ_PORT,
-             credentials=config.RABBITMQ_CREDENTIALS,
-             virtual_host=config.V_HOST)
+              port=config.RABBITMQ_PORT,
+              credentials=config.RABBITMQ_CREDENTIALS,
+              virtual_host=config.V_HOST)
 mrsal.connect_to_server()
 
 def test_basic_workflow():
@@ -34,22 +34,22 @@ def test_basic_workflow():
     # Message is published to the exchange and it's routed to queue
     message_body = 'Hello'
     mrsal.publish_message(exchange='friendship',
-                         exchange_type='direct',
-                         queue='friendship_queue',
-                         routing_key='friendship_key',
-                         message=json.dumps(message_body), 
-                         prop=prop,
-                         fast_setup=True)
+                          exchange_type='direct',
+                          queue='friendship_queue',
+                          routing_key='friendship_key',
+                          message=json.dumps(message_body),
+                          prop=prop,
+                          fast_setup=True)
     # ------------------------------------------
 
     time.sleep(1)
-    # Confirm messages are routed to respected queue
+    # Confirm messages are routed to respected queue.
     result1 = mrsal.setup_queue(queue='friendship_queue', passive=True)
     message_count1 = result1.method.message_count
     assert message_count1 == 1
     # ------------------------------------------
 
-    # Start consumer 
+    # Start consumer.
     mrsal.start_consumer(
         queue='friendship_queue',
         callback=consumer_callback_with_delivery_info,
@@ -83,6 +83,7 @@ def consumer_callback(host_param: str, queue_param: str, message_param: str):
         print('Salaam habibi')
         return True  # Consumed message processed correctly
     return False
+
 
 if __name__ == '__main__':
     test_basic_workflow()

@@ -10,9 +10,9 @@ from mrsal.mrsal import Mrsal
 log = get_logger(__name__)
 
 mrsal = Mrsal(host=test_config.HOST,
-             port=config.RABBITMQ_PORT,
-             credentials=config.RABBITMQ_CREDENTIALS,
-             virtual_host=config.V_HOST)
+              port=config.RABBITMQ_PORT,
+              credentials=config.RABBITMQ_CREDENTIALS,
+              virtual_host=config.V_HOST)
 mrsal.connect_to_server()
 
 def test_topic_exchange_workflow():
@@ -22,7 +22,7 @@ def test_topic_exchange_workflow():
 
     BINDING_KEY_1: str = 'agreements.eu.berlin.#'  # Berlin agreements
     BINDING_KEY_2: str = 'agreements.*.*.september.#'  # Agreements of september
-    BINDING_KEY_3: str = 'agreements.#'  # All agreements
+    # BINDING_KEY_3: str = 'agreements.#'  # All agreements
     # ------------------------------------------
 
     # Delete existing queues and exchanges to use
@@ -32,30 +32,30 @@ def test_topic_exchange_workflow():
 
     # Setup exchange
     exch_result: pika.frame.Method = mrsal.setup_exchange(exchange='agreements',
-                                                         exchange_type='topic')
-    assert exch_result != None
+                                                          exchange_type='topic')
+    assert exch_result is not None
     # ------------------------------------------
 
     # Setup queue for berlin agreements
     q_result1: pika.frame.Method = mrsal.setup_queue(queue='berlin_agreements')
-    assert q_result1 != None
+    assert q_result1 is not None
 
     # Bind queue to exchange with binding key
     qb_result1: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
-                                                             routing_key=BINDING_KEY_1,
-                                                             queue='berlin_agreements')
-    assert qb_result1 != None
+                                                              routing_key=BINDING_KEY_1,
+                                                              queue='berlin_agreements')
+    assert qb_result1 is not None
     # ----------------------------------
 
     # Setup queue for september agreements
     q_result2: pika.frame.Method = mrsal.setup_queue(queue='september_agreements')
-    assert q_result2 != None
+    assert q_result2 is not None
 
     # Bind queue to exchange with binding key
     qb_result2: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
-                                                             routing_key=BINDING_KEY_2,
-                                                             queue='september_agreements')
-    assert qb_result2 != None
+                                                              routing_key=BINDING_KEY_2,
+                                                              queue='september_agreements')
+    assert qb_result2 is not None
     # ----------------------------------
 
     # Publisher:
@@ -70,8 +70,8 @@ def test_topic_exchange_workflow():
         delivery_mode=pika.DeliveryMode.Persistent,
         headers=None)
     mrsal.publish_message(exchange='agreements',
-                         routing_key=ROUTING_KEY_1,
-                         message=json.dumps(message1), prop=prop1)
+                          routing_key=ROUTING_KEY_1,
+                          message=json.dumps(message1), prop=prop1)
 
     # Message ("uuid2") is published to the exchange will be routed to queue2
     message2 = 'uuid2'
@@ -83,8 +83,8 @@ def test_topic_exchange_workflow():
         delivery_mode=pika.DeliveryMode.Persistent,
         headers=None)
     mrsal.publish_message(exchange='agreements',
-                         routing_key=ROUTING_KEY_2,
-                         message=json.dumps(message2), prop=prop2)
+                          routing_key=ROUTING_KEY_2,
+                          message=json.dumps(message2), prop=prop2)
     # ----------------------------------
 
     time.sleep(1)

@@ -18,9 +18,9 @@ log = get_logger(__name__)
 # )
 
 mrsal = Mrsal(host=test_config.HOST,
-             port=config.RABBITMQ_PORT,
-             credentials=config.RABBITMQ_CREDENTIALS,
-             virtual_host=config.V_HOST)
+              port=config.RABBITMQ_PORT,
+              credentials=config.RABBITMQ_CREDENTIALS,
+              virtual_host=config.V_HOST)
 
 mrsal.connect_to_server()
 
@@ -32,12 +32,12 @@ def test_fast_setup():
     # ------------------------------------------
 
     prop = pika.BasicProperties(
-            app_id='test_fast_setup',
-            message_id='fast_setup',
-            content_type=test_config.CONTENT_TYPE,
-            content_encoding=test_config.CONTENT_ENCODING,
-            delivery_mode=pika.DeliveryMode.Persistent,
-            headers=None)
+        app_id='test_fast_setup',
+        message_id='fast_setup',
+        content_type=test_config.CONTENT_TYPE,
+        content_encoding=test_config.CONTENT_ENCODING,
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers=None)
 
     mrsal.publish_message(
         exchange='friendship',

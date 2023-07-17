@@ -42,29 +42,29 @@ def test_direct_exchange_workflow():
     # Setup exchange
     exch_result: pika.frame.Method = mrsal.setup_exchange(exchange='agreements',
                                                           exchange_type='direct')
-    assert exch_result != None
+    assert exch_result is not None
     # ------------------------------------------
 
     # Setup queue for berlin agreements
     q_result1: pika.frame.Method = mrsal.setup_queue(queue='agreements_berlin_queue')
-    assert q_result1 != None
+    assert q_result1 is not None
 
     # Bind queue to exchange with binding key
     qb_result1: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
                                                               routing_key='berlin agreements',
                                                               queue='agreements_berlin_queue')
-    assert qb_result1 != None
+    assert qb_result1 is not None
     # ------------------------------------------
 
     # Setup queue for madrid agreements
     q_result2: pika.frame.Method = mrsal.setup_queue(queue='agreements_madrid_queue')
-    assert q_result2 != None
+    assert q_result2 is not None
 
     # Bind queue to exchange with binding key
     qb_result2: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
                                                               routing_key='madrid agreements',
                                                               queue='agreements_madrid_queue')
-    assert qb_result2 != None
+    assert qb_result2 is not None
     # ------------------------------------------
 
     # Publisher:

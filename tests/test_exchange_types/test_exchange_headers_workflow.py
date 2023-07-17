@@ -26,29 +26,29 @@ def test_headers_exchange_workflow():
     # Setup exchange
     exch_result: pika.frame.Method = mrsal.setup_exchange(exchange='agreements',
                                                           exchange_type='headers')
-    assert exch_result != None
+    assert exch_result is not None
     # ------------------------------------------
 
     # Setup queue
     q_result1: pika.frame.Method = mrsal.setup_queue(queue='zip_report')
-    assert q_result1 != None
+    assert q_result1 is not None
 
     # Bind queue to exchange with arguments
     qb_result1: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
                                                               queue='zip_report',
                                                               arguments={'x-match': 'all', 'format': 'zip', 'type': 'report'})
-    assert qb_result1 != None
+    assert qb_result1 is not None
     # ------------------------------------------
 
     # Setup queue
     q_result2: pika.frame.Method = mrsal.setup_queue(queue='pdf_report')
-    assert q_result2 != None
+    assert q_result2 is not None
 
     # Bind queue to exchange with arguments
     qb_result2: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
                                                               queue='pdf_report',
                                                               arguments={'x-match': 'any', 'format': 'pdf', 'type': 'log'})
-    assert qb_result2 != None
+    assert qb_result2 is not None
     # ------------------------------------------
 
     # Publisher:

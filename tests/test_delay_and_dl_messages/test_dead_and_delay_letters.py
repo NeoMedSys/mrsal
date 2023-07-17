@@ -28,14 +28,14 @@ def test_delay_and_dead_letters():
     # Setup dead letters exchange
     exch_result1: pika.frame.Method = mrsal.setup_exchange(exchange='dl_agreements',
                                                            exchange_type='direct')
-    assert exch_result1 != None
+    assert exch_result1 is not None
 
     # Setup main exchange with 'x-delayed-message' type
     # and arguments where we specify how the messages will be routed after the delay period specified
     exch_result2: pika.frame.Method = mrsal.setup_exchange(exchange='agreements',
                                                            exchange_type='x-delayed-message',
                                                            arguments={'x-delayed-type': 'direct'})
-    assert exch_result2 != None
+    assert exch_result2 is not None
     # ------------------------------------------
 
     # Setup main queue with arguments where we specify DL_EXCHANGE, DL_ROUTING_KEY and TTL
@@ -43,23 +43,23 @@ def test_delay_and_dead_letters():
                                                      arguments={'x-dead-letter-exchange': 'dl_agreements',
                                                                 'x-dead-letter-routing-key': 'dl_agreements_key',
                                                                 'x-message-ttl': test_config.MESSAGE_TTL})
-    assert q_result1 != None
+    assert q_result1 is not None
 
     # Bind main queue to the main exchange with routing_key
     qb_result1: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
                                                               routing_key='agreements_key',
                                                               queue='agreements_queue')
-    assert qb_result1 != None
+    assert qb_result1 is not None
     # ------------------------------------------
 
     # Bind DL_QUEUE to DL_EXCHANGE with DL_ROUTING_KEY
     q_result2: pika.frame.Method = mrsal.setup_queue(queue='dl_agreements_queue')
-    assert q_result2 != None
+    assert q_result2 is not None
 
     qb_result2: pika.frame.Method = mrsal.setup_queue_binding(exchange='dl_agreements',
                                                               routing_key='dl_agreements_key',
                                                               queue='dl_agreements_queue')
-    assert qb_result2 != None
+    assert qb_result2 is not None
     # ------------------------------------------
 
     """
@@ -191,7 +191,7 @@ def consumer_callback(host: str, queue: str, method_frame: pika.spec.Basic.Deliv
         time.sleep(3)
     return message != b'"\\"uuid2\\""'
 
-def consumer_dead_letters_callback(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties,message_param: str):
+def consumer_dead_letters_callback(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
     return True
 
 

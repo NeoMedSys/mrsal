@@ -25,18 +25,18 @@ def test_delay_letter():
     exch_result: pika.frame.Method = mrsal.setup_exchange(exchange='agreements',
                                                           exchange_type='x-delayed-message',
                                                           arguments={'x-delayed-type': 'direct'})
-    assert exch_result != None
+    assert exch_result is not None
     # ------------------------------------------
 
     # Setup queue
     q_result: pika.frame.Method = mrsal.setup_queue(queue='agreements_queue')
-    assert q_result != None
+    assert q_result is not None
 
     # Bind queue to exchange with routing_key
     qb_result: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
                                                              routing_key='agreements_key',
                                                              queue='agreements_queue')
-    assert qb_result != None
+    assert qb_result is not None
     # ------------------------------------------
 
     """
