@@ -1,12 +1,12 @@
 import nox
 
-# @nox.session()
-# def tests(session):
-#     session.run('poetry', 'install', '--with', 'dev')
-#     session.run('poetry', 'run', 'pytest', './tests', '--junitxml=./junit.xml')
-#     # coverage
-#     session.run('poetry', 'run', 'coverage', 'run', '--source=.', '--data-file', './.coverage', '-m', 'pytest', './tests')
-#     session.run('poetry', 'run', 'coverage', 'xml')
+@nox.session()
+def tests(session):
+    session.run('poetry', 'install', '--with', 'dev')
+    session.run('poetry', 'run', 'pytest', './tests', '--junitxml=./junit.xml')
+    # coverage
+    session.run('poetry', 'run', 'coverage', 'run', '--source=.', '--data-file', './.coverage', '-m', 'pytest', './tests')
+    session.run('poetry', 'run', 'coverage', 'xml')
 
 
 @nox.session()
