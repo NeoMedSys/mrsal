@@ -1,5 +1,6 @@
 """
-- The quorum queue is a modern queue type for RabbitMQ implementing a durable, replicated FIFO queue based on the Raft consensus algorithm. \
+- The quorum queue is a modern queue type for RabbitMQ implementing a durable, \
+    replicated FIFO queue based on the Raft consensus algorithm. \
 - It is available as of RabbitMQ 3.8.0.\
 - It is possible to set a delivery limit for a queue using a policy argument, delivery-limit.\
 
@@ -127,11 +128,13 @@ def test_quorum_delivery_limit():
     assert message_count == 0
 
 
-def consumer_callback(host: str, queue: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message: str):
+def consumer_callback(host: str, queue: str, method_frame: pika.spec.Basic.Deliver,
+                      properties: pika.spec.BasicProperties, message: str):
     return message != b'"\\"uuid2\\""'
 
 
-def consumer_dead_letters_callback(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
+def consumer_dead_letters_callback(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver,
+                                   properties: pika.spec.BasicProperties, message_param: str):
     return True
 
 

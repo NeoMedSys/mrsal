@@ -1,7 +1,8 @@
 from typing import Tuple, Dict
 import os
 
-RABBITMQ_SERVICE_NAME_DOCKER_COMPOSE: str = os.environ.get('RABBITMQ_SERVICE_NAME')  # Service name in docker-compose.yaml
+# Service name in docker-compose.yaml
+RABBITMQ_SERVICE_NAME_DOCKER_COMPOSE: str = os.environ.get('RABBITMQ_SERVICE_NAME')
 RABBITMQ_SERVER: str = 'localhost'
 V_HOST: str = os.environ.get('RABBITMQ_DEFAULT_VHOST', 'myMrsalHost')
 RABBITMQ_PORT: int = os.environ.get('RABBITMQ_PORT', 5672)

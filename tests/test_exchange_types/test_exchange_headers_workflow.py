@@ -37,7 +37,8 @@ def test_headers_exchange_workflow():
     # Bind queue to exchange with arguments
     qb_result1: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
                                                               queue='zip_report',
-                                                              arguments={'x-match': 'all', 'format': 'zip', 'type': 'report'})
+                                                              arguments={'x-match': 'all', 'format': 'zip',
+                                                                         'type': 'report'})
     assert qb_result1 is not None
     # ------------------------------------------
 
@@ -48,7 +49,8 @@ def test_headers_exchange_workflow():
     # Bind queue to exchange with arguments
     qb_result2: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
                                                               queue='pdf_report',
-                                                              arguments={'x-match': 'any', 'format': 'pdf', 'type': 'log'})
+                                                              arguments={'x-match': 'any', 'format': 'pdf',
+                                                                         'type': 'log'})
     assert qb_result2 is not None
     # ------------------------------------------
 
@@ -123,7 +125,8 @@ def test_headers_exchange_workflow():
     assert message_count2 == 0
 
 
-def consumer_callback(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
+def consumer_callback(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver,
+                      properties: pika.spec.BasicProperties, message_param: str):
     return True
 
 

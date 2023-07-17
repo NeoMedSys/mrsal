@@ -89,7 +89,8 @@ def test_concurrent_consumer():
     mrsal.close_connection()
 
 
-def consumer_callback_with_delivery_info(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
+def consumer_callback_with_delivery_info(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver,
+                                         properties: pika.spec.BasicProperties, message_param: str):
     time.sleep(5)
     return True
 

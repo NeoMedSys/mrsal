@@ -13,7 +13,8 @@ PIPE = 55
 LOG_LEVEL = logging.INFO
 LOG_LEVEL_E = logging.WARNING
 LOGFORMAT = '%(log_color)s[%(asctime)s] [%(levelname)-8s] %(reset)s | %(log_color)s%(message)s%(reset)s'
-LOGFORMAT_ERROR = '%(log_color)s%(asctime)-8s%(reset)s | %(log_color)s%(levelname)-8s%(reset)s | %(log_color)s%(message)s%(reset)s'
+LOGFORMAT_ERROR = '%(log_color)s%(asctime)-8s%(reset)s | %(log_color)s%(levelname)-8s%(reset)s | \
+    %(log_color)s%(message)s%(reset)s'
 
 ROOT = os.getcwd()  # os.environ['PYTHONPATH']
 

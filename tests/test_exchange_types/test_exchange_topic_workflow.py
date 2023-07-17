@@ -129,7 +129,8 @@ def test_topic_exchange_workflow():
     assert message_count2 == 0
 
 
-def consumer_callback(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
+def consumer_callback(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver,
+                      properties: pika.spec.BasicProperties, message_param: str):
     return True
 
 

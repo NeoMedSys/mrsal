@@ -89,7 +89,8 @@ def test_redelivery_with_delay():
       Message ("uuid2"):
           - This message is rejected by consumer's callback.
           - Therefor it will be negatively-acknowledged by consumer.
-          - Then it will be redelivered with incremented x-retry until, either is acknowledged or x-retry = x-retry-limit.
+          - Then it will be redelivered with incremented x-retry until, either is acknowledged or \
+            x-retry = x-retry-limit.
     """
     mrsal.start_consumer(
         queue='agreements_queue',
@@ -108,7 +109,8 @@ def test_redelivery_with_delay():
     assert message_count == 0
 
 
-def consumer_callback(host: str, queue: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message: str):
+def consumer_callback(host: str, queue: str, method_frame: pika.spec.Basic.Deliver,
+                      properties: pika.spec.BasicProperties, message: str):
     return message != b'"\\"uuid2\\""'
 
 

@@ -76,7 +76,8 @@ def test_fast_setup():
     assert message_count == 0
 
 
-def consumer_callback(host: str, queue: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, bin_message: str):
+def consumer_callback(host: str, queue: str, method_frame: pika.spec.Basic.Deliver,
+                      properties: pika.spec.BasicProperties, bin_message: str):
     str_message = json.loads(bin_message).replace('"', '')
     if 'Salaam' in str_message:
         return True  # Consumed message processed correctly
