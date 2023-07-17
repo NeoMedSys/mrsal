@@ -13,4 +13,4 @@ def tests(session):
 @nox.session()
 def lint(session):
     session.install('flake8')
-    session.run('flake8', '.', '--max-line-length=180', '--exit-zero', '--format=%(path)s::%(row)d,%(col)d::%(code)s::%(text)s', '--statistics', '--tee', '--output-file', 'flake8.txt')
+    session.run('flake8', '.', '--max-line-length=120', '--exit-zero', '--format=%(path)s::%(row)d,%(col)d::%(code)s::%(text)s', '--statistics', '--tee', '--output-file', 'flake8.txt')
