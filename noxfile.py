@@ -1,5 +1,6 @@
 import nox
 
+
 @nox.session()
 def tests(session):
     session.run('poetry', 'install', '--with', 'dev')
