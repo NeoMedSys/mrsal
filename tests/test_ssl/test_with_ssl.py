@@ -11,6 +11,21 @@ from mrsal.mrsal import Mrsal
 
 log = get_logger(__name__)
 
+"""
+In order to execute this test,
+you must include the subsequent environment variables on your machine.
+    # export RABBITMQ_DEFAULT_USER=<username>
+    # export RABBITMQ_DEFAULT_PASS=<password>
+
+    # export RABBITMQ_DOMAIN_TLS=<rabbitmq-domain>
+    # export RABBITMQ_PORT_TLS=<rabbitmq_port>
+    # export RABBITMQ_DEFAULT_VHOST=<vhost>
+
+    # export RABBITMQ_CAFILE='/path/to/ca.crt'
+    # export RABBITMQ_CERT='/path/to/client.crt'
+    # export RABBITMQ_KEY='/path/to/client.key'
+"""
+
 host = os.environ.get('RABBITMQ_DOMAIN_TLS')
 port = os.environ.get('RABBITMQ_PORT_TLS')
 credentials = (os.environ.get('RABBITMQ_DEFAULT_USER'),
@@ -22,14 +37,6 @@ mrsal = Mrsal(host=host,
               credentials=credentials,
               virtual_host=virtual_host,
               ssl=True)
-
-print(host)
-print(port)
-print(credentials)
-print(virtual_host)
-print(os.environ.get('RABBITMQ_CAFILE'))
-print(os.environ.get('RABBITMQ_CERT'))
-print(os.environ.get('RABBITMQ_KEY'))
 
 mrsal.connect_to_server()
 
