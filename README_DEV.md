@@ -1,4 +1,4 @@
-### How to run tests
+### How to run tests with nox
 - Add environment variables to `.zshrc` or `.bashrc` file 
 ```vim
 export RABBITMQ_DEFAULT_USER=<username>
