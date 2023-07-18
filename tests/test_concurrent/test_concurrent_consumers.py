@@ -39,7 +39,8 @@ def test_concurrent_consumer():
     assert exch_result is not None
     # ------------------------------------------
     # Setup queue for madrid agreements
-    q_result: pika.frame.Method = mrsal.setup_queue(queue=QUEUE_EMERGENCY)
+    q_result: pika.frame.Method = mrsal.setup_queue(
+        queue=QUEUE_EMERGENCY)
     assert q_result is not None
 
     # Bind queue to exchange with binding key
@@ -73,7 +74,8 @@ def test_concurrent_consumer():
     start_time = time.time()
     mrsal.start_concurrence_consumer(total_threads=NUM_THREADS, queue=QUEUE_EMERGENCY,
                                      callback=consumer_callback_with_delivery_info,
-                                     callback_args=(test_config.HOST, QUEUE_EMERGENCY),
+                                     callback_args=(
+                                         test_config.HOST, QUEUE_EMERGENCY),
                                      exchange=EXCHANGE, exchange_type=EXCHANGE_TYPE,
                                      routing_key=ROUTING_KEY,
                                      inactivity_timeout=INACTIVITY_TIMEOUT,
@@ -89,8 +91,9 @@ def test_concurrent_consumer():
     mrsal.close_connection()
 
 
-def consumer_callback_with_delivery_info(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver,
-                                         properties: pika.spec.BasicProperties, message_param: str):
+def consumer_callback_with_delivery_info(
+        host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver,
+        properties: pika.spec.BasicProperties, message_param: str):
     time.sleep(5)
     return True
 

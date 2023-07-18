@@ -1,5 +1,6 @@
 import json
 import time
+
 import pika
 
 import mrsal.config.config as config

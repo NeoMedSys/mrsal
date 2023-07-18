@@ -73,18 +73,22 @@ def test_exchange_exceptions():
         with pytest.raises(pika.exceptions.ConnectionClosedByBroker) as err1:
             mrsal.setup_exchange(exchange=test_config.EXCHANGE,
                                  exchange_type='not_exist')
-        assert (f'Caught a ConnectionClosedByBroker exception caused by COMMAND_INVALID - unknown exchange type \
-            "not_exist": {err1}')
+        assert (
+            f'Caught a ConnectionClosedByBroker exception caused by COMMAND_INVALID - \
+                unknown exchange type "not_exist": {err1}')
 
         with pytest.raises(TypeError) as err2:
             mrsal.setup_exchange(test_config.EXCHANGE_TYPE)
-        assert (f'Caught a type error exception caused by missing 1 required positional argument "exchange": {err2}')
+        assert (
+            f'Caught a type error exception caused by missing 1 required positional \
+                argument "exchange": {err2}')
     except pika.exceptions.AMQPConnectionError:
         with pytest.raises(AttributeError):
             mrsal.setup_exchange(exchange=test_config.EXCHANGE,
                                  exchange_type=test_config.EXCHANGE_TYPE)
-        assert (f'Caught a AttributeError exception caused by "NoneType" object has no attribute \
-            "exchange_declare": {err2}')
+        assert (
+            f'Caught a AttributeError exception caused by "NoneType" object has no \
+                attribute "exchange_declare": {err2}')
 
 
 def test_queue_exceptions():
@@ -98,13 +102,15 @@ def test_queue_exceptions():
         not_exist_queue = 'not_exist'
         with pytest.raises(pika.exceptions.ChannelClosedByBroker) as err1:
             mrsal.setup_queue(queue=not_exist_queue, passive=True)
-        assert (f'Caught a ChannelClosedByBroker exception caused by NOT_FOUND - no queue "{not_exist_queue}" \
-            in vhost "{config.V_HOST}": {err1}')
+        assert (
+            f'Caught a ChannelClosedByBroker exception caused by NOT_FOUND - \
+                no queue "{not_exist_queue}" in vhost "{config.V_HOST}": {err1}')
     except pika.exceptions.AMQPConnectionError:
         with pytest.raises(AttributeError) as err2:
             mrsal.setup_queue(queue='queue')
-        assert (f'Caught a AttributeError exception caused by "NoneType" object has no attribute \
-            "queue_declare": {err2}')
+        assert (
+            f'Caught a AttributeError exception caused by "NoneType" object has no \
+                attribute "queue_declare": {err2}')
 
 
 def test_bind_exceptions():
@@ -119,13 +125,18 @@ def test_bind_exceptions():
         queue = 'not_exist_queue'
         routing_key = 'whatever'
         with pytest.raises(pika.exceptions.ChannelClosedByBroker) as err1:
-            mrsal.setup_queue_binding(exchange=exchange, queue=queue, routing_key=routing_key)
-        assert (f'Caught a ChannelClosedByBroker exception caused by NOT_FOUND - no exchange "{exchange}" \
-            or no queue "{queue}" in vhost "{config.V_HOST}": {err1}')
+            mrsal.setup_queue_binding(
+                exchange=exchange,
+                queue=queue,
+                routing_key=routing_key)
+        assert (f'Caught a ChannelClosedByBroker exception caused by NOT_FOUND - \
+                no exchange "{exchange}" or no queue "{queue}" in vhost \
+                    "{config.V_HOST}": {err1}')
     except pika.exceptions.AMQPConnectionError:
         with pytest.raises(AttributeError) as err2:
             mrsal.setup_queue_binding(exchange='exch', queue='queue', routing_key='key')
-        assert (f'Caught a AttributeError exception caused by "NoneType" object has no attribute "queue_bind": {err2}')
+        assert (f'Caught a AttributeError exception caused by "NoneType" object has \
+            no attribute "queue_bind": {err2}')
 
 
 def test_active_exchange_exceptions():

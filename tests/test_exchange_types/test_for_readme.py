@@ -1,8 +1,9 @@
 import json
 import time
 
-import mrsal.config.config as config
 import pika
+
+import mrsal.config.config as config
 import tests.config as test_config
 from mrsal.config.logging import get_logger
 from mrsal.mrsal import Mrsal
@@ -68,8 +69,9 @@ def test_basic_workflow():
     assert message_count1 == 0
 
 
-def consumer_callback_with_delivery_info(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver,
-                                         properties: pika.spec.BasicProperties, message_param: str):
+def consumer_callback_with_delivery_info(
+        host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver,
+        properties: pika.spec.BasicProperties, message_param: str):
     str_message = json.loads(message_param).replace('"', '')
     if 'Hello' in str_message:
         app_id = properties.app_id

@@ -1,8 +1,9 @@
 import json
 import time
 
-import mrsal.config.config as config
 import pika
+
+import mrsal.config.config as config
 import tests.config as test_config
 from mrsal.config.logging import get_logger
 from mrsal.mrsal import Mrsal
@@ -35,9 +36,9 @@ def test_direct_exchange_workflow():
     assert q_result1 is not None
 
     # Bind queue to exchange with binding key
-    qb_result1: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
-                                                              routing_key='berlin agreements',
-                                                              queue='agreements_berlin_queue')
+    qb_result1: pika.frame.Method = mrsal.setup_queue_binding(
+        exchange='agreements', routing_key='berlin agreements',
+        queue='agreements_berlin_queue')
     assert qb_result1 is not None
     # ------------------------------------------
 
@@ -46,9 +47,9 @@ def test_direct_exchange_workflow():
     assert q_result2 is not None
 
     # Bind queue to exchange with binding key
-    qb_result2: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
-                                                              routing_key='madrid agreements',
-                                                              queue='agreements_madrid_queue')
+    qb_result2: pika.frame.Method = mrsal.setup_queue_binding(
+        exchange='agreements', routing_key='madrid agreements',
+        queue='agreements_madrid_queue')
     assert qb_result2 is not None
     # ------------------------------------------
 
@@ -121,8 +122,9 @@ def test_direct_exchange_workflow():
     assert message_count2 == 0
 
 
-def consumer_callback_with_delivery_info(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver,
-                                         properties: pika.spec.BasicProperties, message_param: str):
+def consumer_callback_with_delivery_info(
+        host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver,
+        properties: pika.spec.BasicProperties, message_param: str):
     return True
 
 

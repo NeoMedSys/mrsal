@@ -1,7 +1,8 @@
 import json
 
-import mrsal.config.config as config
 import pika
+
+import mrsal.config.config as config
 import tests.config as test_config
 from mrsal.config.logging import get_logger
 from mrsal.mrsal import Mrsal
@@ -22,10 +23,11 @@ def test_delay_letter():
     mrsal.queue_delete(queue='agreements_queue')
     # ------------------------------------------
     # Setup exchange with 'x-delayed-message' type
-    # and arguments where we specify how the messages will be routed after the delay period specified
-    exch_result: pika.frame.Method = mrsal.setup_exchange(exchange='agreements',
-                                                          exchange_type='x-delayed-message',
-                                                          arguments={'x-delayed-type': 'direct'})
+    # and arguments where we specify how the messages will be routed after the
+    # delay period specified
+    exch_result: pika.frame.Method = mrsal.setup_exchange(
+        exchange='agreements', exchange_type='x-delayed-message',
+        arguments={'x-delayed-type': 'direct'})
     assert exch_result is not None
     # ------------------------------------------
 
@@ -34,9 +36,8 @@ def test_delay_letter():
     assert q_result is not None
 
     # Bind queue to exchange with routing_key
-    qb_result: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
-                                                             routing_key='agreements_key',
-                                                             queue='agreements_queue')
+    qb_result: pika.frame.Method = mrsal.setup_queue_binding(
+        exchange='agreements', routing_key='agreements_key', queue='agreements_queue')
     assert qb_result is not None
     # ------------------------------------------
 

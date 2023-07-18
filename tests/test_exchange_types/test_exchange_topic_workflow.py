@@ -1,8 +1,9 @@
 import json
 import time
 
-import mrsal.config.config as config
 import pika
+
+import mrsal.config.config as config
 import tests.config as test_config
 from mrsal.config.logging import get_logger
 from mrsal.mrsal import Mrsal
@@ -18,8 +19,10 @@ mrsal.connect_to_server()
 
 def test_topic_exchange_workflow():
 
-    ROUTING_KEY_1: str = 'agreements.eu.berlin.august.2022'  # Messages will published with this routing key
-    ROUTING_KEY_2: str = 'agreements.eu.madrid.september.2022'  # Messages will published with this routing key
+    # Messages will published with this routing key
+    ROUTING_KEY_1: str = 'agreements.eu.berlin.august.2022'
+    # Messages will published with this routing key
+    ROUTING_KEY_2: str = 'agreements.eu.madrid.september.2022'
 
     BINDING_KEY_1: str = 'agreements.eu.berlin.#'  # Berlin agreements
     BINDING_KEY_2: str = 'agreements.*.*.september.#'  # Agreements of september
@@ -53,9 +56,8 @@ def test_topic_exchange_workflow():
     assert q_result2 is not None
 
     # Bind queue to exchange with binding key
-    qb_result2: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
-                                                              routing_key=BINDING_KEY_2,
-                                                              queue='september_agreements')
+    qb_result2: pika.frame.Method = mrsal.setup_queue_binding(
+        exchange='agreements', routing_key=BINDING_KEY_2, queue='september_agreements')
     assert qb_result2 is not None
     # ----------------------------------
 
@@ -129,7 +131,8 @@ def test_topic_exchange_workflow():
     assert message_count2 == 0
 
 
-def consumer_callback(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver,
+def consumer_callback(host_param: str, queue_param: str,
+                      method_frame: pika.spec.Basic.Deliver,
                       properties: pika.spec.BasicProperties, message_param: str):
     return True
 

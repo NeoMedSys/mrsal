@@ -1,8 +1,9 @@
 import json
 import time
 
-import mrsal.config.config as config
 import pika
+
+import mrsal.config.config as config
 import tests.config as test_config
 from mrsal.config.logging import get_logger
 from mrsal.mrsal import Mrsal
@@ -35,10 +36,9 @@ def test_headers_exchange_workflow():
     assert q_result1 is not None
 
     # Bind queue to exchange with arguments
-    qb_result1: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
-                                                              queue='zip_report',
-                                                              arguments={'x-match': 'all', 'format': 'zip',
-                                                                         'type': 'report'})
+    qb_result1: pika.frame.Method = mrsal.setup_queue_binding(
+        exchange='agreements', queue='zip_report',
+        arguments={'x-match': 'all', 'format': 'zip', 'type': 'report'})
     assert qb_result1 is not None
     # ------------------------------------------
 
@@ -47,10 +47,9 @@ def test_headers_exchange_workflow():
     assert q_result2 is not None
 
     # Bind queue to exchange with arguments
-    qb_result2: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
-                                                              queue='pdf_report',
-                                                              arguments={'x-match': 'any', 'format': 'pdf',
-                                                                         'type': 'log'})
+    qb_result2: pika.frame.Method = mrsal.setup_queue_binding(
+        exchange='agreements', queue='pdf_report',
+        arguments={'x-match': 'any', 'format': 'pdf', 'type': 'log'})
     assert qb_result2 is not None
     # ------------------------------------------
 
@@ -125,7 +124,8 @@ def test_headers_exchange_workflow():
     assert message_count2 == 0
 
 
-def consumer_callback(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver,
+def consumer_callback(host_param: str, queue_param: str,
+                      method_frame: pika.spec.Basic.Deliver,
                       properties: pika.spec.BasicProperties, message_param: str):
     return True
 

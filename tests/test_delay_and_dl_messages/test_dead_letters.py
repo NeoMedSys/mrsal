@@ -1,8 +1,9 @@
 import json
 import time
 
-import mrsal.config.config as config
 import pika
+
+import mrsal.config.config as config
 import tests.config as test_config
 from mrsal.config.logging import get_logger
 from mrsal.mrsal import Mrsal
@@ -37,17 +38,18 @@ def test_dead_letters():
     assert exch_result2 is not None
     # ------------------------------------------
 
-    # Setup main queue with arguments where we specify DL_EXCHANGE, DL_ROUTING_KEY and TTL
-    q_result1: pika.frame.Method = mrsal.setup_queue(queue='agreements_queue',
-                                                     arguments={'x-dead-letter-exchange': 'dl_agreements',
-                                                                'x-dead-letter-routing-key': 'dl_agreements_key',
-                                                                'x-message-ttl': test_config.MESSAGE_TTL})
+    # Setup main queue with arguments where we specify DL_EXCHANGE,
+    # DL_ROUTING_KEY and TTL
+    q_result1: pika.frame.Method = mrsal.setup_queue(
+        queue='agreements_queue',
+        arguments={'x-dead-letter-exchange': 'dl_agreements',
+                   'x-dead-letter-routing-key': 'dl_agreements_key',
+                   'x-message-ttl': test_config.MESSAGE_TTL})
     assert q_result1 is not None
 
     # Bind main queue to the main exchange with routing_key
-    qb_result1: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
-                                                              routing_key='agreements_key',
-                                                              queue='agreements_queue')
+    qb_result1: pika.frame.Method = mrsal.setup_queue_binding(
+        exchange='agreements', routing_key='agreements_key', queue='agreements_queue')
     assert qb_result1 is not None
     # ------------------------------------------
 
@@ -55,9 +57,9 @@ def test_dead_letters():
     q_result2: pika.frame.Method = mrsal.setup_queue(queue='dl_agreements_queue')
     assert q_result2 is not None
 
-    qb_result2: pika.frame.Method = mrsal.setup_queue_binding(exchange='dl_agreements',
-                                                              routing_key='dl_agreements_key',
-                                                              queue='dl_agreements_queue')
+    qb_result2: pika.frame.Method = mrsal.setup_queue_binding(
+        exchange='dl_agreements', routing_key='dl_agreements_key',
+        queue='dl_agreements_queue')
     assert qb_result2 is not None
     # ------------------------------------------
 
@@ -126,7 +128,8 @@ def test_dead_letters():
       Message ("uuid2"):
           - This message is rejected by consumer's callback.
           - Therefor it will be negatively-acknowledged by consumer.
-          - Then it will be forwarded to dead-letters-exchange (x-first-death-reason: rejected).
+          - Then it will be forwarded to dead-letters-exchange \
+            (x-first-death-reason: rejected).
       Message ("uuid3"):
           - This message has processing time in the consumer's callback equal to 3s
               which is greater that TTL=2s.
@@ -134,8 +137,8 @@ def test_dead_letters():
           - Then it will be deleted from queue.
       Message ("uuid4"):
           - This message will be forwarded to dead-letters-exchange
-              because it spent in the queue more than TTL=2s waiting "uuid3" to be processed
-              (x-first-death-reason: expired).
+              because it spent in the queue more than TTL=2s waiting "uuid3" to be \
+                processed (x-first-death-reason: expired).
     """
     mrsal.start_consumer(
         queue='agreements_queue',
@@ -176,7 +179,8 @@ def test_dead_letters():
     # Confirm messages are consumed
     result = mrsal.setup_queue(queue='dl_agreements_queue')
     message_count = result.method.message_count
-    log.info(f'Message count in queue "dl_agreements_queue" after consuming= {message_count}')
+    log.info(
+        f'Message count in queue "dl_agreements_queue" after consuming= {message_count}')
     assert message_count == 0
 
 
@@ -187,8 +191,9 @@ def consumer_callback(host: str, queue: str, method_frame: pika.spec.Basic.Deliv
     return message != b'"\\"uuid2\\""'
 
 
-def consumer_dead_letters_callback(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver,
-                                   properties: pika.spec.BasicProperties, message_param: str):
+def consumer_dead_letters_callback(
+        host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver,
+        properties: pika.spec.BasicProperties, message_param: str):
     return True
 
 
