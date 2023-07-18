@@ -1,0 +1,25 @@
+### How to run tests
+- Add environment variables to `.zshrc` or `.bashrc` file 
+```vim
+export RABBITMQ_DEFAULT_USER=<username>
+export RABBITMQ_DEFAULT_PASS=<password>
+export RABBITMQ_DOMAIN='localhost'
+export RABBITMQ_DOMAIN_TLS='rabbitmq.neomodels.app'
+export RABBITMQ_PORT='5672'
+export RABBITMQ_PORT_TLS='5671'
+export RABBITMQ_DEFAULT_VHOST='myMrsalHost'
+
+export RABBITMQ_CAFILE='/path/to/rabbitmq/rabbit-ca.crt'
+export RABBITMQ_CERT='/path/to/rabbitmq/rabbit_mlapp_client.crt'
+export RABBITMQ_KEY='/path/to/rabbitmq/rabbit_mlapp_client.key'
+```
+
+```bash
+source  ~/.zshrc
+```
+
+```bash
+rm -rf .tox .venv .coverage poetry.lock .nox junit.xml .pytest_cache flake8.txt
+
+nox
+```
