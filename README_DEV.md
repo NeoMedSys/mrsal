@@ -19,7 +19,7 @@ source  ~/.zshrc
 ```
 
 ```bash
-rm -rf .tox .venv .coverage poetry.lock .nox junit.xml .pytest_cache flake8.txt
+rm -rf .venv .nox reports/coverage/* reports/flake8/* reports/junit/* doc_images/*.svg
 
 nox
 ```
