@@ -1,7 +1,7 @@
-# MRSAL FULL GUIDE  <img align="right" width="125" alt="20200907_104224" src="./doc_images/mrsal_icon.png">
-[![Release](https://img.shields.io/badge/release-v0.6.1--alpha-blue.svg)](https://pypi.org/project/mrsal/) [![Python 3.10](https://img.shields.io/badge/python-3.10-blue.svg)](https://www.python.org/downloads/release/python-3103/) [![Documentation](https://img.shields.io/badge/doc-latest-blue.svg)](https://github.com/NeoMedSys/mrsal/blob/main/FullGuide.md)
+# MRSAL FULL GUIDE  <img align="right" width="125" alt="20200907_104224" src="https://github.com/NeoMedSys/mrsal/assets/9555305/ffb55c86-1e9d-4806-b1ca-c906d6985e3a">
+[![Release](https://img.shields.io/badge/release-v0.6.2--alpha-blue.svg)](https://pypi.org/project/mrsal/) [![Python 3.10](https://img.shields.io/badge/python-3.10-blue.svg)](https://www.python.org/downloads/release/python-3103/) [![Documentation](https://img.shields.io/badge/doc-latest-blue.svg)](https://github.com/NeoMedSys/mrsal/blob/main/FullGuide.md)
 <!-- [![Build Status](https://github.com/NeoMedSys/fatty-model-deploy/actions/workflows/tester.yml/badge.svg)](https://github.com/NeoMedSys/fatty-model-deploy/actions/runs/5576890234) -->
-[![Tests Status](./doc_images/tests-badge.svg?dummy=8484744)](./reports/junit/report.html) [![Coverage Status](./doc_images/coverage-badge.svg?dummy=8484744)](./reports/coverage/index.html) [![Flake8 Status](./doc_images/flake8-badge.svg?dummy=8484744)](./reports/flake8/index.html)
+[![Tests Status](https://github.com/NeoMedSys/mrsal/assets/9555305/5d29b991-1e7f-4737-8e55-5ee2bc9bb5db)](./reports/junit/junit.xml) [![Coverage Status](https://github.com/NeoMedSys/mrsal/assets/9555305/852b4256-d52e-49da-9134-f0e7381935ba)](./reports/coverage/htmlcov/index.html) [![Flake8 Status](https://github.com/NeoMedSys/mrsal/assets/9555305/0113f279-7c5c-4ed8-bd2f-8b2cf84da2a9)](./reports/flake8/flake8.txt)
 
 ## Table of Content
 - [Introduction](#introduction)
