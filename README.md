@@ -1,6 +1,7 @@
-# MRSAL  <img align="right" width="125" alt="20200907_104224" src="https://user-images.githubusercontent.com/29639563/187228621-af1d695d-29a3-4940-9a8c-c19bcd6421a5.png">
-<img src="https://img.shields.io/badge/release-v0.1.0--alpha-blue" height="20" /> [![Python 3.9](https://img.shields.io/badge/python-3.9-blue.svg)](https://www.python.org/downloads/release/python-390/)
-[![Python 3.8](https://img.shields.io/badge/python-3.8-blue.svg)](https://www.python.org/downloads/release/python-380/) 
+# MRSAL  <img align="right" width="125" alt="20200907_104224" src="./doc_images/mrsal_icon.png">
+[![Release](https://img.shields.io/badge/release-v0.6.0--alpha-blue.svg)](https://pypi.org/project/mrsal/) [![Python 3.10](https://img.shields.io/badge/python-3.10-blue.svg)](https://www.python.org/downloads/release/python-3103/) [![Documentation](https://img.shields.io/badge/doc-latest-blue.svg)](https://github.com/NeoMedSys/mrsal/blob/main/FullGuide.md)
+<!-- [![Build Status](https://github.com/NeoMedSys/fatty-model-deploy/actions/workflows/tester.yml/badge.svg)](https://github.com/NeoMedSys/fatty-model-deploy/actions/runs/5576890234) -->
+[![Tests Status](./doc_images/tests-badge.svg?dummy=8484744)](./reports/junit/junit.xml) [![Coverage Status](./doc_images/coverage-badge.svg?dummy=8484744)](./reports/coverage/htmlcov/index.html) [![Flake8 Status](./doc_images/flake8-badge.svg?dummy=8484744)](./reports/flake8/flake8.txt)
 
 ## Intro
 Mrsal is a simple to use message broker abstraction on top of [RabbitMQ](https://www.rabbitmq.com/) and [Pika](https://pika.readthedocs.io/en/stable/index.html). The goal is to make Mrsal trivial to re-use in all services of a distributed system and to make the use of advanced message queing protocols easy and safe. No more big chunks of repetive code across your services or bespoke solutions to handle dead letters. 
@@ -203,3 +204,17 @@ def consumer_callback_with_delivery_info(host_param: str, queue_param: str, meth
 That simple! You have now setup a full advanced message queueing protocol that you can use to promote friendship or other necessary communication between your services.
 
 ###### Note! Please refer to the >>>`FULL GUIDE`<<< on how to use customize Mrsal to meet specific needs. There are many parameters and settings that you can use to set up a more sophisticated communication protocol.
+---
+## References
+
+- [RabbitMQ Tutorials](https://www.rabbitmq.com/getstarted.html)
+- [RabbitMQ Exchange Types: 6 Categories Explained Easy](https://hevodata.com/learn/rabbitmq-exchange-type/)
+- [What is a Delayed Message Exchange?](https://www.cloudamqp.com/blog/what-is-a-delayed-message-exchange-in-rabbitmq.html#:~:text=The%20RabbitMQ%20delayed%20exchange%20plugin,in%20milliseconds%20can%20be%20specified.)
+- [RabbitMQ Delayed Message Plugin](https://github.com/rabbitmq/rabbitmq-delayed-message-exchange)
+- [When and how to use the RabbitMQ Dead Letter Exchange](https://www.cloudamqp.com/blog/when-and-how-to-use-the-rabbitmq-dead-letter-exchange.html)
+- [What is a RabbitMQ vhost?](https://www.cloudamqp.com/blog/what-is-a-rabbitmq-vhost.html)
+- [Message Brokers](https://www.ibm.com/cloud/learn/message-brokers)
+- [How to Use map() with the ThreadPoolExecutor in Python](https://superfastpython.com/threadpoolexecutor-map/)
+- [concurrent.futures](https://docs.python.org/3/library/concurrent.futures.html)
+- [mrsal_icon](https://www.pngegg.com/en/png-mftic)
+---

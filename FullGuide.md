@@ -1,4 +1,7 @@
-# FULL GUIDE
+# MRSAL FULL GUIDE  <img align="right" width="125" alt="20200907_104224" src="./doc_images/mrsal_icon.png">
+[![Release](https://img.shields.io/badge/release-v0.6.0--alpha-blue.svg)](https://pypi.org/project/mrsal/) [![Python 3.10](https://img.shields.io/badge/python-3.10-blue.svg)](https://www.python.org/downloads/release/python-3103/) [![Documentation](https://img.shields.io/badge/doc-latest-blue.svg)](https://github.com/NeoMedSys/mrsal/blob/main/FullGuide.md)
+<!-- [![Build Status](https://github.com/NeoMedSys/fatty-model-deploy/actions/workflows/tester.yml/badge.svg)](https://github.com/NeoMedSys/fatty-model-deploy/actions/runs/5576890234) -->
+[![Tests Status](./doc_images/tests-badge.svg?dummy=8484744)](./reports/junit/report.html) [![Coverage Status](./doc_images/coverage-badge.svg?dummy=8484744)](./reports/coverage/index.html) [![Flake8 Status](./doc_images/flake8-badge.svg?dummy=8484744)](./reports/flake8/index.html)
 
 ## Table of Content
 - [Introduction](#introduction)
@@ -1482,7 +1485,7 @@ def consumer_callback_with_delivery_info(host_param: str, queue_param: str, meth
 ---
 <div id='resources'/>
 
-## Resources
+## References
 
 - [RabbitMQ Tutorials](https://www.rabbitmq.com/getstarted.html)
 - [RabbitMQ Exchange Types: 6 Categories Explained Easy](https://hevodata.com/learn/rabbitmq-exchange-type/)
@@ -1493,4 +1496,5 @@ def consumer_callback_with_delivery_info(host_param: str, queue_param: str, meth
 - [Message Brokers](https://www.ibm.com/cloud/learn/message-brokers)
 - [How to Use map() with the ThreadPoolExecutor in Python](https://superfastpython.com/threadpoolexecutor-map/)
 - [concurrent.futures](https://docs.python.org/3/library/concurrent.futures.html)
+- [mrsal_icon](https://www.pngegg.com/en/png-mftic)
 ---
