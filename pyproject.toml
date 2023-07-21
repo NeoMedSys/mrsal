@@ -6,7 +6,7 @@ license = ""
 maintainers = ["Raafat <rafatzahran90@gmail.com>", "Jon E Nesvold <jnesvold@pm.me>"]
 name = "mrsal"
 readme = "README.md"
-version = "0.6.2-alpha"
+version = "0.6.3-alpha"
 
 [tool.poetry.dependencies]
 colorlog = "^6.7.0"

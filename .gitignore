@@ -38,14 +38,10 @@ pip-log.txt
 pip-delete-this-directory.txt
 
 # Unit test / coverage reports
-htmlcov/
-.tox/
 .nox/
-.coverage
-.coverage.*
+.tox/
 .cache
 nosetests.xml
-coverage.xml
 *.cover
 *.py,cover
 .hypothesis/
@@ -151,4 +147,6 @@ credentials/rabbit_certs/
 storage/model_conf/mrsal_conf/mrsal.env
 credentials/
 storage/
-junit.xml
+reports/coverage/*
+reports/junit/*
+reports/flake8/*
