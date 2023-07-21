@@ -1,8 +1,9 @@
 import json
 import time
 
-import mrsal.config.config as config
 import pika
+
+import mrsal.config.config as config
 import tests.config as test_config
 from mrsal.config.logging import get_logger
 from mrsal.mrsal import Mrsal
@@ -15,6 +16,7 @@ mrsal = Mrsal(host=test_config.HOST,
               virtual_host=config.V_HOST)
 mrsal.connect_to_server()
 
+
 def test_headers_exchange_workflow():
 
     # Delete existing queues and exchanges to use
@@ -26,29 +28,29 @@ def test_headers_exchange_workflow():
     # Setup exchange
     exch_result: pika.frame.Method = mrsal.setup_exchange(exchange='agreements',
                                                           exchange_type='headers')
-    assert exch_result != None
+    assert exch_result is not None
     # ------------------------------------------
 
     # Setup queue
     q_result1: pika.frame.Method = mrsal.setup_queue(queue='zip_report')
-    assert q_result1 != None
+    assert q_result1 is not None
 
     # Bind queue to exchange with arguments
-    qb_result1: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
-                                                              queue='zip_report',
-                                                              arguments={'x-match': 'all', 'format': 'zip', 'type': 'report'})
-    assert qb_result1 != None
+    qb_result1: pika.frame.Method = mrsal.setup_queue_binding(
+        exchange='agreements', queue='zip_report',
+        arguments={'x-match': 'all', 'format': 'zip', 'type': 'report'})
+    assert qb_result1 is not None
     # ------------------------------------------
 
     # Setup queue
     q_result2: pika.frame.Method = mrsal.setup_queue(queue='pdf_report')
-    assert q_result2 != None
+    assert q_result2 is not None
 
     # Bind queue to exchange with arguments
-    qb_result2: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
-                                                              queue='pdf_report',
-                                                              arguments={'x-match': 'any', 'format': 'pdf', 'type': 'log'})
-    assert qb_result2 != None
+    qb_result2: pika.frame.Method = mrsal.setup_queue_binding(
+        exchange='agreements', queue='pdf_report',
+        arguments={'x-match': 'any', 'format': 'pdf', 'type': 'log'})
+    assert qb_result2 is not None
     # ------------------------------------------
 
     # Publisher:
@@ -122,7 +124,9 @@ def test_headers_exchange_workflow():
     assert message_count2 == 0
 
 
-def consumer_callback(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
+def consumer_callback(host_param: str, queue_param: str,
+                      method_frame: pika.spec.Basic.Deliver,
+                      properties: pika.spec.BasicProperties, message_param: str):
     return True
 
 

@@ -1,8 +1,9 @@
 import json
 import time
 
-import mrsal.config.config as config
 import pika
+
+import mrsal.config.config as config
 import tests.config as test_config
 from mrsal.config.logging import get_logger
 from mrsal.mrsal import Mrsal
@@ -10,19 +11,22 @@ from mrsal.mrsal import Mrsal
 log = get_logger(__name__)
 
 mrsal = Mrsal(host=test_config.HOST,
-             port=config.RABBITMQ_PORT,
-             credentials=config.RABBITMQ_CREDENTIALS,
-             virtual_host=config.V_HOST)
+              port=config.RABBITMQ_PORT,
+              credentials=config.RABBITMQ_CREDENTIALS,
+              virtual_host=config.V_HOST)
 mrsal.connect_to_server()
+
 
 def test_topic_exchange_workflow():
 
-    ROUTING_KEY_1: str = 'agreements.eu.berlin.august.2022'  # Messages will published with this routing key
-    ROUTING_KEY_2: str = 'agreements.eu.madrid.september.2022'  # Messages will published with this routing key
+    # Messages will published with this routing key
+    ROUTING_KEY_1: str = 'agreements.eu.berlin.august.2022'
+    # Messages will published with this routing key
+    ROUTING_KEY_2: str = 'agreements.eu.madrid.september.2022'
 
     BINDING_KEY_1: str = 'agreements.eu.berlin.#'  # Berlin agreements
     BINDING_KEY_2: str = 'agreements.*.*.september.#'  # Agreements of september
-    BINDING_KEY_3: str = 'agreements.#'  # All agreements
+    # BINDING_KEY_3: str = 'agreements.#'  # All agreements
     # ------------------------------------------
 
     # Delete existing queues and exchanges to use
@@ -32,30 +36,29 @@ def test_topic_exchange_workflow():
 
     # Setup exchange
     exch_result: pika.frame.Method = mrsal.setup_exchange(exchange='agreements',
-                                                         exchange_type='topic')
-    assert exch_result != None
+                                                          exchange_type='topic')
+    assert exch_result is not None
     # ------------------------------------------
 
     # Setup queue for berlin agreements
     q_result1: pika.frame.Method = mrsal.setup_queue(queue='berlin_agreements')
-    assert q_result1 != None
+    assert q_result1 is not None
 
     # Bind queue to exchange with binding key
     qb_result1: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
-                                                             routing_key=BINDING_KEY_1,
-                                                             queue='berlin_agreements')
-    assert qb_result1 != None
+                                                              routing_key=BINDING_KEY_1,
+                                                              queue='berlin_agreements')
+    assert qb_result1 is not None
     # ----------------------------------
 
     # Setup queue for september agreements
     q_result2: pika.frame.Method = mrsal.setup_queue(queue='september_agreements')
-    assert q_result2 != None
+    assert q_result2 is not None
 
     # Bind queue to exchange with binding key
-    qb_result2: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
-                                                             routing_key=BINDING_KEY_2,
-                                                             queue='september_agreements')
-    assert qb_result2 != None
+    qb_result2: pika.frame.Method = mrsal.setup_queue_binding(
+        exchange='agreements', routing_key=BINDING_KEY_2, queue='september_agreements')
+    assert qb_result2 is not None
     # ----------------------------------
 
     # Publisher:
@@ -70,8 +73,8 @@ def test_topic_exchange_workflow():
         delivery_mode=pika.DeliveryMode.Persistent,
         headers=None)
     mrsal.publish_message(exchange='agreements',
-                         routing_key=ROUTING_KEY_1,
-                         message=json.dumps(message1), prop=prop1)
+                          routing_key=ROUTING_KEY_1,
+                          message=json.dumps(message1), prop=prop1)
 
     # Message ("uuid2") is published to the exchange will be routed to queue2
     message2 = 'uuid2'
@@ -83,8 +86,8 @@ def test_topic_exchange_workflow():
         delivery_mode=pika.DeliveryMode.Persistent,
         headers=None)
     mrsal.publish_message(exchange='agreements',
-                         routing_key=ROUTING_KEY_2,
-                         message=json.dumps(message2), prop=prop2)
+                          routing_key=ROUTING_KEY_2,
+                          message=json.dumps(message2), prop=prop2)
     # ----------------------------------
 
     time.sleep(1)
@@ -127,7 +130,10 @@ def test_topic_exchange_workflow():
     message_count2 = result2.method.message_count
     assert message_count2 == 0
 
-def consumer_callback(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
+
+def consumer_callback(host_param: str, queue_param: str,
+                      method_frame: pika.spec.Basic.Deliver,
+                      properties: pika.spec.BasicProperties, message_param: str):
     return True
 
 

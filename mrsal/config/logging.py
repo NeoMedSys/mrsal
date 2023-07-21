@@ -12,14 +12,17 @@ FAIL = 22
 PIPE = 55
 LOG_LEVEL = logging.INFO
 LOG_LEVEL_E = logging.WARNING
-LOGFORMAT = '%(log_color)s[%(asctime)s] [%(levelname)-8s] %(reset)s | %(log_color)s%(message)s%(reset)s'
-LOGFORMAT_ERROR = '%(log_color)s%(asctime)-8s%(reset)s | %(log_color)s%(levelname)-8s%(reset)s | %(log_color)s%(message)s%(reset)s'
+LOGFORMAT = '%(log_color)s[%(asctime)s] [%(levelname)-8s] %(reset)s | \
+    %(log_color)s%(message)s%(reset)s'
+LOGFORMAT_ERROR = '%(log_color)s%(asctime)-8s%(reset)s | \
+    %(log_color)s%(levelname)-8s%(reset)s | %(log_color)s%(message)s%(reset)s'
 
 ROOT = os.getcwd()  # os.environ['PYTHONPATH']
 
 # Adding file path for error logs and levels above
 FILE_PATH = os.path.join(ROOT, 'docs/logs/level_errors_logs.log')
-Path(FILE_PATH).parent.mkdir(exist_ok=True, parents=True)  # It is sad with non existent parents
+# It is sad with non existent parents
+Path(FILE_PATH).parent.mkdir(exist_ok=True, parents=True)
 
 logging.addLevelName(SUCCESS, 'SUCCESS')
 
@@ -84,6 +87,7 @@ file_handler.setLevel(LOG_LEVEL)
 
 stream.setFormatter(formatter)
 file_handler.setFormatter(e_formatter)
+
 
 def get_logger(name):
     log = logging.getLogger(name)

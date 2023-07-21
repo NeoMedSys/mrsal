@@ -1,8 +1,9 @@
 import json
 import time
 
-import mrsal.config.config as config
 import pika
+
+import mrsal.config.config as config
 import tests.config as test_config
 from mrsal.config.logging import get_logger
 from mrsal.mrsal import Mrsal
@@ -16,31 +17,28 @@ mrsal = Mrsal(host=test_config.HOST,
               verbose=True)
 mrsal.connect_to_server()
 
+
 def test_redelivery_with_delay():
 
     # Delete existing queues and exchanges to use
     mrsal.exchange_delete(exchange='agreements')
     mrsal.queue_delete(queue='agreements_queue')
     # ------------------------------------------
-    queue_arguments = None
-    # ------------------------------------------
 
     # Setup main exchange with delay type
-    exch_result1: pika.frame.Method = mrsal.setup_exchange(exchange='agreements',
-                                                           exchange_type='x-delayed-message',
-                                                           arguments={'x-delayed-type': 'direct'})
-    assert exch_result1 != None
+    exch_result1: pika.frame.Method = mrsal.setup_exchange(
+        exchange='agreements', exchange_type='x-delayed-message',
+        arguments={'x-delayed-type': 'direct'})
+    assert exch_result1 is not None
     # ------------------------------------------
-
     # Setup main queue
     q_result1: pika.frame.Method = mrsal.setup_queue(queue='agreements_queue')
-    assert q_result1 != None
+    assert q_result1 is not None
 
     # Bind main queue to the main exchange with routing_key
-    qb_result1: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
-                                                              routing_key='agreements_key',
-                                                              queue='agreements_queue')
-    assert qb_result1 != None
+    qb_result1: pika.frame.Method = mrsal.setup_queue_binding(
+        exchange='agreements', routing_key='agreements_key', queue='agreements_queue')
+    assert qb_result1 is not None
     # ------------------------------------------
 
     """
@@ -73,16 +71,18 @@ def test_redelivery_with_delay():
                           message=json.dumps(message2), prop=prop2)
 
     # ------------------------------------------
-    # Waiting for the delay time of the messages in the exchange. Then will be delivered to the queue.
+    # Waiting for the delay time of the messages in the exchange. Then will be
+    # delivered to the queue.
     time.sleep(3)
 
     # Confirm messages are published
     result: pika.frame.Method = mrsal.setup_queue(queue='agreements_queue', passive=True)
     message_count = result.method.message_count
-    log.info(f'Message count in queue "agreements_queue" before consuming= {message_count}')
+    log.info(
+        f'Message count in queue "agreements_queue" before consuming= {message_count}')
     assert message_count == 2
 
-    log.info(f'===== Start consuming from "agreements_queue" ========')
+    log.info('===== Start consuming from "agreements_queue" ========')
     """
     Consumer from main queue
       Message ("uuid1"):
@@ -91,7 +91,8 @@ def test_redelivery_with_delay():
       Message ("uuid2"):
           - This message is rejected by consumer's callback.
           - Therefor it will be negatively-acknowledged by consumer.
-          - Then it will be redelivered with incremented x-retry until, either is acknowledged or x-retry = x-retry-limit.
+          - Then it will be redelivered with incremented x-retry until, either \
+            is acknowledged or x-retry = x-retry-limit.
     """
     mrsal.start_consumer(
         queue='agreements_queue',
@@ -106,10 +107,13 @@ def test_redelivery_with_delay():
     # Confirm messages are consumed
     result: pika.frame.Method = mrsal.setup_queue(queue='agreements_queue', passive=True)
     message_count = result.method.message_count
-    log.info(f'Message count in queue "agreements_queue" after consuming= {message_count}')
+    log.info(
+        f'Message count in queue "agreements_queue" after consuming= {message_count}')
     assert message_count == 0
 
-def consumer_callback(host: str, queue: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message: str):
+
+def consumer_callback(host: str, queue: str, method_frame: pika.spec.Basic.Deliver,
+                      properties: pika.spec.BasicProperties, message: str):
     return message != b'"\\"uuid2\\""'
 
 

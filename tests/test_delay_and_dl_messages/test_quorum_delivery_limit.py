@@ -1,7 +1,9 @@
 """
-- The quorum queue is a modern queue type for RabbitMQ implementing a durable, replicated FIFO queue based on the Raft consensus algorithm. 
-- It is available as of RabbitMQ 3.8.0.
-- It is possible to set a delivery limit for a queue using a policy argument, delivery-limit.
+- The quorum queue is a modern queue type for RabbitMQ implementing a durable, \
+    replicated FIFO queue based on the Raft consensus algorithm. \
+- It is available as of RabbitMQ 3.8.0.\
+- It is possible to set a delivery limit for a queue using a policy argument, \
+    delivery-limit.
 
 For more info: https://www.rabbitmq.com/quorum-queues.html
 """
@@ -9,8 +11,9 @@ For more info: https://www.rabbitmq.com/quorum-queues.html
 import json
 import time
 
-import mrsal.config.config as config
 import pika
+
+import mrsal.config.config as config
 import tests.config as test_config
 from mrsal.config.logging import get_logger
 from mrsal.mrsal import Mrsal
@@ -24,6 +27,7 @@ mrsal = Mrsal(host=test_config.HOST,
               verbose=True)
 mrsal.connect_to_server()
 
+
 def test_quorum_delivery_limit():
 
     # Delete existing queues and exchanges to use
@@ -34,27 +38,27 @@ def test_quorum_delivery_limit():
         # Queue of quorum type
         'x-queue-type': 'quorum',
         # Set a delivery limit for a queue using a policy argument, delivery-limit.
-        # When a message has been returned more times than the limit the message will be dropped 
-        # or dead-lettered(if a DLX is configured).
-        'x-delivery-limit': 3} 
+        # When a message has been returned more times than the limit the message \
+        # will be dropped or dead-lettered(if a DLX is configured).
+        'x-delivery-limit': 3}
+
     # ------------------------------------------
 
     # Setup main exchange
     exch_result1: pika.frame.Method = mrsal.setup_exchange(exchange='agreements',
                                                            exchange_type='direct')
-    assert exch_result1 != None
+    assert exch_result1 is not None
     # ------------------------------------------
 
     # Setup main queue with arguments
     q_result1: pika.frame.Method = mrsal.setup_queue(queue='agreements_queue',
                                                      arguments=queue_arguments)
-    assert q_result1 != None
+    assert q_result1 is not None
 
     # Bind main queue to the main exchange with routing_key
-    qb_result1: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
-                                                              routing_key='agreements_key',
-                                                              queue='agreements_queue')
-    assert qb_result1 != None
+    qb_result1: pika.frame.Method = mrsal.setup_queue_binding(
+        exchange='agreements', routing_key='agreements_key', queue='agreements_queue')
+    assert qb_result1 is not None
     # ------------------------------------------
 
     """
@@ -93,10 +97,11 @@ def test_quorum_delivery_limit():
     result: pika.frame.Method = mrsal.setup_queue(queue='agreements_queue', passive=True,
                                                   arguments=queue_arguments)
     message_count = result.method.message_count
-    log.info(f'Message count in queue "agreements_queue" before consuming= {message_count}')
+    log.info(
+        f'Message count in queue "agreements_queue" before consuming= {message_count}')
     assert message_count == 2
 
-    log.info(f'===== Start consuming from "agreements_queue" ========')
+    log.info('===== Start consuming from "agreements_queue" ========')
     """
     Consumer from main queue
       Message ("uuid1"):
@@ -105,7 +110,8 @@ def test_quorum_delivery_limit():
       Message ("uuid2"):
           - This message is rejected by consumer's callback.
           - Therefor it will be negatively-acknowledged by consumer.
-          - Then it will be redelivered until, either it's acknowledged or x-delivery-limit is reached.
+          - Then it will be redelivered until, either it's acknowledged or \
+            x-delivery-limit is reached.
     """
     mrsal.start_consumer(
         queue='agreements_queue',
@@ -121,13 +127,19 @@ def test_quorum_delivery_limit():
     result: pika.frame.Method = mrsal.setup_queue(queue='agreements_queue', passive=True,
                                                   arguments=queue_arguments)
     message_count = result.method.message_count
-    log.info(f'Message count in queue "agreements_queue" after consuming= {message_count}')
+    log.info(
+        f'Message count in queue "agreements_queue" after consuming= {message_count}')
     assert message_count == 0
 
-def consumer_callback(host: str, queue: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message: str):
+
+def consumer_callback(host: str, queue: str, method_frame: pika.spec.Basic.Deliver,
+                      properties: pika.spec.BasicProperties, message: str):
     return message != b'"\\"uuid2\\""'
 
-def consumer_dead_letters_callback(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
+
+def consumer_dead_letters_callback(
+        host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver,
+        properties: pika.spec.BasicProperties, message_param: str):
     return True
 
 

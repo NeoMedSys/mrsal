@@ -1,19 +1,43 @@
 import json
+import os
 import time
 
 import pika
 
 import mrsal.config.config as config
-import tests.config as test_config
+# import tests.config as test_config
 from mrsal.config.logging import get_logger
 from mrsal.mrsal import Mrsal
 
 log = get_logger(__name__)
 
-mrsal = Mrsal(host=test_config.HOST,
-              port=config.RABBITMQ_PORT,
-              credentials=config.RABBITMQ_CREDENTIALS,
-              virtual_host=config.V_HOST)
+"""
+In order to execute this test,
+you must include the subsequent environment variables on your machine.
+    # export RABBITMQ_DEFAULT_USER=<username>
+    # export RABBITMQ_DEFAULT_PASS=<password>
+
+    # export RABBITMQ_DOMAIN_TLS=<rabbitmq-domain>
+    # export RABBITMQ_PORT_TLS=<rabbitmq_port>
+    # export RABBITMQ_DEFAULT_VHOST=<vhost>
+
+    # export RABBITMQ_CAFILE='/path/to/ca.crt'
+    # export RABBITMQ_CERT='/path/to/client.crt'
+    # export RABBITMQ_KEY='/path/to/client.key'
+"""
+
+host = os.environ.get('RABBITMQ_DOMAIN_TLS')
+port = os.environ.get('RABBITMQ_PORT_TLS')
+credentials = (os.environ.get('RABBITMQ_DEFAULT_USER'),
+               os.environ.get('RABBITMQ_DEFAULT_PASS'))
+virtual_host = os.environ.get('RABBITMQ_DEFAULT_VHOST')
+
+mrsal = Mrsal(host=host,
+              port=port,
+              credentials=credentials,
+              virtual_host=virtual_host,
+              ssl=True)
+
 mrsal.connect_to_server()
 
 
@@ -57,8 +81,8 @@ def test_direct_exchange_workflow():
     prop1 = pika.BasicProperties(
         app_id='test_exchange_direct',
         message_id='madrid_uuid',
-        content_type=test_config.CONTENT_TYPE,
-        content_encoding=test_config.CONTENT_ENCODING,
+        content_type=config.CONTENT_TYPE,
+        content_encoding=config.CONTENT_ENCODING,
         delivery_mode=pika.DeliveryMode.Persistent,
         headers=None)
 
@@ -71,8 +95,8 @@ def test_direct_exchange_workflow():
     prop2 = pika.BasicProperties(
         app_id='test_exchange_direct',
         message_id='berlin_uuid',
-        content_type=test_config.CONTENT_TYPE,
-        content_encoding=test_config.CONTENT_ENCODING,
+        content_type=config.CONTENT_TYPE,
+        content_encoding=config.CONTENT_ENCODING,
         delivery_mode=pika.DeliveryMode.Persistent,
         headers=None)
     # Message ("uuid1") is published to the exchange and it's routed to queue1
@@ -97,7 +121,7 @@ def test_direct_exchange_workflow():
     mrsal.start_consumer(
         queue='agreements_berlin_queue',
         callback=consumer_callback_with_delivery_info,
-        callback_args=(test_config.HOST, 'agreements_berlin_queue'),
+        callback_args=(host, 'agreements_berlin_queue'),
         inactivity_timeout=1,
         requeue=False,
         callback_with_delivery_info=True
@@ -106,7 +130,7 @@ def test_direct_exchange_workflow():
     mrsal.start_consumer(
         queue='agreements_madrid_queue',
         callback=consumer_callback,
-        callback_args=(test_config.HOST, 'agreements_madrid_queue'),
+        callback_args=(host, 'agreements_madrid_queue'),
         inactivity_timeout=1,
         requeue=False,
     )

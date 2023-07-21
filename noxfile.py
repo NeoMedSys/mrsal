@@ -1,0 +1,38 @@
+import nox
+from nox.sessions import Session
+
+
+@nox.session()
+def tests(session: Session):
+    session.run('poetry', 'install', '--with', 'dev', external=True)
+    session.run('poetry', 'run', 'pytest', './tests',
+                '--junitxml=./reports/junit/junit.xml', external=True)
+    # coverage
+    session.run('poetry', 'run', 'coverage', 'run', '--source=.', '--data-file',
+                './.coverage', '-m', 'pytest', './tests', external=True)
+    session.run('poetry', 'run', 'coverage', 'report', external=True)
+    session.run('poetry', 'run', 'coverage', 'xml', external=True)
+    session.run('poetry', 'run', 'coverage', 'html', external=True)
+    session.run('mv', '.coverage', './reports/coverage', external=True)
+    session.run('mv', 'coverage.xml', './reports/coverage', external=True)
+    session.run('cp', '-R', 'htmlcov/', './reports/coverage', external=True)
+    session.run('rm', '-R', 'htmlcov/', external=True)
+
+
+@nox.session()
+def lint(session):
+    session.install('flake8')
+    session.run('flake8', 'mrsal', 'tests', '--max-line-length=180', '--exit-zero', '--format=html'
+                '--format=%(path)s::%(row)d,%(col)d::%(code)s::%(text)s',
+                '--statistics', '--tee', '--output-file', './reports/flake8/flake8.txt')
+
+
+@nox.session()
+def gen_badge(session):
+    session.install('genbadge[tests,coverage,flake8]')
+    session.run('genbadge', 'tests', '-i', './reports/junit/junit.xml',
+                '-o', './doc_images/tests-badge.svg')
+    session.run('genbadge', 'coverage', '-i', './reports/coverage/coverage.xml',
+                '-o', './doc_images/coverage-badge.svg')
+    session.run('genbadge', 'flake8', '-i', './reports/flake8/flake8.txt',
+                '-o', './doc_images/flake8-badge.svg')

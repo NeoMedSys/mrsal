@@ -12,12 +12,13 @@ services:
       - RABBITMQ_DEFAULT_VHOST=${RABBITMQ_DEFAULT_VHOST}
     ports:
       # RabbitMQ container listening on the default port of 5672.
-      - "${RABBITMQ_PORT}:5672"
-      - "${RABBITMQ_PORT_TLS}:5671"
+      - "5672:5672"
+      - "5671:5671"
       # OPTIONAL: Expose the GUI port
       - "${RABBITMQ_GUI_PORT}:15672"
     volumes:
-      - ${BASE_PATH}/storage/rabbitmq_conf/rabbitmq.conf/:/etc/rabbitmq/rabbitmq.config
+      - ${BASE_PATH}/storage/rabbitmq:/etc/rabbitmq/certs
+      - ${BASE_PATH}/storage/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
     networks:
       - gateway
 
@@ -27,3 +28,8 @@ services:
 networks:
   gateway:
     external: true
+
+# If you want to let the docker compose create the network, then use:
+# networks:
+#   gateway:
+#     name: gateway

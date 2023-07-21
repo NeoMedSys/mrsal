@@ -1,8 +1,9 @@
 import json
 import time
 
-import mrsal.config.config as config
 import pika
+
+import mrsal.config.config as config
 import tests.config as test_config
 from mrsal.config.logging import get_logger
 from mrsal.mrsal import Mrsal
@@ -10,10 +11,11 @@ from mrsal.mrsal import Mrsal
 log = get_logger(__name__)
 
 mrsal = Mrsal(host=test_config.HOST,
-             port=config.RABBITMQ_PORT,
-             credentials=config.RABBITMQ_CREDENTIALS,
-             virtual_host=config.V_HOST)
+              port=config.RABBITMQ_PORT,
+              credentials=config.RABBITMQ_CREDENTIALS,
+              virtual_host=config.V_HOST)
 mrsal.connect_to_server()
+
 
 def test_basic_workflow():
 
@@ -34,22 +36,22 @@ def test_basic_workflow():
     # Message is published to the exchange and it's routed to queue
     message_body = 'Hello'
     mrsal.publish_message(exchange='friendship',
-                         exchange_type='direct',
-                         queue='friendship_queue',
-                         routing_key='friendship_key',
-                         message=json.dumps(message_body), 
-                         prop=prop,
-                         fast_setup=True)
+                          exchange_type='direct',
+                          queue='friendship_queue',
+                          routing_key='friendship_key',
+                          message=json.dumps(message_body),
+                          prop=prop,
+                          fast_setup=True)
     # ------------------------------------------
 
     time.sleep(1)
-    # Confirm messages are routed to respected queue
+    # Confirm messages are routed to respected queue.
     result1 = mrsal.setup_queue(queue='friendship_queue', passive=True)
     message_count1 = result1.method.message_count
     assert message_count1 == 1
     # ------------------------------------------
 
-    # Start consumer 
+    # Start consumer.
     mrsal.start_consumer(
         queue='friendship_queue',
         callback=consumer_callback_with_delivery_info,
@@ -67,7 +69,9 @@ def test_basic_workflow():
     assert message_count1 == 0
 
 
-def consumer_callback_with_delivery_info(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
+def consumer_callback_with_delivery_info(
+        host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver,
+        properties: pika.spec.BasicProperties, message_param: str):
     str_message = json.loads(message_param).replace('"', '')
     if 'Hello' in str_message:
         app_id = properties.app_id
@@ -77,12 +81,14 @@ def consumer_callback_with_delivery_info(host_param: str, queue_param: str, meth
         return True  # Consumed message processed correctly
     return False
 
+
 def consumer_callback(host_param: str, queue_param: str, message_param: str):
     str_message = json.loads(message_param).replace('"', '')
     if 'Hello' in str_message:
         print('Salaam habibi')
         return True  # Consumed message processed correctly
     return False
+
 
 if __name__ == '__main__':
     test_basic_workflow()

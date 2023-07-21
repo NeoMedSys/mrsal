@@ -1,7 +1,8 @@
-from typing import Tuple, Dict
 import os
+from typing import Dict, Tuple
 
-RABBITMQ_SERVICE_NAME_DOCKER_COMPOSE: str = os.environ.get('RABBITMQ_SERVICE_NAME')  # Service name in docker-compose.yaml
+# Service name in docker-compose.yaml
+RABBITMQ_SERVICE_NAME_DOCKER_COMPOSE: str = os.environ.get('RABBITMQ_SERVICE_NAME')
 RABBITMQ_SERVER: str = 'localhost'
 V_HOST: str = os.environ.get('RABBITMQ_DEFAULT_VHOST', 'myMrsalHost')
 RABBITMQ_PORT: int = os.environ.get('RABBITMQ_PORT', 5672)
@@ -21,7 +22,8 @@ RABBITMQ_DEAD_LETTER_QUEUE: str = 'dead_letter-queue'
 
 DELAY_EXCHANGE_TYPE: str = 'x-delayed-message'
 DELAY_EXCHANGE_ARGS: Dict[str, str] = {'x-delayed-type': 'direct'}
-DEAD_LETTER_QUEUE_ARGS: Dict[str, str] = {'x-dead-letter-exchange': '', 'x-dead-letter-routing-key': ''}
+DEAD_LETTER_QUEUE_ARGS: Dict[str, str] = {
+    'x-dead-letter-exchange': '', 'x-dead-letter-routing-key': ''}
 
 CONTENT_TYPE: str = 'text/plain'
 CONTENT_ENCODING: str = 'utf-8'

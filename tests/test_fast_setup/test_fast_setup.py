@@ -1,5 +1,6 @@
 import json
 import time
+
 import pika
 
 import mrsal.config.config as config
@@ -18,11 +19,12 @@ log = get_logger(__name__)
 # )
 
 mrsal = Mrsal(host=test_config.HOST,
-             port=config.RABBITMQ_PORT,
-             credentials=config.RABBITMQ_CREDENTIALS,
-             virtual_host=config.V_HOST)
+              port=config.RABBITMQ_PORT,
+              credentials=config.RABBITMQ_CREDENTIALS,
+              virtual_host=config.V_HOST)
 
 mrsal.connect_to_server()
+
 
 def test_fast_setup():
 
@@ -32,12 +34,12 @@ def test_fast_setup():
     # ------------------------------------------
 
     prop = pika.BasicProperties(
-            app_id='test_fast_setup',
-            message_id='fast_setup',
-            content_type=test_config.CONTENT_TYPE,
-            content_encoding=test_config.CONTENT_ENCODING,
-            delivery_mode=pika.DeliveryMode.Persistent,
-            headers=None)
+        app_id='test_fast_setup',
+        message_id='fast_setup',
+        content_type=test_config.CONTENT_TYPE,
+        content_encoding=test_config.CONTENT_ENCODING,
+        delivery_mode=pika.DeliveryMode.Persistent,
+        headers=None)
 
     mrsal.publish_message(
         exchange='friendship',
@@ -75,7 +77,8 @@ def test_fast_setup():
     assert message_count == 0
 
 
-def consumer_callback(host: str, queue: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, bin_message: str):
+def consumer_callback(host: str, queue: str, method_frame: pika.spec.Basic.Deliver,
+                      properties: pika.spec.BasicProperties, bin_message: str):
     str_message = json.loads(bin_message).replace('"', '')
     if 'Salaam' in str_message:
         return True  # Consumed message processed correctly

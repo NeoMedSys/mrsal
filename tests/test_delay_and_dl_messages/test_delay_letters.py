@@ -1,7 +1,8 @@
 import json
 
-import mrsal.config.config as config
 import pika
+
+import mrsal.config.config as config
 import tests.config as test_config
 from mrsal.config.logging import get_logger
 from mrsal.mrsal import Mrsal
@@ -14,6 +15,7 @@ mrsal = Mrsal(host=test_config.HOST,
               virtual_host=config.V_HOST)
 mrsal.connect_to_server()
 
+
 def test_delay_letter():
 
     # Delete existing queues and exchanges to use
@@ -21,22 +23,22 @@ def test_delay_letter():
     mrsal.queue_delete(queue='agreements_queue')
     # ------------------------------------------
     # Setup exchange with 'x-delayed-message' type
-    # and arguments where we specify how the messages will be routed after the delay period specified
-    exch_result: pika.frame.Method = mrsal.setup_exchange(exchange='agreements',
-                                                          exchange_type='x-delayed-message',
-                                                          arguments={'x-delayed-type': 'direct'})
-    assert exch_result != None
+    # and arguments where we specify how the messages will be routed after the
+    # delay period specified
+    exch_result: pika.frame.Method = mrsal.setup_exchange(
+        exchange='agreements', exchange_type='x-delayed-message',
+        arguments={'x-delayed-type': 'direct'})
+    assert exch_result is not None
     # ------------------------------------------
 
     # Setup queue
     q_result: pika.frame.Method = mrsal.setup_queue(queue='agreements_queue')
-    assert q_result != None
+    assert q_result is not None
 
     # Bind queue to exchange with routing_key
-    qb_result: pika.frame.Method = mrsal.setup_queue_binding(exchange='agreements',
-                                                             routing_key='agreements_key',
-                                                             queue='agreements_queue')
-    assert qb_result != None
+    qb_result: pika.frame.Method = mrsal.setup_queue_binding(
+        exchange='agreements', routing_key='agreements_key', queue='agreements_queue')
+    assert qb_result is not None
     # ------------------------------------------
 
     """
@@ -91,6 +93,7 @@ def test_delay_letter():
     result = mrsal.setup_queue(queue='agreements_queue')
     message_count = result.method.message_count
     assert message_count == 0
+
 
 def consumer_callback(host: str, queue: str, message: str):
     return True
