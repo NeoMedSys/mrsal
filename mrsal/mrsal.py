@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, NoReturn, Tuple
 import pika
 from pika import SSLOptions
 from pika.exchange_type import ExchangeType
+from pika.exceptions import AMQPConnectionError, ChannelClosedByBroker, ChannelWrongStateError, ConnectionClosedByBroker
 from retry import retry
 
 import mrsal.config.config as config
@@ -99,15 +100,8 @@ class Mrsal:
             self.log.success(
                 f'Connection established with RabbitMQ on {connection_info}')
             return self._connection
-        except TypeError as err:
-            self.log.error(f'Caught a type error: {err}')
-            raise TypeError
-        except pika.exceptions.AMQPConnectionError as err:
-            self.log.error(f'Caught a connection error: {err}')
-            raise pika.exceptions.AMQPConnectionError
-        except gaierror as err:
-            self.log.error(f'Caught a socket error: {err}')
-            raise gaierror
+        except (TypeError, AMQPConnectionError, gaierror) as err:
+            self.log.error(f'I tried to connect with the RabbitMQ server but failed with: {err}')
 
     def setup_exchange(self, exchange: str, exchange_type: str,
                        arguments: Dict[str, str] = None, durable=True, passive=False,
@@ -152,18 +146,8 @@ class Mrsal:
                 f'Exchange is declared successfully: {exchange_declare_info}, \
                 result={exchange_declare_result}')
             return exchange_declare_result
-        except TypeError as err:
-            self.log.error(f'Caught a type error: {err}')
-            raise TypeError
-        except AttributeError as err:
-            self.log.error(f'Caught a attribute error: {err}')
-            raise AttributeError
-        except pika.exceptions.ChannelClosedByBroker as err:
-            self.log.error(f'Caught ChannelClosedByBroker error: {err}')
-            raise pika.exceptions.ChannelClosedByBroker(404, str(err))
-        except pika.exceptions.ConnectionClosedByBroker as err:
-            self.log.error(f'Caught ConnectionClosedByBroker error: {err}')
-            raise pika.exceptions.ConnectionClosedByBroker(503, str(err))
+        except (TypeError, AttributeError, ChannelClosedByBroker) as err:
+            self.log.error(f'I tried to declare an exchange but failed with: {err}')
 
     def setup_queue(
             self, queue: str, arguments: Dict[str, str] = None, durable: bool = True,
@@ -209,10 +193,8 @@ class Mrsal:
             self.log.success(f'Queue is declared successfully: {queue_declare_info}, \
                 result={queue_declare_result.method}')
             return queue_declare_result
-        except (pika.exceptions.ChannelClosedByBroker,
-                pika.exceptions.ChannelWrongStateError) as err:
-            self.log.error(f'Caught ChannelClosedByBroker: {err}')
-            raise pika.exceptions.ChannelClosedByBroker(404, str(err))
+        except (ChannelClosedByBroker, ChannelWrongStateError) as err:
+            self.log.error(f'I tried to setup a queue but failed with: {err}')
 
     def setup_queue_binding(self, exchange: str, queue: str,
                             routing_key: str = None, arguments=None):
@@ -251,8 +233,7 @@ class Mrsal:
                                         will be routed to queue "{queue}"''')
             return bind_result
         except pika.exceptions.ChannelClosedByBroker as err:
-            self.log.error(f'Caught ChannelClosedByBroker: {err}')
-            raise pika.exceptions.ChannelClosedByBroker(503, str(err))
+            self.log.error(f'I tried to bind your queue but I failed with: {err}')
 
     def __ssl_setup(self) -> Dict[str, str]:
         """__ssl_setup is private method we are using to connect with rabbitserver
@@ -365,7 +346,8 @@ class Mrsal:
                        inactivity_timeout: int = None, requeue: bool = False,
                        fast_setup: bool = False,
                        callback_with_delivery_info: bool = False,
-                       thread_num: int = None):
+                       thread_num: int = None
+                       ):
         """
         Setup consumer:
             1- Consumer start consuming the messages from the queue.
@@ -434,10 +416,9 @@ class Mrsal:
                 if exchange is not None and exchange_type is not None:
                     self.exchange_exist(exchange=exchange, exchange_type=exchange_type)
                 self.queue_exist(queue=queue)
-            except (pika.exceptions.ChannelClosedByBroker,
-                    pika.exceptions.ConnectionClosedByBroker) as err:
-                self.log.error(f'{print_thread_index} Failed to check active resources. \
-                    Cancel consumer. {str(err)}')
+            except (ChannelClosedByBroker, ConnectionClosedByBroker) as err:
+                self.log.error(f'I tried checking if the exhange exist but failed with: {err}')
+                self.log.info('Closing the channel')
                 self._channel.cancel()
                 raise pika.exceptions.ChannelClosedByBroker(404, str(err))
         try:
@@ -479,53 +460,55 @@ class Mrsal:
                             is_processed = callback(*callback_args, body) \
                                 if callback_args else callback(body)
                         if is_processed:
-                            self._channel.basic_ack(
-                                delivery_tag=method_frame.delivery_tag)
-                            self.log.info(
-                                f'{print_thread_index} Message coming from the \
-                                    app={app_id} with messageId={msg_id} \
-                                    is acknowledged.')
+                            if self._channel.is_open:
+                                self._channel.basic_ack(
+                                    delivery_tag=method_frame.delivery_tag)
+                                self.log.info(
+                                    f'{print_thread_index} Message coming from the \
+                                        app={app_id} with messageId={msg_id} \
+                                        is acknowledged.')
                         else:
-                            self.log.warning(
-                                f'{print_thread_index} Could not process the message \
-                                    coming from the app={app_id} \
-                                    with messageId={msg_id}.')
-                            self._channel.basic_nack(
-                                delivery_tag=method_frame.delivery_tag, requeue=requeue)
-                            self.log.warning(f'{print_thread_index} Message rejected')
-                            if is_redelivery_configured(properties):
-                                msg_headers = properties.headers
-                                x_retry = msg_headers[config.RETRY_KEY]
-                                x_retry_limit = msg_headers[config.RETRY_LIMIT_KEY]
+                            if self._channel.is_open:
                                 self.log.warning(
-                                    f'{print_thread_index} Redelivery options are \
-                                        configured in message headers: \
-                                            x-retry={x_retry}, \
-                                            x-retry-limit={x_retry_limit}')
-                                if x_retry < x_retry_limit:
+                                    f'{print_thread_index} Could not process the message \
+                                        coming from the app={app_id} \
+                                        with messageId={msg_id}.')
+                                self._channel.basic_nack(
+                                    delivery_tag=method_frame.delivery_tag, requeue=requeue)
+                                self.log.warning(f'{print_thread_index} Message rejected')
+                                if is_redelivery_configured(properties):
+                                    msg_headers = properties.headers
+                                    x_retry = msg_headers[config.RETRY_KEY]
+                                    x_retry_limit = msg_headers[config.RETRY_LIMIT_KEY]
                                     self.log.warning(
-                                        f'{print_thread_index} Redelivering the message \
-                                            with messageId={msg_id}.')
-                                    msg_headers[config.RETRY_KEY] = x_retry + 1
-                                    prop_redeliver = pika.BasicProperties(
-                                        app_id=app_id,
-                                        message_id=msg_id,
-                                        content_type=config.CONTENT_TYPE,
-                                        content_encoding=config.CONTENT_ENCODING,
-                                        delivery_mode=pika.DeliveryMode.Persistent,
-                                        headers=msg_headers)
-                                    self._channel.basic_publish(
-                                        exchange=method_frame.exchange,
-                                        routing_key=method_frame.routing_key, body=body,
-                                        properties=prop_redeliver)
-                                    self.log.warning(
-                                        f'{print_thread_index} Message with \
-                                            messageId={msg_id} is successfully \
-                                            redelivered.')
-                                else:
-                                    self.log.warning(f'{print_thread_index} Max number \
-                                        of redeliveries ({x_retry_limit}) are reached \
-                                        for messageId={msg_id}.')
+                                        f'{print_thread_index} Redelivery options are \
+                                            configured in message headers: \
+                                                x-retry={x_retry}, \
+                                                x-retry-limit={x_retry_limit}')
+                                    if x_retry < x_retry_limit:
+                                        self.log.warning(
+                                            f'{print_thread_index} Redelivering the message \
+                                                with messageId={msg_id}.')
+                                        msg_headers[config.RETRY_KEY] = x_retry + 1
+                                        prop_redeliver = pika.BasicProperties(
+                                            app_id=app_id,
+                                            message_id=msg_id,
+                                            content_type=config.CONTENT_TYPE,
+                                            content_encoding=config.CONTENT_ENCODING,
+                                            delivery_mode=pika.DeliveryMode.Persistent,
+                                            headers=msg_headers)
+                                        self._channel.basic_publish(
+                                            exchange=method_frame.exchange,
+                                            routing_key=method_frame.routing_key, body=body,
+                                            properties=prop_redeliver)
+                                        self.log.warning(
+                                            f'{print_thread_index} Message with \
+                                                messageId={msg_id} is successfully \
+                                                redelivered.')
+                                    else:
+                                        self.log.warning(f'{print_thread_index} Max number \
+                                            of redeliveries ({x_retry_limit}) are reached \
+                                            for messageId={msg_id}.')
                         self.log.info(
                             f'[*] {print_thread_index} keep listening on {queue}...')
                     else:
