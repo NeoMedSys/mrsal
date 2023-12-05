@@ -437,9 +437,8 @@ class Mrsal:
                         self.consumer_tag = method_frame.consumer_tag
                         app_id = properties.app_id
                         msg_id = properties.message_id
-                        if properties.headers.auto_ack:
-                            self.log.info('Auto acknowledging the message')
-                            self._channel.basic_ack(delivery_tag=method_frame.delivery_tag)
+                        if hasattr('headers', properties):
+                            auto_ack = properties.headers.auto_ack if hasattr('auto_ack', properties.headers) else None
                         if self.verbose:
                             self.log.info(
                                 f"""
@@ -465,7 +464,11 @@ class Mrsal:
                         else:
                             is_processed = callback(*callback_args, body) \
                                 if callback_args else callback(body)
-                        if is_processed:
+
+                        if auto_ack:
+                            self.log.info('Auto acknowledging the message')
+                            self._channel.basic_ack(delivery_tag=method_frame.delivery_tag)
+                        if auto_ack is None and is_processed:
                             if self._channel.is_open:
                                 self._channel.basic_ack(
                                     delivery_tag=method_frame.delivery_tag)
@@ -474,6 +477,7 @@ class Mrsal:
                                         app={app_id} with messageId={msg_id} \
                                         is acknowledged.')
                         else:
+                            # NOTE! Mrsal is quit opionated and this should really not be inferred
                             if self._channel.is_open:
                                 self.log.warning(
                                     f'{print_thread_index} Could not process the message \
