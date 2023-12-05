@@ -92,9 +92,9 @@ prop = pika.BasicProperties(
         content_type='text/plain',
         content_encoding='utf-8',
         delivery_mode=pika.DeliveryMode.Persistent,
-        headers=None)
+        headers={'auto_ack': True})
 
-message_body = 'Hello'
+message_body = 'Shalom habibi'
 
 # Publish the message to the exchange to be routed to queue
 mrsal.publish_message(exchange='friendship',
@@ -119,7 +119,7 @@ import json
 
 def consumer_callback_with_delivery_info(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
     str_message = json.loads(message_param).replace('"', '')
-    if 'Hello' in str_message:
+    if 'Shalom habibi' in str_message:
         app_id = properties.app_id
         msg_id = properties.message_id
         print(f'app_id={app_id}, msg_id={msg_id}')
@@ -129,7 +129,7 @@ def consumer_callback_with_delivery_info(host_param: str, queue_param: str, meth
 
 def consumer_callback(host_param: str, queue_param: str, message_param: str):
     str_message = json.loads(message_param).replace('"', '')
-    if 'Hello' in str_message:
+    if 'Shalom habibi' in str_message:
         print('Salaam habibi')
         return True  # Consumed message processed correctly
     return False
@@ -172,15 +172,15 @@ mrsal = Mrsal(host=test_config.HOST,
               virtual_host=config.V_HOST)
 mrsal.connect_to_server()
 
-APP_ID = "TEST_CONCURRENT_CONSUMERS"
-EXCHANGE = "BOOKS"
-EXCHANGE_TYPE = ExchangeType.direct
-QUEUE_EMERGENCY = "SORT_BOOKS"
-NUM_THREADS = 3
-NUM_MESSAGES = 3
-INACTIVITY_TIMEOUT = 3
-ROUTING_KEY = "PROCESS BOOK"
-MESSAGE_ID = "LIBRARY"
+APP_ID="TEST_CONCURRENT_CONSUMERS"
+EXCHANGE="GoodFriends"
+EXCHANGE_TYPE='direct'
+QUEUE_EMERGENCY="alleSindInkludiert"  # place the excluded (but no fundamentalist danke) in an emergency queue  
+NUM_THREADS=3
+NUM_MESSAGES=3
+INACTIVITY_TIMEOUT=30 # time out after 30 seconds
+ROUTING_KEY="bleib-cool"
+MESSAGE_ID="Bleib cool und alles wird besser"
 
 def test_concurrent_consumer():
     # Start concurrent consumers
@@ -192,7 +192,6 @@ def test_concurrent_consumer():
                                      inactivity_timeout=INACTIVITY_TIMEOUT,
                                      fast_setup=True,
                                      callback_with_delivery_info=True)
-    print(f"Concurrent consumers are done")
 
     mrsal.close_connection()
 
