@@ -94,7 +94,7 @@ prop = pika.BasicProperties(
         delivery_mode=pika.DeliveryMode.Persistent,
         headers={'auto_ack': True})
 
-message_body = 'Hello'
+message_body = 'Shalom habibi'
 
 # Publish the message to the exchange to be routed to queue
 mrsal.publish_message(exchange='friendship',
