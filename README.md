@@ -92,7 +92,7 @@ prop = pika.BasicProperties(
         content_type='text/plain',
         content_encoding='utf-8',
         delivery_mode=pika.DeliveryMode.Persistent,
-        headers=None)
+        headers={'auto_ack': True})
 
 message_body = 'Hello'
 
