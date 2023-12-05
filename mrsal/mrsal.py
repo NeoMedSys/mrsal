@@ -18,6 +18,7 @@ from mrsal.utils.utils import is_redelivery_configured
 
 
 @dataclass
+# NOTE! change the doc style to google or numpy
 class Mrsal:
     """
     Mrsal creates a layer on top of Pika's core, providing methods to setup a
@@ -29,14 +30,14 @@ class Mrsal:
         :prop pika.credentials.Credentials credentials: auth credentials
         :prop str virtual_host: RabbitMQ virtual host to use
         :prop bool verbose: If True then more INFO logs will be printed
-        :prop int heartbeat: Controls RabbitMQ's server heartbeat timeout negotiation \
+        :prop int heartbeat: Controls RabbitMQ's server heartbeat timeout negotiation
             during connection tuning.
-        :prop int blocked_connection_timeout: blocked_connection_timeout \
+        :prop int blocked_connection_timeout: blocked_connection_timeout
             is the timeout, in seconds,
-            for the connection to remain blocked; if the timeout expires, \
+            for the connection to remain blocked; if the timeout expires,
                 the connection will be torn down
         :prop int prefetch_count: Specifies a prefetch window in terms of whole messages.
-        :prop bool ssl: Set this flag to true if you want to connect \
+        :prop bool ssl: Set this flag to true if you want to connect
             externally to the rabbitserver.
     """
     host: str
@@ -284,6 +285,7 @@ class Mrsal:
         )
         return exch_result
 
+    # NOTE! This is not a check but a setup function
     def queue_exist(self, queue: str):
         queue_result = self.setup_queue(queue=queue, passive=True)
         # message_count1 = result1.method.message_count
@@ -318,14 +320,15 @@ class Mrsal:
                 is_processed = callback(*callback_args, message)
                 self.log.info(f'is_processed= {is_processed}')
                 if is_processed:
-                    self._channel.basic_ack(delivery_tag=delivery_tag)
-                    # self._channel.basic_nack(delivery_tag=delivery_tag)
-                    self.log.info('Message acknowledged')
+                    if self._channel.is_open:
+                        self._channel.basic_ack(delivery_tag=delivery_tag)
+                        # self._channel.basic_nack(delivery_tag=delivery_tag)
+                        self.log.info('Message acknowledged')
 
-                    if method_frame.delivery_tag == escape_after:
-                        self.log.info(
-                            f'Break! Max messages to be processed is {escape_after}')
-                        break
+                        if method_frame.delivery_tag == escape_after:
+                            self.log.info(
+                                f'Break! Max messages to be processed is {escape_after}')
+                            break
                 else:
                     self.log.warning(f'Could not process the message= {message}. \
                                         Process it as dead letter.')
@@ -335,10 +338,10 @@ class Mrsal:
                         dead_letters_routing_key=dead_letters_routing_key, prop=prop)
                     if is_dead_letter_published:
                         self._channel.basic_ack(delivery_tag)
-                self.log.info('----------------------------------------------------')
         except FileNotFoundError as e:
             self.log.error(f'Connection closed with error: {e}')
-            self._channel.stop_consuming()
+            # NOTE! dont't kill conusmption for the user. Nobody likes an oponionated library
+            # self._channel.stop_consuming()
 
     def start_consumer(self, queue: str, callback: Callable,
                        callback_args: Tuple[str, Any] = None, exchange: str = None,
@@ -394,8 +397,7 @@ class Mrsal:
                 - If False, this method will check if the specified exchange and queue
                 already exist before start consuming.
         """
-        print_thread_index = f"thread={str(thread_num)} -> " \
-                             if thread_num is not None else ""
+        print_thread_index = f"thread={str(thread_num)} -> " if thread_num else ""
         self.log.info(
             f'''{print_thread_index} Consuming messages:
                     queue={queue},
@@ -413,8 +415,9 @@ class Mrsal:
         else:
             # Check if the necessary resources (exch & queue) are active
             try:
-                if exchange is not None and exchange_type is not None:
+                if exchange and exchange_type:
                     self.exchange_exist(exchange=exchange, exchange_type=exchange_type)
+                # OPTIMIZE! Change this method to an actual check and not a setup for the queue
                 self.queue_exist(queue=queue)
             except (ChannelClosedByBroker, ConnectionClosedByBroker) as err:
                 self.log.error(f'I tried checking if the exhange exist but failed with: {err}')
@@ -434,6 +437,9 @@ class Mrsal:
                         self.consumer_tag = method_frame.consumer_tag
                         app_id = properties.app_id
                         msg_id = properties.message_id
+                        if properties.headers.auto_ack:
+                            self.log.info('Auto acknowledging the message')
+                            self._channel.basic_ack(delivery_tag=method_frame.delivery_tag)
                         if self.verbose:
                             self.log.info(
                                 f"""
@@ -535,8 +541,6 @@ class Mrsal:
                 Channel is closed by broker. Cancel consumer. {str(err2)}')
             self._channel.cancel()
 
-    # --------------------------------------------------------------
-    # --------------------------------------------------------------
     def _spawn_mrsal_and_start_new_consumer(
             self, thread_num: int, queue: str, callback: Callable,
             callback_args: Tuple[str, Any] = None, exchange: str = None,
@@ -653,17 +657,16 @@ class Mrsal:
                                         routing_key=routing_key,
                                         body=json.dumps(message),
                                         properties=prop)
-            self.log.info(f'Message ({message}) is published to the exchange \
-                "{exchange}" with a routing key "{routing_key}"')
+            self.log.info(f'Message ({message}) is published to the exchange {exchange} with a routing key {routing_key}')
 
             # The message will be returned if no one is listening
             return True
         except pika.exceptions.UnroutableError as err1:
-            self.log.error(f'''Producer could not publish
+            self.log.error(f"""Producer could not publish
                                 message:{message}
-                                to the exchange "{exchange}" with a routing key \
+                                to the exchange "{exchange}" with a routing key
                                 "{routing_key}": {err1}
-                            ''', exc_info=True)
+                            """, exc_info=True)
             return False
 
     # TODO NOT IN USE: maybe we will use it in the method consume_messages_with_retries
@@ -673,9 +676,10 @@ class Mrsal:
                             dead_letters_routing_key: str = None,
                             prop: pika.BasicProperties = None):
         if dead_letters_exchange is not None and dead_letters_routing_key is not None:
-            self.log.warning(f'Re-route the message={message} to the \
-                    exchange={dead_letters_exchange} with \
-                    routing_key= {dead_letters_routing_key}')
+            self.log.warning(f"""
+                Re-route the message={message} to the
+                exchange={dead_letters_exchange} with
+                routing_key={dead_letters_routing_key}""")
             try:
                 self.publish_message(exchange=dead_letters_exchange,
                                      routing_key=dead_letters_routing_key,
