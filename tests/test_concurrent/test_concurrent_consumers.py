@@ -11,10 +11,7 @@ from mrsal.mrsal import Mrsal
 
 log = get_logger(__name__)
 
-mrsal = Mrsal(host=test_config.HOST,
-              port=config.RABBITMQ_PORT,
-              credentials=config.RABBITMQ_CREDENTIALS,
-              virtual_host=config.V_HOST)
+mrsal = Mrsal(host=test_config.HOST, port=config.RABBITMQ_PORT, credentials=config.RABBITMQ_CREDENTIALS, virtual_host=config.V_HOST)
 mrsal.connect_to_server()
 
 APP_ID = "TEST_CONCURRENT_CONSUMERS"
@@ -34,19 +31,15 @@ def test_concurrent_consumer():
     mrsal.queue_delete(queue=QUEUE_EMERGENCY)
     # ------------------------------------------
     # Setup exchange
-    exch_result: pika.frame.Method = mrsal.setup_exchange(exchange=EXCHANGE,
-                                                          exchange_type=EXCHANGE_TYPE)
+    exch_result: pika.frame.Method = mrsal.setup_exchange(exchange=EXCHANGE, exchange_type=EXCHANGE_TYPE)
     assert exch_result is not None
     # ------------------------------------------
     # Setup queue for madrid agreements
-    q_result: pika.frame.Method = mrsal.setup_queue(
-        queue=QUEUE_EMERGENCY)
+    q_result: pika.frame.Method = mrsal.setup_queue(queue=QUEUE_EMERGENCY)
     assert q_result is not None
 
     # Bind queue to exchange with binding key
-    qb_result: pika.frame.Method = mrsal.setup_queue_binding(exchange=EXCHANGE,
-                                                             routing_key=ROUTING_KEY,
-                                                             queue=QUEUE_EMERGENCY)
+    qb_result: pika.frame.Method = mrsal.setup_queue_binding(exchange=EXCHANGE, routing_key=ROUTING_KEY, queue=QUEUE_EMERGENCY)
     assert qb_result is not None
     # ------------------------------------------
     # Publisher:
@@ -58,11 +51,10 @@ def test_concurrent_consumer():
             content_type=test_config.CONTENT_TYPE,
             content_encoding=test_config.CONTENT_ENCODING,
             delivery_mode=pika.DeliveryMode.Persistent,
-            headers=None)
+            headers=None,
+        )
         message = "MRI_" + str(msg_index)
-        mrsal.publish_message(exchange=EXCHANGE,
-                              routing_key=ROUTING_KEY,
-                              message=json.dumps(message), prop=prop)
+        mrsal.publish_message(exchange=EXCHANGE, routing_key=ROUTING_KEY, message=json.dumps(message), prop=prop)
     # ------------------------------------------
     time.sleep(1)
     # Confirm messages are routed to the queue
@@ -72,14 +64,17 @@ def test_concurrent_consumer():
     # ------------------------------------------
     # Start concurrent consumers
     start_time = time.time()
-    mrsal.start_concurrence_consumer(total_threads=NUM_THREADS, queue=QUEUE_EMERGENCY,
-                                     callback=consumer_callback_with_delivery_info,
-                                     callback_args=(
-                                         test_config.HOST, QUEUE_EMERGENCY),
-                                     exchange=EXCHANGE, exchange_type=EXCHANGE_TYPE,
-                                     routing_key=ROUTING_KEY,
-                                     inactivity_timeout=INACTIVITY_TIMEOUT,
-                                     callback_with_delivery_info=True)
+    mrsal.start_concurrence_consumer(
+        total_threads=NUM_THREADS,
+        queue=QUEUE_EMERGENCY,
+        callback=consumer_callback_with_delivery_info,
+        callback_args=(test_config.HOST, QUEUE_EMERGENCY),
+        exchange=EXCHANGE,
+        exchange_type=EXCHANGE_TYPE,
+        routing_key=ROUTING_KEY,
+        inactivity_timeout=INACTIVITY_TIMEOUT,
+        callback_with_delivery_info=True,
+    )
     duration = time.time() - start_time
     log.info(f"Concurrent consumers are done in {duration} seconds")
     # ------------------------------------------
@@ -91,9 +86,7 @@ def test_concurrent_consumer():
     mrsal.close_connection()
 
 
-def consumer_callback_with_delivery_info(
-        host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver,
-        properties: pika.spec.BasicProperties, message_param: str):
+def consumer_callback_with_delivery_info(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
     time.sleep(5)
     return True
 
