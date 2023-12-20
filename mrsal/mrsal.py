@@ -74,7 +74,8 @@ class Mrsal:
                             ssl={self.ssl}
                             '''
         if self.verbose:
-            self.log.info(f'Establishing connection to RabbitMQ on {connection_info}')
+            self.log.info(
+                f'Establishing connection to RabbitMQ on {connection_info}')
         if self.ssl:
             self.log.info('setting up TLS connection')
             context = self.__ssl_setup()
@@ -102,7 +103,9 @@ class Mrsal:
                 f'Connection established with RabbitMQ on {connection_info}')
             return self._connection
         except (TypeError, AMQPConnectionError, gaierror) as err:
-            self.log.error(f'I tried to connect with the RabbitMQ server but failed with: {err}')
+            self.log.error(
+                f'I tried to connect with the RabbitMQ server but failed with: {err}')
+            raise pika.exceptions.AMQPConnectionError
 
     def setup_exchange(self, exchange: str, exchange_type: str,
                        arguments: Dict[str, str] = None, durable=True, passive=False,
@@ -147,8 +150,10 @@ class Mrsal:
                 f'Exchange is declared successfully: {exchange_declare_info}, \
                 result={exchange_declare_result}')
             return exchange_declare_result
-        except (TypeError, AttributeError, ChannelClosedByBroker) as err:
-            self.log.error(f'I tried to declare an exchange but failed with: {err}')
+        except (TypeError, AttributeError, ChannelClosedByBroker, ConnectionClosedByBroker) as err:
+            self.log.error(
+                f'I tried to declare an exchange but failed with: {err}')
+            raise pika.exceptions.ConnectionClosedByBroker(503, str(err))
 
     def setup_queue(
             self, queue: str, arguments: Dict[str, str] = None, durable: bool = True,
@@ -196,6 +201,7 @@ class Mrsal:
             return queue_declare_result
         except (ChannelClosedByBroker, ChannelWrongStateError) as err:
             self.log.error(f'I tried to setup a queue but failed with: {err}')
+            raise pika.exceptions.ChannelClosedByBroker(404, str(err))
 
     def setup_queue_binding(self, exchange: str, queue: str,
                             routing_key: str = None, arguments=None):
@@ -234,7 +240,9 @@ class Mrsal:
                                         will be routed to queue "{queue}"''')
             return bind_result
         except pika.exceptions.ChannelClosedByBroker as err:
-            self.log.error(f'I tried to bind your queue but I failed with: {err}')
+            self.log.error(
+                f'I tried to bind your queue but I failed with: {err}')
+            raise pika.exceptions.ChannelClosedByBroker(503, str(err))
 
     def __ssl_setup(self) -> Dict[str, str]:
         """__ssl_setup is private method we are using to connect with rabbitserver
@@ -259,7 +267,8 @@ class Mrsal:
 
     def stop_consuming(self, consumer_tag: str) -> NoReturn:
         self._channel.stop_consuming(consumer_tag=consumer_tag)
-        self.log.info(f'Consumer is stopped, carry on. consumer_tag={consumer_tag}')
+        self.log.info(
+            f'Consumer is stopped, carry on. consumer_tag={consumer_tag}')
 
     def close_channel(self) -> NoReturn:
         self._channel.close()
@@ -320,15 +329,14 @@ class Mrsal:
                 is_processed = callback(*callback_args, message)
                 self.log.info(f'is_processed= {is_processed}')
                 if is_processed:
-                    if self._channel.is_open:
-                        self._channel.basic_ack(delivery_tag=delivery_tag)
-                        # self._channel.basic_nack(delivery_tag=delivery_tag)
-                        self.log.info('Message acknowledged')
+                    self._channel.basic_ack(delivery_tag=delivery_tag)
+                    # self._channel.basic_nack(delivery_tag=delivery_tag)
+                    self.log.info('Message acknowledged')
 
-                        if method_frame.delivery_tag == escape_after:
-                            self.log.info(
-                                f'Break! Max messages to be processed is {escape_after}')
-                            break
+                    if method_frame.delivery_tag == escape_after:
+                        self.log.info(
+                            f'Break! Max messages to be processed is {escape_after}')
+                        break
                 else:
                     self.log.warning(f'Could not process the message= {message}. \
                                         Process it as dead letter.')
@@ -340,11 +348,11 @@ class Mrsal:
                         self._channel.basic_ack(delivery_tag)
         except FileNotFoundError as e:
             self.log.error(f'Connection closed with error: {e}')
-            # NOTE! dont't kill conusmption for the user. Nobody likes an oponionated library
-            # self._channel.stop_consuming()
+            self._channel.stop_consuming()
 
     def start_consumer(self, queue: str, callback: Callable,
                        callback_args: Tuple[str, Any] = None, exchange: str = None,
+                       auto_ack: bool = False,
                        exchange_type: str = None, routing_key: str = None,
                        inactivity_timeout: int = None, requeue: bool = False,
                        fast_setup: bool = False,
@@ -416,11 +424,13 @@ class Mrsal:
             # Check if the necessary resources (exch & queue) are active
             try:
                 if exchange and exchange_type:
-                    self.exchange_exist(exchange=exchange, exchange_type=exchange_type)
+                    self.exchange_exist(exchange=exchange,
+                                        exchange_type=exchange_type)
                 # OPTIMIZE! Change this method to an actual check and not a setup for the queue
                 self.queue_exist(queue=queue)
             except (ChannelClosedByBroker, ConnectionClosedByBroker) as err:
-                self.log.error(f'I tried checking if the exhange exist but failed with: {err}')
+                self.log.error(
+                    f'I tried checking if the exchange and queue exist but failed with: {err}')
                 self.log.info('Closing the channel')
                 self._channel.cancel()
                 raise pika.exceptions.ChannelClosedByBroker(404, str(err))
@@ -429,16 +439,13 @@ class Mrsal:
             method_frame: pika.spec.Basic.Deliver
             properties: pika.spec.BasicProperties
             body: Any
-            for method_frame, properties, body in self._channel.consume(
-                    queue=queue, inactivity_timeout=inactivity_timeout):
+            for method_frame, properties, body in self._channel.consume(queue=queue, auto_ack=auto_ack, inactivity_timeout=inactivity_timeout):
                 try:
                     if (method_frame, properties, body) != (None, None, None):
                         consumer_tags = self._channel.consumer_tags
                         self.consumer_tag = method_frame.consumer_tag
                         app_id = properties.app_id
                         msg_id = properties.message_id
-                        if hasattr('headers', properties):
-                            auto_ack = properties.headers.auto_ack if hasattr('auto_ack', properties.headers) else None
                         if self.verbose:
                             self.log.info(
                                 f"""
@@ -452,6 +459,10 @@ class Mrsal:
                                 consumer_tags={consumer_tags},
                                 consumer_tag={self.consumer_tag}
                                 """)
+
+                        if auto_ack:
+                            self.log.info(
+                                f'{print_thread_index} Message coming from the app={app_id} with messageId={msg_id} is AUTO acknowledged.')
                         if callback_with_delivery_info:
                             is_processed = callback(
                                 *callback_args,
@@ -462,30 +473,25 @@ class Mrsal:
                                 properties,
                                 body)
                         else:
-                            is_processed = callback(*callback_args, body) \
-                                if callback_args else callback(body)
+                            is_processed = callback(
+                                *callback_args, body) if callback_args else callback(body)
 
-                        if auto_ack:
-                            self.log.info('Auto acknowledging the message')
-                            self._channel.basic_ack(delivery_tag=method_frame.delivery_tag)
-                        if auto_ack is None and is_processed:
-                            if self._channel.is_open:
+                        if not auto_ack:
+                            if is_processed:
                                 self._channel.basic_ack(
                                     delivery_tag=method_frame.delivery_tag)
                                 self.log.info(
-                                    f'{print_thread_index} Message coming from the \
-                                        app={app_id} with messageId={msg_id} \
-                                        is acknowledged.')
-                        else:
-                            # NOTE! Mrsal is quit opionated and this should really not be inferred
-                            if self._channel.is_open:
+                                    f'{print_thread_index} Message coming from the app={app_id} with messageId={msg_id} is acknowledged.')
+
+                            else:
                                 self.log.warning(
                                     f'{print_thread_index} Could not process the message \
                                         coming from the app={app_id} \
                                         with messageId={msg_id}.')
                                 self._channel.basic_nack(
                                     delivery_tag=method_frame.delivery_tag, requeue=requeue)
-                                self.log.warning(f'{print_thread_index} Message rejected')
+                                self.log.warning(
+                                    f'{print_thread_index} Message rejected')
                                 if is_redelivery_configured(properties):
                                     msg_headers = properties.headers
                                     x_retry = msg_headers[config.RETRY_KEY]
@@ -535,7 +541,8 @@ class Mrsal:
                         exc_info=True)
                     pass
                 except KeyboardInterrupt:
-                    self.log(f'{print_thread_index} Stopping Mrsal consumption.')
+                    self.log(
+                        f'{print_thread_index} Stopping Mrsal consumption.')
                     self.stop_consuming(self.consumer_tag)
                     self.close_connection()
                     break
@@ -583,7 +590,8 @@ class Mrsal:
             mrsal_obj.close_connection()
             self.log.info(f"thread_num={thread_num} -> End consumer")
         except Exception as e:
-            self.log.error(f"thread_num={thread_num} -> Failed to consumer: {e}")
+            self.log.error(
+                f"thread_num={thread_num} -> Failed to consumer: {e}")
 
     def start_concurrence_consumer(
             self, total_threads: int, queue: str, callback: Callable,
@@ -645,7 +653,8 @@ class Mrsal:
         else:
             # Check if the necessary resources (exch & queue) are active
             try:
-                self.exchange_exist(exchange=exchange, exchange_type=exchange_type)
+                self.exchange_exist(exchange=exchange,
+                                    exchange_type=exchange_type)
                 if queue is not None:
                     self.queue_exist(queue=queue)
             except (pika.exceptions.ChannelClosedByBroker,
@@ -661,7 +670,8 @@ class Mrsal:
                                         routing_key=routing_key,
                                         body=json.dumps(message),
                                         properties=prop)
-            self.log.info(f'Message ({message}) is published to the exchange {exchange} with a routing key {routing_key}')
+            self.log.info(
+                f'Message ({message}) is published to the exchange {exchange} with a routing key {routing_key}')
 
             # The message will be returned if no one is listening
             return True

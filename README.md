@@ -92,9 +92,9 @@ prop = pika.BasicProperties(
         content_type='text/plain',
         content_encoding='utf-8',
         delivery_mode=pika.DeliveryMode.Persistent,
-        headers={'auto_ack': True})
+        headers=None)
 
-message_body = 'Shalom habibi'
+message_body = 'Hello'
 
 # Publish the message to the exchange to be routed to queue
 mrsal.publish_message(exchange='friendship',
@@ -119,18 +119,18 @@ import json
 
 def consumer_callback_with_delivery_info(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
     str_message = json.loads(message_param).replace('"', '')
-    if 'Shalom habibi' in str_message:
+    if 'Hello' in str_message:
         app_id = properties.app_id
         msg_id = properties.message_id
         print(f'app_id={app_id}, msg_id={msg_id}')
-        print('Salaam habibi')
+        print('Hola habibi')
         return True  # Consumed message processed correctly
     return False
 
 def consumer_callback(host_param: str, queue_param: str, message_param: str):
     str_message = json.loads(message_param).replace('"', '')
-    if 'Shalom habibi' in str_message:
-        print('Salaam habibi')
+    if 'Hello' in str_message:
+        print('Hola habibi')
         return True  # Consumed message processed correctly
     return False
 
