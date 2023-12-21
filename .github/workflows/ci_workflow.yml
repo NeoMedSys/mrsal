@@ -32,5 +32,26 @@ jobs:
       - name: Install project dependencies
         run: poetry install
 
+      - name: Set up RabbitMQ
+        run: |
+          docker run -d --name rabbitmq-server \
+            -p 5672:5672 -p 15672:15672 \
+            -e RABBITMQ_DEFAULT_USER=appy \
+            -e RABBITMQ_DEFAULT_PASS=ishigaki-urumasi \
+            -e RABBITMQ_DEFAULT_VHOST=myMrsalHost \
+            rabbitmq:3.9.21-management
+  
+          # Enable the rabbitmq_delayed_message_exchange plugin
+          docker exec rabbitmq-server rabbitmq-plugins enable rabbitmq_delayed_message_exchange
+  
+      - name: Wait for RabbitMQ to start
+        run: |
+          until docker exec rabbitmq-server rabbitmqctl list_queues -p myMrsalHost; do
+            sleep 1
+          done
+  
+      - name: Display RabbitMQ status
+        run: docker exec rabbitmq-server rabbitmqctl status   
+
       - name: Run tests
         run: poetry run nox
