@@ -41,32 +41,6 @@ jobs:
           docker-compose -f $GITHUB_WORKSPACE/docker-compose.yml up -d
           echo -n "Verifying images:"
           docker images     
-      - name: Run tox
+      - name: Run Tests with Nox
         run: |
-          poetry run tox 
-        
-  deploy:
-    needs: test
-    runs-on: ubuntu-latest 
-    steps:
-      - uses: actions/checkout@v2
-      - name: Set up Python
-        uses: actions/setup-python@v2
-        with:
-          python-version: 3.8
-      - name: Install dependencies
-        uses: abatilo/actions-poetry@v2.0.0
-        with:
-          poetry-version: 1.1.8 
-      - name: Poetry install
-        run: |
-          poetry install
-      - name: publish
-        if: github.event_name == 'push'
-        # Run this job if it was manually started or the parent workflow succeeded
-        # if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
-        env:
-          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
-        run: |
-          poetry config pypi-token.pypi $PYPI_TOKEN
-          poetry publish --build
+          nox 
