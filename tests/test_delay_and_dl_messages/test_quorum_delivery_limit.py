@@ -125,7 +125,3 @@ def consumer_callback(host: str, queue: str, method_frame: pika.spec.Basic.Deliv
 
 def consumer_dead_letters_callback(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
     return True
-
-
-if __name__ == "__main__":
-    test_quorum_delivery_limit()

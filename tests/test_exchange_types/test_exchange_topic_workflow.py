@@ -123,7 +123,3 @@ def test_topic_exchange_workflow():
 
 def consumer_callback(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
     return True
-
-
-if __name__ == "__main__":
-    test_topic_exchange_workflow()

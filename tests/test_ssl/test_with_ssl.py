@@ -140,7 +140,3 @@ def consumer_callback_with_delivery_info(host_param: str, queue_param: str, meth
 
 def consumer_callback(host_param: str, queue_param: str, message_param: str):
     return True
-
-
-if __name__ == "__main__":
-    test_direct_exchange_workflow()

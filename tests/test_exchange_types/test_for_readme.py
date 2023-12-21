@@ -74,7 +74,3 @@ def consumer_callback(host_param: str, queue_param: str, message_param: str):
         print("Salaam habibi")
         return True  # Consumed message processed correctly
     return False
-
-
-if __name__ == "__main__":
-    test_basic_workflow()

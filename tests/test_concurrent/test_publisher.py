@@ -47,7 +47,3 @@ def test_concurrent_consumer():
     # ------------------------------------------
 
     mrsal.close_connection()
-
-
-if __name__ == "__main__":
-    test_concurrent_consumer()

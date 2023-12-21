@@ -102,7 +102,3 @@ def test_redelivery_with_delay():
 
 def consumer_callback(host: str, queue: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message: str):
     return message != b'"\\"uuid2\\""'
-
-
-if __name__ == "__main__":
-    test_redelivery_with_delay()

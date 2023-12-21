@@ -82,7 +82,3 @@ def test_delay_letter():
 
 def consumer_callback(host: str, queue: str, message: str):
     return True
-
-
-if __name__ == "__main__":
-    test_delay_letter()

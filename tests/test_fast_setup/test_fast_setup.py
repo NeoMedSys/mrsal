@@ -10,14 +10,6 @@ from mrsal.mrsal import Mrsal
 
 log = get_logger(__name__)
 
-# mrsal = Mrsal(
-#     host=config.RABBIT_DOMAIN,
-#     port=config.RABBITMQ_PORT_TLS,
-#     ssl=True,
-#     credentials=config.RABBITMQ_CREDENTIALS,
-#     virtual_host=config.V_HOST
-# )
-
 mrsal = Mrsal(host=test_config.HOST, port=config.RABBITMQ_PORT, credentials=config.RABBITMQ_CREDENTIALS, virtual_host=config.V_HOST)
 
 mrsal.connect_to_server()
@@ -73,7 +65,3 @@ def consumer_callback(host: str, queue: str, method_frame: pika.spec.Basic.Deliv
     if "Salaam" in str_message:
         return True  # Consumed message processed correctly
     return False
-
-
-if __name__ == "__main__":
-    test_fast_setup()
