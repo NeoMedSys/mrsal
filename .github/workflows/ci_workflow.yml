@@ -41,13 +41,23 @@ jobs:
             -e RABBITMQ_DEFAULT_VHOST=myMrsalHost \
             rabbitmq:3.9.21-management
           
+          # Install dependencies
+          docker exec rabbitmq-server sh -c "\
+          apt-get update && \
+          apt-get install -y curl unzip \
+          "
+          
           # Download and install the rabbitmq_delayed_message_exchange plugin
           docker exec rabbitmq-server sh -c "\
           curl -L https://github.com/rabbitmq/rabbitmq-delayed-message-exchange/releases/download/3.9.0/rabbitmq_delayed_message_exchange-3.9.0.ez > $RABBITMQ_HOME/plugins/rabbitmq_delayed_message_exchange-3.9.0.ez && \
-          chown rabbitmq:rabbitmq $RABBITMQ_HOME/plugins/rabbitmq_delayed_message_exchange-3.9.0.ez && \
-          rabbitmq-plugins enable rabbitmq_delayed_message_exchange \
+          chown rabbitmq:rabbitmq $RABBITMQ_HOME/plugins/rabbitmq_delayed_message_exchange-3.9.0.ez \
           "
           
+          # Enable plugin
+          docker exec rabbitmq-server sh -c "\
+          rabbitmq-plugins enable rabbitmq_delayed_message_exchange \
+          "
+
       - name: Wait for RabbitMQ to start
         run: |
           until docker exec rabbitmq-server rabbitmqctl list_queues -p myMrsalHost; do
