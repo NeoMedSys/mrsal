@@ -65,7 +65,16 @@ jobs:
           done
   
       - name: Display RabbitMQ status
-        run: docker exec rabbitmq-server rabbitmqctl status   
+        run: docker exec rabbitmq-server rabbitmqctl status 
+        
+      - name: List containers
+        run: docker ps
+      
+      - name: list files
+        run: ls -ltrha
+
+      - name: print GITHUB_WORKSPACE
+        run: echo $GITHUB_WORKSPACE
 
       - name: Run tests
-        run: poetry run nox
+        run: poetry run pytest tests/test_auto_ack/test_message_auto_ack.py
