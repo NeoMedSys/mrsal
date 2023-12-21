@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: [3.8]
+        python-version: [3.10]
         poetry-version: [1.1.8]
         os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
@@ -24,23 +24,13 @@ jobs:
         uses: actions/setup-python@v2
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install dependencies
-        #  possibly change this for a curl install although OS felxibility will change
-        uses: abatilo/actions-poetry@v2.0.0
-        with:
-          poetry-version: ${{ matrix.poetry-version }}
-      - name: Poetry install
-        run: | 
-          poetry install
-      
-      # PS! docker-compose-CI.yml is the same as docker-compose.yml but with different environment variables' names
-      # Because in docker-compose-CI.yml we are setting env vars from github secrets.
-      - name: Build and run image from docker-compose.yml
+      - name: Install Poetry
         run: |
-          docker-compose -f $GITHUB_WORKSPACE/docker-compose.yml build --no-cache
-          docker-compose -f $GITHUB_WORKSPACE/docker-compose.yml up -d
-          echo -n "Verifying images:"
-          docker images     
-      - name: Run Tests with Nox
-        run: |
-          nox 
+          curl -sSL https://install.python-poetry.org | python3 -
+          echo "$HOME/.poetry/bin" >> $GITHUB_PATH
+
+      - name: Install project dependencies
+        run: poetry install
+
+      - name: Run tests
+        run: nox
