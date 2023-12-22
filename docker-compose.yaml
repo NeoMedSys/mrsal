@@ -2,7 +2,7 @@ version: "3.9"
 
 services:
   rabbitmq_server:
-    image: mrsal-v0.7.1
+    image: mrsal-v0.7.2
     build:
       context: .
     container_name: mrsal
