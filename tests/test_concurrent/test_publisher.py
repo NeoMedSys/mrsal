@@ -15,10 +15,7 @@ from mrsal.mrsal import Mrsal
 
 log = get_logger(__name__)
 
-mrsal = Mrsal(host=test_config.HOST,
-              port=config.RABBITMQ_PORT,
-              credentials=config.RABBITMQ_CREDENTIALS,
-              virtual_host=config.V_HOST)
+mrsal = Mrsal(host=test_config.HOST, port=config.RABBITMQ_PORT, credentials=config.RABBITMQ_CREDENTIALS, virtual_host=config.V_HOST)
 mrsal.connect_to_server()
 
 APP_ID = "TEST_CONCURRENT_CONSUMERS"
@@ -43,15 +40,10 @@ def test_concurrent_consumer():
             content_type=test_config.CONTENT_TYPE,
             content_encoding=test_config.CONTENT_ENCODING,
             delivery_mode=pika.DeliveryMode.Persistent,
-            headers=None)
+            headers=None,
+        )
         message = "CT_" + str(msg_index)
-        mrsal.publish_message(exchange=EXCHANGE,
-                              routing_key=ROUTING_KEY,
-                              message=json.dumps(message), prop=prop)
+        mrsal.publish_message(exchange=EXCHANGE, routing_key=ROUTING_KEY, message=json.dumps(message), prop=prop)
     # ------------------------------------------
 
     mrsal.close_connection()
-
-
-if __name__ == "__main__":
-    test_concurrent_consumer()

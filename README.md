@@ -1,7 +1,8 @@
 # MRSAL  <img align="right" width="125" alt="20200907_104224" src="https://github.com/NeoMedSys/mrsal/assets/9555305/ffb55c86-1e9d-4806-b1ca-c906d6985e3a">
-[![Release](https://img.shields.io/badge/release-v0.6.3--alpha-blue.svg)](https://pypi.org/project/mrsal/) [![Python 3.10](https://img.shields.io/badge/python-3.10-blue.svg)](https://www.python.org/downloads/release/python-3103/) [![Documentation](https://img.shields.io/badge/doc-latest-blue.svg)](https://github.com/NeoMedSys/mrsal/blob/main/FullGuide.md)
+[![Release](https://img.shields.io/badge/release-v0.7.1--alpha-blue.svg)](https://pypi.org/project/mrsal/) [![Python 3.10](https://img.shields.io/badge/python-3.10-blue.svg)](https://www.python.org/downloads/release/python-3103/) [![Documentation](https://img.shields.io/badge/doc-latest-blue.svg)](https://github.com/NeoMedSys/mrsal/blob/main/FullGuide.md)
 <!-- [![Build Status](https://github.com/NeoMedSys/fatty-model-deploy/actions/workflows/tester.yml/badge.svg)](https://github.com/NeoMedSys/fatty-model-deploy/actions/runs/5576890234) -->
-[![Tests Status](https://github.com/NeoMedSys/mrsal/assets/9555305/5d29b991-1e7f-4737-8e55-5ee2bc9bb5db)](./reports/junit/junit.xml) [![Coverage Status](https://github.com/NeoMedSys/mrsal/assets/9555305/852b4256-d52e-49da-9134-f0e7381935ba)](./reports/coverage/htmlcov/index.html) [![Flake8 Status](https://github.com/NeoMedSys/mrsal/assets/9555305/0113f279-7c5c-4ed8-bd2f-8b2cf84da2a9)](./reports/flake8/flake8.txt)
+[![Tests Status](https://github.com/NeoMedSys/mrsal/blob/MRSAL-22/reports/badges/tests-badge.svg)](./reports/junit/junit.xml) [![Coverage Status](https://github.com/NeoMedSys/mrsal/blob/MRSAL-22/reports/badges/coverage-badge.svg)](./reports/coverage/htmlcov/index.html) [![Flake8 Status](https://github.com/NeoMedSys/mrsal/blob/MRSAL-22/reports/badges/ruff-badge.svg)](./reports/flake8/flake8.txt)
+
 
 ## Intro
 Mrsal is a simple to use message broker abstraction on top of [RabbitMQ](https://www.rabbitmq.com/) and [Pika](https://pika.readthedocs.io/en/stable/index.html). The goal is to make Mrsal trivial to re-use in all services of a distributed system and to make the use of advanced message queing protocols easy and safe. No more big chunks of repetive code across your services or bespoke solutions to handle dead letters. 
@@ -92,9 +93,9 @@ prop = pika.BasicProperties(
         content_type='text/plain',
         content_encoding='utf-8',
         delivery_mode=pika.DeliveryMode.Persistent,
-        headers={'auto_ack': True})
+        headers=None)
 
-message_body = 'Shalom habibi'
+message_body = 'Hello'
 
 # Publish the message to the exchange to be routed to queue
 mrsal.publish_message(exchange='friendship',
@@ -119,18 +120,18 @@ import json
 
 def consumer_callback_with_delivery_info(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
     str_message = json.loads(message_param).replace('"', '')
-    if 'Shalom habibi' in str_message:
+    if 'Hello' in str_message:
         app_id = properties.app_id
         msg_id = properties.message_id
         print(f'app_id={app_id}, msg_id={msg_id}')
-        print('Salaam habibi')
+        print('Hola habibi')
         return True  # Consumed message processed correctly
     return False
 
 def consumer_callback(host_param: str, queue_param: str, message_param: str):
     str_message = json.loads(message_param).replace('"', '')
-    if 'Shalom habibi' in str_message:
-        print('Salaam habibi')
+    if 'Hello' in str_message:
+        print('Hola habibi')
         return True  # Consumed message processed correctly
     return False
 
