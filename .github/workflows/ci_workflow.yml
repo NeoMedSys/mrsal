@@ -1,4 +1,4 @@
-name: ci_workflow
+name: tests_workflow
 
 on:
   push:
