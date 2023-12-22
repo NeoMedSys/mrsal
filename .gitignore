@@ -147,6 +147,3 @@ credentials/rabbit_certs/
 storage/model_conf/mrsal_conf/mrsal.env
 credentials/
 storage/
-reports/coverage/*
-reports/junit/*
-reports/flake8/*

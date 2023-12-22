@@ -6,10 +6,11 @@ on:
   workflow_dispatch:
 
 jobs:
-  setup-rabbitmq:
+  run-tests:
     strategy:
       fail-fast: false
       matrix:
+        python-version: ["3.10"]
         os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
@@ -53,18 +54,6 @@ jobs:
         
       - name: List containers
         run: docker ps
-
-  install-dependencies:
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10"]
-        os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
-    needs: setup-rabbitmq
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
       
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v3
@@ -84,35 +73,6 @@ jobs:
 
       - name: print GITHUB_WORKSPACE
         run: echo $GITHUB_WORKSPACE
-
-      - name: Run tests
-        run: poetry run nox
-
-      - name: list files
-        run: ls -ltrha
-  
-  run-tests:
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10"]
-        os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
-    needs: install-dependencies
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v3
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: print GITHUB_WORKSPACE
-        run: echo $GITHUB_WORKSPACE
-
-      - name: list project content
-        run: ls -ltrha
 
       - name: Run tests
         run: poetry run nox
