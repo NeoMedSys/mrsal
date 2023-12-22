@@ -6,27 +6,15 @@ on:
   workflow_dispatch:
 
 jobs:
-  test:
+  setup-rabbitmq:
     strategy:
       fail-fast: false
       matrix:
-        python-version: [3.10]
-        poetry-version: [1.1.8]
         os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v3
-        with:
-          python-version: "3.10"
-      - name: Install Poetry
-        run: |
-          curl -sSL https://install.python-poetry.org | python3 -
-          echo "$HOME/.poetry/bin" >> $GITHUB_PATH
-
-      - name: Install project dependencies
-        run: poetry install
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Set up RabbitMQ
         run: |
@@ -37,19 +25,19 @@ jobs:
             -e RABBITMQ_DEFAULT_VHOST=myMrsalHost \
             rabbitmq:3.9.21-management
           
-          # Install dependencies
+          # Install dependencies to Rabbitmq container
           docker exec rabbitmq-server sh -c "\
           apt-get update && \
           apt-get install -y curl unzip \
           "
           
-          # Download and install the rabbitmq_delayed_message_exchange plugin
+          # Download and install the rabbitmq_delayed_message_exchange plugin to Rabbitmq container
           docker exec rabbitmq-server sh -c "\
           curl -L https://github.com/rabbitmq/rabbitmq-delayed-message-exchange/releases/download/3.9.0/rabbitmq_delayed_message_exchange-3.9.0.ez > $RABBITMQ_HOME/plugins/rabbitmq_delayed_message_exchange-3.9.0.ez && \
           chown rabbitmq:rabbitmq $RABBITMQ_HOME/plugins/rabbitmq_delayed_message_exchange-3.9.0.ez \
           "
           
-          # Enable plugin
+          # Enable plugin in to Rabbitmq container
           docker exec rabbitmq-server sh -c "\
           rabbitmq-plugins enable rabbitmq_delayed_message_exchange \
           "
@@ -65,7 +53,32 @@ jobs:
         
       - name: List containers
         run: docker ps
+
+  install-dependencies:
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10"]
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    needs: setup-rabbitmq
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
       
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v3
+        with:
+          python-version: ${{ matrix.python-version }}
+      
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          echo "$HOME/.poetry/bin" >> $GITHUB_PATH
+
+      - name: Install project dependencies
+        run: poetry install
+
       - name: list files
         run: ls -ltrha
 
@@ -74,3 +87,35 @@ jobs:
 
       - name: Run tests
         run: poetry run nox
+
+      - name: list files
+        run: ls -ltrha
+  
+  run-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10"]
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    needs: install-dependencies
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v3
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: print GITHUB_WORKSPACE
+        run: echo $GITHUB_WORKSPACE
+
+      - name: list project content
+        run: ls -ltrha
+
+      - name: Run tests
+        run: poetry run nox
+
+      - name: list project content
+        run: ls -ltrha
