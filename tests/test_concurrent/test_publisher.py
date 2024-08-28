@@ -7,14 +7,12 @@ import json
 
 import pika
 from pika.exchange_type import ExchangeType
-from loguru import logger as log
 
 import mrsal.config.config as config
 import tests.config as test_config
 
 from mrsal.mrsal import Mrsal
 
-log = get_logger(__name__)
 
 mrsal = Mrsal(host=test_config.HOST, port=config.RABBITMQ_PORT, credentials=config.RABBITMQ_CREDENTIALS, virtual_host=config.V_HOST)
 mrsal.connect_to_server()

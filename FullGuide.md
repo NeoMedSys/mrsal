@@ -1126,10 +1126,11 @@ import time
 import mrsal.config.config as config
 import pika
 import tests.config as test_config
-from mrsal.config.logging import get_logger
+from loguru import logger as log
+
 from mrsal.mrsal import Mrsal
 
-log = get_logger(__name__)
+
 
 mrsal = Mrsal(host=test_config.HOST,
               port=config.RABBITMQ_PORT,
@@ -1257,10 +1258,11 @@ import time
 import mrsal.config.config as config
 import pika
 import tests.config as test_config
-from mrsal.config.logging import get_logger
+from logurur import logger as log
+
 from mrsal.mrsal import Mrsal
 
-log = get_logger(__name__)
+
 
 mrsal = Mrsal(host=test_config.HOST,
               port=config.RABBITMQ_PORT,
