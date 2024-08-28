@@ -17,10 +17,6 @@ ruff = "^0.1.8"
 nox = "^2023.4.22"
 loguru = "^0.7.2"
 
-[[tool.poetry.source]]
-name = "neomedsys"
-url = "https://pypi.neomodels.app/simple"
-#poetry publish --build --repository neomedsys
 
 [tool.poetry.group.dev.dependencies]
 coverage = "^7.2.7"
