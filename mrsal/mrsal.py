@@ -52,7 +52,7 @@ class Mrsal:
     _connection: pika.BlockingConnection = None
     _channel = None
 
-    @retry((pika.exceptions.AMQPConnectionError, pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosedByBroker, TypeError, gaierror), tries=5, delay=1, jitter=(0, 2), logger=logger)
+    @retry((pika.exceptions.AMQPConnectionError, pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosedByBroker, TypeError, gaierror), tries=5, delay=1, jitter=(0, 10), logger=logger)
     def connect_to_server(self, context: Dict[str, str] = None):
         """We can use connect_to_server for establishing a connection to RabbitMQ server specifying connection parameters.
 
@@ -292,7 +292,7 @@ class Mrsal:
             logger.error(f"Connection closed with error: {e}")
             self._channel.stop_consuming()
 
-    @retry((pika.exceptions.AMQPConnectionError, pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosedByBroker, pika.exceptions.ChannelClosedByBroker), tries=5, delay=1, jitter=(0, 2), logger=logger)
+    @retry((pika.exceptions.AMQPConnectionError, pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosedByBroker, pika.exceptions.ChannelClosedByBroker), tries=5, delay=1, jitter=(0, 10), logger=logger)
     def start_consumer(
         self,
         queue: str,
@@ -527,7 +527,7 @@ class Mrsal:
                 [callback_with_delivery_info] * total_threads,
             )
 
-    @retry((pika.exceptions.UnroutableError, pika.exceptions.ChannelClosedByBroker, pika.exceptions.ConnectionClosedByBroker), tries=5, delay=1, jitter=(0, 2), logger=logger)
+    @retry((pika.exceptions.UnroutableError, pika.exceptions.ChannelClosedByBroker, pika.exceptions.ConnectionClosedByBroker), tries=5, delay=1, jitter=(0, 10), logger=logger)
     def publish_message(
         self,
         exchange: str,
