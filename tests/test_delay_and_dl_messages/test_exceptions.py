@@ -3,13 +3,10 @@ import os
 import pika
 import pytest
 from pika.exchange_type import ExchangeType
-
 import mrsal.config.config as config
 import tests.config as test_config
-from mrsal.config.logging import get_logger
-from mrsal.mrsal import Mrsal
 
-log = get_logger(__name__)
+from mrsal.mrsal import Mrsal
 
 
 def test_connection_exceptions():
