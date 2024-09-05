@@ -1,16 +1,13 @@
 import json
 import os
 import time
-
 import pika
 
 import mrsal.config.config as config
 
 # import tests.config as test_config
-from mrsal.config.logging import get_logger
 from mrsal.mrsal import Mrsal
 
-log = get_logger(__name__)
 
 """
 In order to execute this test,

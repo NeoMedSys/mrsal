@@ -12,13 +12,14 @@ import json
 import time
 
 import pika
+from loguru import logger as log
 
 import mrsal.config.config as config
 import tests.config as test_config
-from mrsal.config.logging import get_logger
+
 from mrsal.mrsal import Mrsal
 
-log = get_logger(__name__)
+
 
 mrsal = Mrsal(host=test_config.HOST, port=config.RABBITMQ_PORT, credentials=config.RABBITMQ_CREDENTIALS, virtual_host=config.V_HOST, verbose=True)
 mrsal.connect_to_server()

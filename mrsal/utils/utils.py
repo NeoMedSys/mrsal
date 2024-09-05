@@ -1,6 +1,6 @@
 import pika
 
-import mrsal.config.config as config
+from mrsal.config import config
 
 
 def is_redelivery_configured(msg_prop: pika.spec.BasicProperties):
