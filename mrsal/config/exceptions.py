@@ -2,6 +2,8 @@
 This is script for custom exceptions
 """
 
+class MissingTLSCerts(Exception):
+    """Fail to find tls certs"""
 
 class RabbitMQConnectionError(Exception):
     """Fail to connect to RabbitMQ"""
