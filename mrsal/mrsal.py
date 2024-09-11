@@ -1,15 +1,16 @@
 import concurrent.futures
 import json
 import os
-import time
 import ssl
 import pika
+import asyncio
 from pydantic.dataclasses import dataclass
 from socket import gaierror
-from typing import Any, Callable, Dict, Tuple, Union, List
-from pika import SSLOptions
+from typing import Any, Callable, Dict, Tuple
+from pika import SSLOptions, BlockingConnection
 from pika.exceptions import ChannelClosedByBroker, ConnectionClosedByBroker
 from pika.exchange_type import ExchangeType
+from pika.adapters.asyncio_connection import AsyncioConnection
 from retry import retry
 
 from mrsal.config import config
@@ -45,6 +46,7 @@ class Mrsal:
     port: str
     credentials: tuple[str, str]
     virtual_host: str
+    use_blocking: bool
     ssl: bool = False
     verbose: bool = False
     prefetch_count: int = 1
@@ -66,8 +68,11 @@ class Mrsal:
             if yikes_matches:
                 raise MissingTLSCerts(f"TLS/SSL is activated but I could not find the following certs: {', '.join(yikes_matches)}")
 
-    def connect_to_server(self, context: dict[str, str] | None = None):
-        """We can use connect_to_server for establishing a connection to RabbitMQ server specifying connection parameters.
+    def setup_blocking_connection(self, context: dict[str, str] | None = None):
+        """We can use setup_blocking_connection for establishing a connection to RabbitMQ server specifying connection parameters.
+        The connection is blocking which is only advisable to use for the apps with low througput. 
+
+        DISCLAIMER: If you expect a lot of traffic to the app or if its realtime then you should use async.
 
         Parameters
         ----------
@@ -90,7 +95,7 @@ class Mrsal:
         ssl_options = SSLOptions(context, self.host) if context else None
         credentials = pika.PlainCredentials(*self.credentials)
         try:
-            self._connection = pika.BlockingConnection(
+            self._connection = BlockingConnection(
                 pika.ConnectionParameters(
                     host=self.host,
                     port=self.port,
@@ -101,18 +106,77 @@ class Mrsal:
                     blocked_connection_timeout=self.blocked_connection_timeout,
                 )
             )
-            self._channel: pika.adapters.blocking_connection.BlockingChannel = self._connection.channel()
+            self._channel = self._connection.channel()
             # Note: prefetch is set to 1 here as an example only.
             # In production you will want to test with different prefetch values to find which one provides the best performance and usability for your solution.
             # use a high number of prefecth if you think the pods with Mrsal installed can handle it. A prefetch 4 will mean up to 4 async runs before ack is required
             self._channel.basic_qos(prefetch_count=self.prefetch_count)
             self.log.info(f"Connection established with RabbitMQ on {connection_info}")
-            return self._connection
-        except pika.exceptions.AMQPConnectionError as err:
-            msg: str = f"I tried to connect with the RabbitMQ server but failed with: {err}"
-            self.log.error(msg)
+        except (pika.exceptions.AMQPConnectionError, Exception) as err:
+            self.log.error(f"I tried to connect with the RabbitMQ server but failed with: {err}")
 
-    def setup_exchange(self, 
+    async def setup_aync_connection(self, context: dict[str, str] | None = None):
+        """We can use setup_blocking_connection for establishing a connection to RabbitMQ server specifying connection parameters.
+        The connection is blocking which is only advisable to use for the apps with low througput. 
+
+        DISCLAIMER: If you expect a lot of traffic to the app or if its realtime then you should use async.
+
+        Parameters
+        ----------
+        context : Dict[str, str]
+            context is the structured map with information regarding the SSL options for connecting with rabbit server via TLS.
+        """
+        connection_info = f"""
+                            Mrsal connection parameters:
+                            host={self.host},
+                            virtual_host={self.virtual_host},
+                            port={self.port},
+                            heartbeat={self.heartbeat},
+                            ssl={self.ssl}
+                            """
+        if self.verbose:
+            self.log.info(f"Establishing connection to RabbitMQ on {connection_info}")
+        if self.ssl:
+            self.log.info("Setting up TLS connection")
+            context = self.__ssl_setup()
+        ssl_options = SSLOptions(context, self.host) if context else None
+        credentials = pika.PlainCredentials(*self.credentials)
+        await AsyncioConnection.create_connection(
+            pika.ConnectionParameters(
+                host=self.host,
+                port=self.port,
+                ssl_options=ssl_options,
+                virtual_host=self.virtual_host,
+                credentials=credentials,
+                heartbeat=self.heartbeat,
+            ),
+            on_done=self.on_connection_open,
+            on_open_error_callback=self.on_connection_error
+        )
+        self.log.info(f"Connection established with RabbitMQ on {connection_info}")
+
+    def on_connection_error(self, _unused_connection, exception):
+        """
+        Handle connection errors.
+        """
+        self.log.error(f"I failed to establish async connection: {exception}")
+
+    async def open_channel(self):
+        """
+        Open a channel once the connection is established.
+        """
+        self._channel = await self.conn.channel()
+        await self._channel.basic_qos(prefetch_count=self.prefetch_count)
+
+    def on_connection_open(self, connection):
+        """
+        Callback when the async connection is successfully opened.
+        """
+        self.conn = connection
+        self.log.info("Async connection established.")
+        asyncio.create_task(self.open_channel())
+
+    async def setup_exchange(self, 
                        exchange: str, exchange_type: str,
                        arguments: dict[str, str] | None = None,
                        durable=True, passive=False,
@@ -145,16 +209,25 @@ class Mrsal:
         if self.verbose:
             self.log.info(f"Declaring exchange with: {exchange_declare_info}")
         try:
-            exchange_declare_result = self._channel.exchange_declare(
-                exchange=exchange, exchange_type=exchange_type, arguments=arguments, durable=durable, passive=passive, internal=internal, auto_delete=auto_delete
-            )
-            if self.verbose:
-                self.log.info(f"Exchange is declared successfully: {exchange_declare_info}, result={exchange_declare_result}")
-            return exchange_declare_result
+            if self.use_blocking:
+                self._channel.exchange_declare(
+                    exchange=exchange, exchange_type=exchange_type,
+                    arguments=arguments, durable=durable,
+                    passive=passive, internal=internal,
+                    auto_delete=auto_delete
+                    )
+            else:
+                await self._channel.exchange_declare(
+                    exchange=exchange, exchange_type=exchange_type,
+                    arguments=arguments, durable=durable,
+                    passive=passive, internal=internal,
+                    auto_delete=auto_delete
+                    )
+
         except (TypeError, AttributeError, ChannelClosedByBroker, ConnectionClosedByBroker) as err:
-            msg: str = f"I tried to declare an exchange but failed with: {err}"
-            self.log.error(msg)
-            raise pika.exceptions.ConnectionClosedByBroker(503, msg)
+                self.log.error(f"I tried to declare an exchange but failed with: {err}")
+        if self.verbose:
+            self.log.info(f"Exchange is declared successfully with blocking set to {self.use_blocking}: {exchange_declare_info}")
 
     def setup_queue(self,
                     queue: str, arguments: dict[str, str] | None = None,
@@ -262,60 +335,12 @@ class Mrsal:
         # message_count1 = result1.method.message_count
         return queue_result
 
-    # --------------------------------------------------------------
-    # --------------------------------------------------------------
-    # TODO NOT IN USE: Need to reformat it to publish messages to dead letters exchange after exceeding retries limit
-    def consume_messages_with_retries(
-        self,
-        queue: str,
-        callback: Callable,
-        callback_args=None,
-        escape_after=-1,
-        dead_letters_exchange: str = None,
-        dead_letters_routing_key: str = None,
-        prop: pika.BasicProperties = None,
-        inactivity_timeout=None,
-    ):
-        self.log.info(f"Consuming messages: queue= {queue}")
-
-        try:
-            for method_frame, properties, body in self._channel.consume(queue=queue, inactivity_timeout=inactivity_timeout):
-                consumer_tags = self._channel.consumer_tags
-                # Let the message be in whatever data type it needs to
-                message = json.loads(body)
-                exchange = method_frame.exchange
-                routing_key = method_frame.routing_key
-                delivery_tag = method_frame.delivery_tag
-                if self.verbose:
-                    self.log.info(
-                        f"consumer_callback info: exchange: {exchange}, routing_key: {routing_key}, delivery_tag: {delivery_tag}, properties: {properties}, consumer_tags: {consumer_tags}"
-                    )
-                is_processed = callback(*callback_args, message)
-                self.log.info(f"is_processed= {is_processed}")
-                if is_processed:
-                    self._channel.basic_ack(delivery_tag=delivery_tag)
-                    self.log.info("Message acknowledged")
-
-                    if method_frame.delivery_tag == escape_after:
-                        self.log.info(f"Break! Max messages to be processed is {escape_after}")
-                        break
-                else:
-                    self.log.warning(f"Could not process the message= {message}. Process it as dead letter.")
-                    is_dead_letter_published = self.publish_dead_letter(
-                        message=message, delivery_tag=delivery_tag, dead_letters_exchange=dead_letters_exchange, dead_letters_routing_key=dead_letters_routing_key, prop=prop
-                    )
-                    if is_dead_letter_published:
-                        self._channel.basic_ack(delivery_tag)
-        except FileNotFoundError as e:
-            self.log.error(f"Connection closed with error: {e}")
-            self._channel.stop_consuming()
-
     def start_consumer(
         self,
         queue: str,
         callback: Callable,
         callback_args: Tuple[str, Any] = None,
-        auto_ack: bool = False,
+        auto_ack: bool = True,
         reject_unprocessed: bool = True,
         exchange: str = None,
         exchange_type: str = None,
@@ -688,83 +713,3 @@ class Mrsal:
             callback_with_delivery_info=callback_with_delivery_info,
             auto_ack=auto_ack,
         )
-
-
-
-if __name__ == "__main__":
-
-    # Main script testing
-
-    def test_callback(
-        method: pika.spec.Basic.Deliver,
-        properties: pika.spec.BasicProperties,
-        body: bytes
-    ) -> None:
-        consumer_tag = method.consumer_tag
-        exchange = method.exchange
-        routing_key = method.routing_key
-        app_id = properties.app_id
-        message_id = properties.message_id
-
-        # Decode and parse the message body
-        enc_payload: Dict[str, Union[str, int, List]] | str = json.loads(body)
-        payload = enc_payload if isinstance(enc_payload, dict) else json.loads(enc_payload)
-
-        print(f" [x] Received {payload}")
-
-        print("Simulating a long running process")
-        time.sleep(5)
-        print("Process completed")
-        return True
-
-    # Example test
-    print('\n\033[1;35;40m Start NeoCowboy Service \033[0m')
-    # mrsal: Mrsal = Mrsal(
-    #     host=config.RABBIT_DOMAIN,
-    #     port=config.RABBITMQ_PORT_TLS,
-    #     credentials=(config.RABBITMQ_CREDENTIALS),
-    #     virtual_host=config.V_HOST,
-    #     ssl=True,
-    #     verbose=True,
-    # )
-
-    # mrsal.connect_to_server()
-
-    # exch_result: pika.frame.Method = mrsal.setup_exchange(
-    #     exchange="exchangeRT",
-    #     exchange_type='x-delayed-message',
-    #     arguments={'x-delayed-type': 'x-delayed-message'},
-    # )
-    # q_result: pika.frame.Method = mrsal.setup_queue(queue="mrsal_testQueue")
-    # qb_result: pika.frame.Method = mrsal.setup_queue_binding(
-    #     exchange="exchangeRT",
-    #     routing_key="exchangeRT.mrsal_testQueue",
-    #     queue="mrsal_testQueue",
-    # )
-
-    # mrsal.start_consumer(
-    #     queue="mrsal_testQueue",
-    #     callback=test_callback,
-    #     requeue=False,
-    #     callback_with_delivery_info=True,
-    #     auto_ack=True,
-    # )
-
-
-    Mrsal = Mrsal(
-        host=config.RABBIT_DOMAIN,
-        port=config.RABBITMQ_PORT_TLS,
-        credentials=(config.RABBITMQ_CREDENTIALS),
-        virtual_host=config.V_HOST,
-        ssl=True,
-        verbose=True,
-    ).major_setup(
-        exchange='exchangeRT',
-        exchange_type='x-delayed-message',
-        routing_key='exchangeRT.mrsal_testQueue',
-        queue='mrsal_testQueue',
-        callback=test_callback,
-        requeue=False,
-        callback_with_delivery_info=True,
-        auto_ack=True,
-    )
