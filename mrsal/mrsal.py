@@ -7,13 +7,12 @@ import asyncio
 from pydantic.dataclasses import dataclass
 from socket import gaierror
 from typing import Any, Callable, Dict, Tuple
-from pika import SSLOptions, BlockingConnection
+from pika import SSLOptions
 from pika.exceptions import ChannelClosedByBroker, ConnectionClosedByBroker
 from pika.exchange_type import ExchangeType
 from pika.adapters.asyncio_connection import AsyncioConnection
 from retry import retry
 
-from mrsal.config import config
 from neolibrary.monitoring.logger import NeoLogger
 from config.exceptions import MissingTLSCerts
 
@@ -290,149 +289,6 @@ class Mrsal:
         queue_result = self.setup_queue(queue=queue, passive=True)
         # message_count1 = result1.method.message_count
         return queue_result
-
-    def start_consumer(
-        self,
-        queue: str,
-        callback: Callable,
-        callback_args: Tuple[str, Any] = None,
-        auto_ack: bool = True,
-        reject_unprocessed: bool = True,
-        exchange: str = None,
-        exchange_type: str = None,
-        routing_key: str = None,
-        inactivity_timeout: int = None,
-        requeue: bool = False,
-        fast_setup: bool = False,
-        callback_with_delivery_info: bool = False,
-        thread_num: int = None,
-    ):
-        """
-        Setup consumer:
-            1- Consumer start consuming the messages from the queue.
-            2- If `inactivity_timeout` is given (in seconds) the consumer will be canceled when the time of inactivity exceeds inactivity_timeout.
-            3- Send the consumed message to callback method to be processed, and then the message can be either:
-                - Processed, then correctly-acknowledge and deleted from QUEUE or
-                - Failed to process, negatively-acknowledged and then the message will be rejected and either
-                    - Redelivered if 'x-retry-limit' and 'x-retry' are configured in 'BasicProperties.headers'.
-                    - Requeued if requeue is True
-                    - Sent to dead-letters-exchange if it configured and
-                        - requeue is False
-                        - requeue is True and requeue attempt fails.
-                    - Unless deleted.
-
-
-        :param str queue: The queue name to consume
-        :param Callable callback: Method where received messages are sent to be processed
-        :param Tuple callback_args: Tuple of arguments for callback method
-        :param bool auto_ack: If True, then when a message is delivered to a consumer, it is automatically marked as acknowledged and removed from the queue without any action needed from the consumer.
-        :param bool reject_unprocessed: If True(Default), then when a message is not processed correctly by the callback method, then the message will be rejected.
-        :param float inactivity_timeout:
-            - if a number is given (in seconds), will cause the method to yield (None, None, None) after the given period of inactivity.
-            - If None is given (default), then the method blocks until the next event arrives.
-        :param bool requeue: If requeue is true, the server will attempt to
-                             requeue the message. If requeue is false or the
-                             requeue attempt fails the messages are discarded or
-                             dead-lettered.
-        :param bool callback_with_delivery_info: Specify whether the callback method needs delivery info.
-                - spec.Basic.Deliver: Captures the fields for delivered message. E.g:(consumer_tag, delivery_tag, redelivered, exchange, routing_key).
-                - spec.BasicProperties: Captures the client message sent to the server. E.g:(CONTENT_TYPE, DELIVERY_MODE, MESSAGE_ID, APP_ID).
-        :param bool fast_setup:
-                - when True, the method will create the specified exchange, queue
-                and bind them together using the routing kye.
-                - If False, this method will check if the specified exchange and queue
-                already exist before start consuming.
-        """
-        print_thread_index = f"Thread={str(thread_num)} -> " if thread_num else ""
-        self.log.info(f"{print_thread_index}Consuming messages: queue={queue}, requeue={requeue}, inactivity_timeout={inactivity_timeout}")
-        if fast_setup:
-            # Setting up the necessary connections
-            self.setup_exchange(exchange=exchange, exchange_type=exchange_type)
-            self.setup_queue(queue=queue)
-            self.setup_queue_binding(exchange=exchange, queue=queue, routing_key=routing_key)
-        except pika.exceptions.ChannelClosedByBroker as err2:
-            self.log.error(f"{print_thread_index}ChannelClosed is caught while consuming. Channel is closed by broker. Cancel consumer. {str(err2)}")
-            self._channel.cancel()
-            raise pika.exceptions.ChannelClosedByBroker(404, str(err2))
-
-    def _spawn_mrsal_and_start_new_consumer(
-        self,
-        thread_num: int,
-        queue: str,
-        callback: Callable,
-        callback_args: Tuple[str, Any] = None,
-        exchange: str = None,
-        exchange_type: str = None,
-        routing_key: str = None,
-        inactivity_timeout: int = None,
-        requeue: bool = False,
-        fast_setup: bool = False,
-        callback_with_delivery_info: bool = False,
-    ):
-        try:
-            self.log.info(f"thread_num={thread_num} -> Start consumer")
-            mrsal_obj = Mrsal(
-                host=self.host,
-                port=self.port,
-                credentials=self.credentials,
-                virtual_host=self.virtual_host,
-                ssl=self.ssl,
-                verbose=self.verbose,
-                prefetch_count=self.prefetch_count,
-                heartbeat=self.heartbeat,
-                blocked_connection_timeout=self.blocked_connection_timeout,
-            )
-            mrsal_obj.connect_to_server()
-
-            mrsal_obj.start_consumer(
-                callback=callback,
-                callback_args=callback_args,
-                queue=queue,
-                requeue=requeue,
-                exchange=exchange,
-                exchange_type=exchange_type,
-                routing_key=routing_key,
-                fast_setup=fast_setup,
-                inactivity_timeout=inactivity_timeout,
-                callback_with_delivery_info=callback_with_delivery_info,
-                thread_num=thread_num,
-            )
-
-            mrsal_obj.stop_consuming(mrsal_obj.consumer_tag)
-            mrsal_obj.close_connection()
-            self.log.info(f"thread_num={thread_num} -> End consumer")
-        except Exception as e:
-            self.log.error(f"thread_num={thread_num} -> Failed to consumer: {e}")
-
-    def start_concurrence_consumer(
-        self,
-        total_threads: int,
-        queue: str,
-        callback: Callable,
-        callback_args: Tuple[str, Any] = None,
-        exchange: str = None,
-        exchange_type: str = None,
-        routing_key: str = None,
-        inactivity_timeout: int = None,
-        requeue: bool = False,
-        fast_setup: bool = False,
-        callback_with_delivery_info: bool = False,
-    ):
-        with concurrent.futures.ThreadPoolExecutor(max_workers=total_threads) as executor:
-            executor.map(
-                self._spawn_mrsal_and_start_new_consumer,
-                range(total_threads),
-                [queue] * total_threads,
-                [callback] * total_threads,
-                [callback_args] * total_threads,
-                [exchange] * total_threads,
-                [exchange_type] * total_threads,
-                [routing_key] * total_threads,
-                [inactivity_timeout] * total_threads,
-                [requeue] * total_threads,
-                [fast_setup] * total_threads,
-                [callback_with_delivery_info] * total_threads,
-            )
 
     def publish_message(
         self,
