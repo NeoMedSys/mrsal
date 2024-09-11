@@ -340,19 +340,6 @@ class Mrsal:
             self.log.error(f"Producer could not publish message:{message} to the exchange {exchange} with a routing key {routing_key}: {err1}", exc_info=True)
             raise pika.exceptions.UnroutableError(404, str(err1))
 
-    # TODO NOT IN USE: maybe we will use it in the method consume_messages_with_retries
-    # to publish messages to dead letters exchange after retries limit. (remove or use)
-    def publish_dead_letter(self, message: str, delivery_tag: int, dead_letters_exchange: str = None, dead_letters_routing_key: str = None, prop: pika.BasicProperties = None):
-        if dead_letters_exchange is not None and dead_letters_routing_key is not None:
-            self.log.warning(f"Re-route the message={message} to the exchange={dead_letters_exchange} with routing_key={dead_letters_routing_key}")
-            try:
-                self.publish_message(exchange=dead_letters_exchange, routing_key=dead_letters_routing_key, message=json.dumps(message), properties=prop)
-                self.log.info(f"Dead letter was published: message={message}, exchange={dead_letters_exchange}, routing_key={dead_letters_routing_key}")
-                return True
-            except pika.exceptions.UnroutableError as e:
-                self.log.error(f"Dead letter was returned with error: {e}")
-                return False
-    
     @retry((gaierror, pika.exceptions.AMQPConnectionError, pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosedByBroker, pika.exceptions.ChannelClosedByBroker), tries=15, delay=1, jitter=(2, 10), self.log=self.log)
     def full_setup(
             self,
