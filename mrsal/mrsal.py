@@ -1,16 +1,13 @@
-import json
 import os
 import ssl
+from typing import Any, Optional, Type
 from mrsal.amqp.blocking import MrsalBlockingAMQP
-import pika
 import asyncio
 from pydantic.dataclasses import dataclass
-from typing import Any
 from pika.exceptions import ChannelClosedByBroker, ConnectionClosedByBroker
-from pika.exchange_type import ExchangeType
-from pika.adapters.asyncio_connection import AsyncioConnection
 from neolibrary.monitoring.logger import NeoLogger
 from config.exceptions import MissingTLSCerts
+from pydantic.deprecated.tools import json
 
 
 @dataclass
@@ -254,3 +251,23 @@ class Mrsal:
         context.load_cert_chain(certfile=self.tls_crt, keyfile=self.tls_key)
         return context
 
+    def validate_payload(self, payload: Any, model: Type) -> None:
+        """
+        Parses and validates the incoming message payload using the provided dataclass model.
+        :param payload: The message payload which could be of any type (str, bytes, dict, etc.).
+        :param model: The pydantic dataclass model class to validate against.
+        :return: An instance of the model if validation is successful, otherwise None.
+        """
+        # If payload is bytes, decode it to a string
+        if isinstance(payload, bytes):
+            payload = payload.decode('utf-8')
+
+        # If payload is a string, attempt to load it as JSON
+        if isinstance(payload, str):
+            payload = json.loads(payload)  # Converts JSON string to a dictionary
+
+        # Validate the payload against the provided model
+        if isinstance(payload, dict):
+            model(**payload)
+        else:
+            raise TypeError("Fool, we aint supporting this type yet {type(payload)}.. Bytes or str -- get it straight")

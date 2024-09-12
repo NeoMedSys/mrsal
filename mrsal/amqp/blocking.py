@@ -1,11 +1,15 @@
 import pika
-from typing import Callable, Any
 from pika import SSLOptions
 from pika.exceptions import AMQPConnectionError, ChannelClosedByBroker, StreamLostError, ConnectionClosedByBroker, UnroutableError
-from pydantic.dataclasses import dataclass
-from mrsal.mrsal import Mrsal
-from neolibrary.monitoring.logger import NeoLogger
+from pika.adapters.asyncio_connection import AsyncioConnection
+from typing import Callable, Any, Optional, Type
 from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type, before_sleep_log
+from pydantic import ValidationError
+from pydantic.dataclasses import dataclass
+from neolibrary.monitoring.logger import NeoLogger
+
+from mrsal.mrsal import Mrsal
+from pydantic.deprecated.tools import json
 
 log = NeoLogger(__name__, log_days=10)
 
@@ -60,12 +64,13 @@ class MrsalBlockingAMQP(Mrsal):
                     blocked_connection_timeout=self.blocked_connection_timeout,
                 )
             )
+
             self._channel = self._connection.channel()
             # Note: prefetch is set to 1 here as an example only.
             # In production you will want to test with different prefetch values to find which one provides the best performance and usability for your solution.
             # use a high number of prefecth if you think the pods with Mrsal installed can handle it. A prefetch 4 will mean up to 4 async runs before ack is required
             self._channel.basic_qos(prefetch_count=self.prefetch_count)
-            self.log.info(f"Connection established with RabbitMQ on {connection_info}")
+            self.log.info(f"Boom! Connection established with RabbitMQ on {connection_info}")
         except (pika.exceptions.AMQPConnectionError, Exception) as err:
             self.log.error(f"I tried to connect with the RabbitMQ server but failed with: {err}")
 
@@ -79,7 +84,8 @@ class MrsalBlockingAMQP(Mrsal):
                        auto_declare: bool = True,
                        exchange_name: str | None = None,
                        exchange_type: str | None = None,
-                       routing_key: str | None = None
+                       routing_key: str | None = None,
+                       payload_model: Type | None = None
                        ):
         """
         Start the consumer using blocking setup.
@@ -88,10 +94,11 @@ class MrsalBlockingAMQP(Mrsal):
         :param inactivity_timeout: Timeout for inactivity in the consumer loop.
         :param callback: The callback function to process messages.
         :param callback_args: Optional arguments to pass to the callback.
+        :param payload_model: Optional pydantic BaseModel class that specifies expected payload arg types
         """
         if auto_declare:
             if None in (exchange_name, queue_name, exchange_type, routing_key):
-                raise TypeError('Make sure that you are passing in all the necessary args for auto_declare')
+                raise TypeError('Make sure that you are passing in all the necessary args for auto_declare, yia bish')
 
             self._setup_exchange_and_queue(
                     exchange_name=exchange_name,
@@ -122,17 +129,64 @@ class MrsalBlockingAMQP(Mrsal):
                     if auto_ack:
                         self.log.success(f'I successfully received a message from: {app_id} with messageID: {msg_id}')
                     
+                    if payload_model:
+                        try:
+                            self.validate_payload(body, payload_model)
+                        except (ValidationError, json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
+                            self.log.error(f"Oh lordy lord, payload validation failed for your specific model requirements: {e}")
+                            continue
                     if callback:
                         if callback_args:
                             callback(*callback_args, method_frame, properties, body)
                         else:
-
                             callback( method_frame, properties, body)
                 else:
                     # continue consuming
                     continue
         except Exception as e:
             self.log.error(f'Oh lordy lord! I failed consuming ze messaj with: {e}')
+
+    def publish_message(
+        self,
+        exchange_name: str,
+        routing_key: str,
+        message: Any,
+        exchange_type: str,
+        queue_name: str,
+        auto_declare: bool = True,
+        prop: pika.BasicProperties | None = None,
+    ):
+        """Publish message to the exchange specifying routing key and properties.
+
+        :param str exchange: The exchange to publish to
+        :param str routing_key: The routing key to bind on
+        :param bytes body: The message body; empty string if no body
+        :param pika.spec.BasicProperties properties: message properties
+        :param bool fast_setup:
+                - when True, will the method create the specified exchange, queue and bind them together using the routing kye.
+                - If False, this method will check if the specified exchange and queue already exist before publishing.
+
+        :raises UnroutableError: raised when a message published in publisher-acknowledgments mode (see `BlockingChannel.confirm_delivery`) is returned via `Basic.Return` followed by `Basic.Ack`.
+        :raises NackError: raised when a message published in publisher-acknowledgements mode is Nack'ed by the broker. See `BlockingChannel.confirm_delivery`.
+        """
+        if auto_declare:
+            if None in (exchange_name, queue_name, exchange_type, routing_key):
+                raise TypeError('Make sure that you are passing in all the necessary args for auto_declare')
+
+            self._setup_exchange_and_queue(
+                exchange_name=exchange_name,
+                queue_name=queue_name,
+                exchange_type=exchange_type,
+                routing_key=routing_key
+                )
+        try:
+            # Publish the message by serializing it in json dump
+            # NOTE! we are not dumping a json anymore here! This allows for more flexibility
+            self._channel.basic_publish(exchange=exchange_name, routing_key=routing_key, body=message, properties=prop)
+            self.log.success(f"The message ({message}) is published to the exchange {exchange_name} with the routing key {routing_key}")
+
+        except UnroutableError as e:
+            self.log.error(f"Producer could not publish message:{message} to the exchange {exchange_name} with a routing key {routing_key}: {e}", exc_info=True)
 
 
 @dataclass
@@ -172,32 +226,38 @@ class MrsalAsyncAMQP(Mrsal):
             context = self._ssl_setup()
         ssl_options = SSLOptions(context, self.host) if context else None
         credentials = pika.PlainCredentials(*self.credentials)
-        await AsyncioConnection.create_connection(
-            pika.ConnectionParameters(
-                host=self.host,
-                port=self.port,
-                ssl_options=ssl_options,
-                virtual_host=self.virtual_host,
-                credentials=credentials,
-                heartbeat=self.heartbeat,
-            ),
-            on_done=self.on_connection_open,
-            on_open_error_callback=self.on_connection_error
-        )
-        self.log.info(f"Connection established with RabbitMQ on {connection_info}")
+
+        try:
+            await AsyncioConnection.create_connection(
+                pika.ConnectionParameters(
+                    host=self.host,
+                    port=self.port,
+                    ssl_options=ssl_options,
+                    virtual_host=self.virtual_host,
+                    credentials=credentials,
+                    heartbeat=self.heartbeat,
+                ),
+                on_done=self.on_connection_open,
+                on_open_error_callback=self.on_connection_error
+            )
+        except Exception as e:
+            self.log.error(f"Oh lordy lord I failed connecting to the Rabbit with: {e}")
+
+        self.log.success(f"Boom! Connection established with RabbitMQ on {connection_info}")
 
 
     async def start_consumer(self,
-                       queue_name: str,
-                       callback: Callable | None = None,
-                       callback_args: dict[str, str | int | float | bool] | None = None,
-                       auto_ack: bool = True,
-                       inactivity_timeout: int = 5,
-                       auto_declare: bool = True,
-                       exchange_name: str | None = None,
-                       exchange_type: str | None = None,
-                       routing_key: str | None = None
-                       ):
+                             queue_name: str,
+                             callback: Callable | None = None,
+                             callback_args: dict[str, str | int | float | bool] | None = None,
+                             auto_ack: bool = True,
+                             inactivity_timeout: int = 5,
+                             auto_declare: bool = True,
+                             exchange_name: str | None = None,
+                             exchange_type: str | None = None,
+                             routing_key: str | None = None,
+                             payload_model: Type | None = None
+                             ):
         """
         Start the consumer using blocking setup.
         :param queue: The queue to consume from.
@@ -239,6 +299,13 @@ class MrsalAsyncAMQP(Mrsal):
                     if auto_ack:
                         self.log.success(f'I successfully received a message from: {app_id} with messageID: {msg_id}')
                     
+                    if payload_model:
+                        try:
+                            self.validate_payload(body, payload_model)
+                        except (ValidationError, json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
+                            self.log.error(f"Oh lordy lord, payload validation failed for your specific model requirements: {e}")
+                            continue
+
                     if callback:
                         if callback_args:
                             await callback(*callback_args, method_frame, properties, body)
@@ -287,7 +354,7 @@ class MrsalAsyncAMQP(Mrsal):
             # Publish the message by serializing it in json dump
             # NOTE! we are not dumping a json anymore here! This allows for more flexibility
             self._channel.basic_publish(exchange=exchange_name, routing_key=routing_key, body=message, properties=prop)
-            self.log.info(f"Message ({message}) is published to the exchange {exchange_name} with a routing key {routing_key}")
+            self.log.success(f"The message ({message}) is published to the exchange {exchange_name} with the following routing key {routing_key}")
 
         except UnroutableError as e:
             self.log.error(f"Producer could not publish message:{message} to the exchange {exchange_name} with a routing key {routing_key}: {e}", exc_info=True)
