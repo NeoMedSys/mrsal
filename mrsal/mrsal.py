@@ -1,11 +1,11 @@
 import json
 import os
 import ssl
+from mrsal.amqp.blocking import MrsalBlockingAMQP
 import pika
 import asyncio
 from pydantic.dataclasses import dataclass
 from typing import Any
-from pika import SSLOptions
 from pika.exceptions import ChannelClosedByBroker, ConnectionClosedByBroker
 from pika.exchange_type import ExchangeType
 from pika.adapters.asyncio_connection import AsyncioConnection
@@ -20,19 +20,19 @@ class Mrsal:
     Mrsal creates a layer on top of Pika's core, providing methods to setup a RabbitMQ broker with multiple functionalities.
 
     Properties:
-        :prop str host: Hostname or IP Address to connect to
-        :prop int port: TCP port to connect to
-        :prop pika.credentials.Credentials credentials: auth credentials
-        :prop str virtual_host: RabbitMQ virtual host to use
-        :prop bool verbose: If True then more INFO logs will be printed
-        :prop int heartbeat: Controls RabbitMQ's server heartbeat timeout negotiation
+        :param str host: Hostname or IP Address to connect to
+        :param int port: TCP port to connect to
+        :param pika.credentials.Credentials credentials: auth credentials
+        :param str virtual_host: RabbitMQ virtual host to use
+        :param bool verbose: If True then more INFO logs will be printed
+        :param int heartbeat: Controls RabbitMQ's server heartbeat timeout negotiation
             during connection tuning.
-        :prop int blocked_connection_timeout: blocked_connection_timeout
+        :param int blocked_connection_timeout: blocked_connection_timeout
             is the timeout, in seconds,
             for the connection to remain blocked; if the timeout expires,
                 the connection will be torn down
-        :prop int prefetch_count: Specifies a prefetch window in terms of whole messages.
-        :prop bool ssl: Set this flag to true if you want to connect externally to the rabbit server.
+        :param int prefetch_count: Specifies a prefetch window in terms of whole messages.
+        :param bool ssl: Set this flag to true if you want to connect externally to the rabbit server.
     """
 
     host: str
@@ -60,46 +60,43 @@ class Mrsal:
 
             if yikes_matches:
                 raise MissingTLSCerts(f"TLS/SSL is activated but I could not find the following certs: {', '.join(yikes_matches)}")
+        self.use_blocking = True if issubclass(self.__class__, MrsalBlockingAMQP) else False
 
-    async def setup_aync_connection(self, context: dict[str, str] | None = None):
-        """We can use setup_blocking_connection for establishing a connection to RabbitMQ server specifying connection parameters.
-        The connection is blocking which is only advisable to use for the apps with low througput. 
+    def _setup_exchange_and_queue(self, 
+                                 exchange_name: str, queue_name: str, exchange_type: str,
+                                 routing_key: str, exch_args: dict[str, str] | None = None,
+                                 queue_args: dict[str, str] | None = None,
+                                 bind_args: dict[str, str] | None = None,
+                                 exch_durable: bool = True, queue_durable: bool =True,
+                                 passive: bool = False, internal: bool = False,
+                                 auto_delete: bool = False, exclusive: bool = False
+                                 ):
 
-        DISCLAIMER: If you expect a lot of traffic to the app or if its realtime then you should use async.
+        self._declare_exchange(
+                exchange=exchange_name,
+                exchange_type=exchange_type,
+                arguments=exch_args,
+                durable=exch_durable,
+                passive=passive,
+                internal=internal,
+                auto_delete=auto_delete
+                )
 
-        Parameters
-        ----------
-        context : Dict[str, str]
-            context is the structured map with information regarding the SSL options for connecting with rabbit server via TLS.
-        """
-        connection_info = f"""
-                            Mrsal connection parameters:
-                            host={self.host},
-                            virtual_host={self.virtual_host},
-                            port={self.port},
-                            heartbeat={self.heartbeat},
-                            ssl={self.ssl}
-                            """
-        if self.verbose:
-            self.log.info(f"Establishing connection to RabbitMQ on {connection_info}")
-        if self.ssl:
-            self.log.info("Setting up TLS connection")
-            context = self.__ssl_setup()
-        ssl_options = SSLOptions(context, self.host) if context else None
-        credentials = pika.PlainCredentials(*self.credentials)
-        await AsyncioConnection.create_connection(
-            pika.ConnectionParameters(
-                host=self.host,
-                port=self.port,
-                ssl_options=ssl_options,
-                virtual_host=self.virtual_host,
-                credentials=credentials,
-                heartbeat=self.heartbeat,
-            ),
-            on_done=self.on_connection_open,
-            on_open_error_callback=self.on_connection_error
-        )
-        self.log.info(f"Connection established with RabbitMQ on {connection_info}")
+        self._declare_queue(
+                queue=queue_name,
+                arguments=queue_args,
+                durable=queue_durable,
+                passive=passive,
+                exclusive=exclusive,
+                auto_delete=auto_delete
+                )
+
+        self._declare_queue_binding(
+                exchange=exchange_name,
+                queue=queue_name,
+                routing_key=routing_key,
+                arguments=bind_args
+                )
 
     def on_connection_error(self, _unused_connection, exception):
         """
@@ -211,10 +208,11 @@ class Mrsal:
                 self._channel.queue_declare(queue=queue, arguments=arguments, durable=durable, exclusive=exclusive, auto_delete=auto_delete, passive=passive)
             else:
                 await self._channel.queue_declare(queue=queue, arguments=arguments, durable=durable, exclusive=exclusive, auto_delete=auto_delete, passive=passive)
-            if self.verbose:
-                self.log.info(f"Queue is declared successfully: {queue_declare_info}")
         except Exception as e:
             self.log.error(f'Ooopsie boy: I failed declaring queue: {e}')
+
+        if self.verbose:
+            self.log.info(f"Queue is declared successfully: {queue_declare_info}")
 
     def _declare_queue_binding(self, 
                             exchange: str, queue: str,
@@ -241,8 +239,8 @@ class Mrsal:
         if self.verbose:
             self.log.info(f"The queue is bound to exchange successfully: queue={queue}, exchange={exchange}, routing_key={routing_key}")
     
-    def __ssl_setup(self) -> dict[str, str]:
-        """__ssl_setup is private method we are using to connect with rabbit server via signed certificates and some TLS settings.
+    def _ssl_setup(self) -> dict[str, str]:
+        """_ssl_setup is private method we are using to connect with rabbit server via signed certificates and some TLS settings.
 
         Parameters
         ----------
@@ -256,37 +254,3 @@ class Mrsal:
         context.load_cert_chain(certfile=self.tls_crt, keyfile=self.tls_key)
         return context
 
-    # NOTE! polish this accordingly
-    def publish_message(
-        self,
-        exchange: str,
-        routing_key: str,
-        message: Any,
-        exchange_type: ExchangeType = ExchangeType.direct,
-        queue: str = None,
-        prop: pika.BasicProperties = None,
-    ):
-        """Publish message to the exchange specifying routing key and properties.
-
-        :param str exchange: The exchange to publish to
-        :param str routing_key: The routing key to bind on
-        :param bytes body: The message body; empty string if no body
-        :param pika.spec.BasicProperties properties: message properties
-        :param bool fast_setup:
-                - when True, will the method create the specified exchange, queue and bind them together using the routing kye.
-                - If False, this method will check if the specified exchange and queue already exist before publishing.
-
-        :raises UnroutableError: raised when a message published in publisher-acknowledgments mode (see `BlockingChannel.confirm_delivery`) is returned via `Basic.Return` followed by `Basic.Ack`.
-        :raises NackError: raised when a message published in publisher-acknowledgements mode is Nack'ed by the broker. See `BlockingChannel.confirm_delivery`.
-        """
-        # setting up the necessary connections
-        self._declare_exchange(exchange=exchange, exchange_type=exchange_type)
-        self._declare_queue(queue=queue)
-        self._declare_queue_binding(exchange=exchange, queue=queue, routing_key=routing_key)
-        try:
-            # Publish the message by serializing it in json dump
-            self._channel.basic_publish(exchange=exchange, routing_key=routing_key, body=json.dumps(message), properties=prop)
-            self.log.info(f"Message ({message}) is published to the exchange {exchange} with a routing key {routing_key}")
-
-        except pika.exceptions.UnroutableError as err1:
-            self.log.error(f"Producer could not publish message:{message} to the exchange {exchange} with a routing key {routing_key}: {err1}", exc_info=True)
