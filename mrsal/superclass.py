@@ -1,13 +1,17 @@
+# external
 import os
 import ssl
-from typing import Any, Optional, Type
-from mrsal.amqp.blocking import MrsalBlockingAMQP
 import asyncio
+from ssl import SSLContext
+from typing import Any, Type
 from pydantic.dataclasses import dataclass
 from pika.exceptions import ChannelClosedByBroker, ConnectionClosedByBroker
 from neolibrary.monitoring.logger import NeoLogger
-from config.exceptions import MissingTLSCerts
 from pydantic.deprecated.tools import json
+
+# internal
+from amqp.blocking import MrsalBlockingAMQP
+from config import config
 
 
 @dataclass
@@ -23,11 +27,6 @@ class Mrsal:
         :param str virtual_host: RabbitMQ virtual host to use
         :param bool verbose: If True then more INFO logs will be printed
         :param int heartbeat: Controls RabbitMQ's server heartbeat timeout negotiation
-            during connection tuning.
-        :param int blocked_connection_timeout: blocked_connection_timeout
-            is the timeout, in seconds,
-            for the connection to remain blocked; if the timeout expires,
-                the connection will be torn down
         :param int prefetch_count: Specifies a prefetch window in terms of whole messages.
         :param bool ssl: Set this flag to true if you want to connect externally to the rabbit server.
     """
@@ -36,27 +35,23 @@ class Mrsal:
     port: str
     credentials: tuple[str, str]
     virtual_host: str
-    use_blocking: bool
     ssl: bool = False
     verbose: bool = False
-    prefetch_count: int = 1
-    heartbeat: int = 600  # sec
-    blocked_connection_timeout: int = 300  # sec
+    prefetch_count: int = 5
+    heartbeat: int = 60  # sec
     _connection = None
     _channel = None
     log = NeoLogger(__name__, rotate_days=10)
 
     def __post_init__(self):
         if self.ssl:
-            self.tls_crt = os.environ.get('RABBITMQ_CERT', 'yikes.crt')
-            self.tls_key = os.environ.get('RABBITMQ_KEY', 'yikes.key')
-            self.tls_ca = os.environ.get('RABBITMQ_CAFILE', 'yikes.ca')
+            self.tls_dict = {
+                    'tls.crt': os.environ.get('RABBITMQ_CERT'),
+                    'tls.key': os.environ.get('RABBITMQ_KEY'),
+                    'tls.ca': os.environ.get('RABBITMQ_CAFILE')
+                    }
+            config.ValidateTSL(**self.tls_dict)
 
-            test_list_tuple = [('tls.crt', self.tls_crt), ('tls.key', self.tls_key), ('tls.ca', self.tls_ca)]
-            yikes_matches = [tls for tls, yikes in test_list_tuple  if 'yikes' in yikes]
-
-            if yikes_matches:
-                raise MissingTLSCerts(f"TLS/SSL is activated but I could not find the following certs: {', '.join(yikes_matches)}")
         self.use_blocking = True if issubclass(self.__class__, MrsalBlockingAMQP) else False
 
     def _setup_exchange_and_queue(self, 
@@ -236,7 +231,7 @@ class Mrsal:
         if self.verbose:
             self.log.info(f"The queue is bound to exchange successfully: queue={queue}, exchange={exchange}, routing_key={routing_key}")
     
-    def _ssl_setup(self) -> dict[str, str]:
+    def _ssl_setup(self) -> SSLContext:
         """_ssl_setup is private method we are using to connect with rabbit server via signed certificates and some TLS settings.
 
         Parameters
@@ -244,11 +239,11 @@ class Mrsal:
 
         Returns
         -------
-        Dict[str, str]
+        SSLContext
 
         """
-        context = ssl.create_default_context(cafile=self.tls_ca)
-        context.load_cert_chain(certfile=self.tls_crt, keyfile=self.tls_key)
+        context = ssl.create_default_context(cafile=self.tls_dict['tls.ca'])
+        context.load_cert_chain(certfile=self.tls_dict['tls.crt'], keyfile=self.tls_dict['tls.key'])
         return context
 
     def validate_payload(self, payload: Any, model: Type) -> None:
