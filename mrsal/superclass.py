@@ -11,17 +11,6 @@ from pydantic.deprecated.tools import json
 
 # internal
 from mrsal import config
-if TYPE_CHECKING:
-    from mrsal.amqp.baseclasses import MrsalBlockingAMQP
-
-import warnings
-# Permanently suppress RuntimeWarnings related to unawaited coroutines
-warnings.filterwarnings(
-    "ignore",
-    message="coroutine '.*' was never awaited",
-    category=RuntimeWarning,
-    module=".*",
-)
 
 @dataclass
 # NOTE! change the doc style to google or numpy
@@ -63,9 +52,7 @@ class Mrsal:
             self.tls_dict = {cert: (env_var if env_var != '' else None) for cert, env_var in tls_dict.items()}
             config.ValidateTLS(**self.tls_dict)
 
-        self.use_blocking = any(cls.__name__ == 'MrsalBlockingAMQP' for cls in self.__class__.mro())
-
-    async def _setup_exchange_and_queue(self, 
+    def _setup_exchange_and_queue(self, 
                                  exchange_name: str, queue_name: str, exchange_type: str,
                                  routing_key: str, exch_args: dict[str, str] | None = None,
                                  queue_args: dict[str, str] | None = None,
@@ -101,14 +88,9 @@ class Mrsal:
                 'arguments': bind_args
 
                 }
-        if self.use_blocking:
-            self._declare_exchange(**declare_exhange_dict)
-            self._declare_queue(**declare_queue_dict)
-            self._declare_queue_binding(**declare_queue_binding_dict)
-        else:
-           await self._declare_exchange(**declare_exhange_dict)
-           await self._declare_queue(**declare_queue_dict)
-           await self._declare_queue_binding(**declare_queue_binding_dict)
+        self._declare_exchange(**declare_exhange_dict)
+        self._declare_queue(**declare_queue_dict)
+        self._declare_queue_binding(**declare_queue_binding_dict)
 
     def on_connection_error(self, _unused_connection, exception):
         """
@@ -116,22 +98,21 @@ class Mrsal:
         """
         self.log.error(f"I failed to establish async connection: {exception}")
 
-    async def open_channel(self):
+    def open_channel(self):
         """
         Open a channel once the connection is established.
         """
-        self._channel = await self.conn.channel()
-        await self._channel.basic_qos(prefetch_count=self.prefetch_count)
+        self._channel = self.conn.channel()
+        self._channel.basic_qos(prefetch_count=self.prefetch_count)
 
     def on_connection_open(self, connection):
         """
         Callback when the async connection is successfully opened.
         """
         self.conn = connection
-        self.log.info("Async connection established.")
-        asyncio.create_task(self.open_channel())
+        self.open_channel()
 
-    async def _declare_exchange(self, 
+    def _declare_exchange(self, 
                              exchange: str, exchange_type: str,
                              arguments: dict[str, str] | None,
                              durable: bool, passive: bool,
@@ -164,27 +145,16 @@ class Mrsal:
         if self.verbose:
             self.log.info(f"Declaring exchange with: {exchange_declare_info}")
         try:
-            if self.use_blocking:
-                self._channel.exchange_declare(
-                    exchange=exchange, exchange_type=exchange_type,
-                    arguments=arguments, durable=durable,
-                    passive=passive, internal=internal,
-                    auto_delete=auto_delete
-                    )
-            else:
-                await self._channel.exchange_declare(
-                    exchange=exchange, exchange_type=exchange_type,
-                    arguments=arguments, durable=durable,
-                    passive=passive, internal=internal,
-                    auto_delete=auto_delete
-                    )
-
+            self._channel.exchange_declare(
+                exchange=exchange, exchange_type=exchange_type,
+                arguments=arguments, durable=durable,
+                passive=passive, internal=internal,
+                auto_delete=auto_delete
+                )
         except (TypeError, AttributeError, ChannelClosedByBroker, ConnectionClosedByBroker) as err:
                 self.log.error(f"I tried to declare an exchange but failed with: {err}")
-        if self.verbose:
-            self.log.info(f"Exchange is declared successfully with blocking set to {self.use_blocking}: {exchange_declare_info}")
 
-    async def _declare_queue(self,
+    def _declare_queue(self,
                     queue: str, arguments: dict[str, str] | None,
                     durable: bool, exclusive: bool,
                     auto_delete: bool, passive: bool
@@ -216,17 +186,14 @@ class Mrsal:
             self.log.info(f"Declaring queue with: {queue_declare_info}")
 
         try:
-            if self.use_blocking:
-                self._channel.queue_declare(queue=queue, arguments=arguments, durable=durable, exclusive=exclusive, auto_delete=auto_delete, passive=passive)
-            else:
-                await self._channel.queue_declare(queue=queue, arguments=arguments, durable=durable, exclusive=exclusive, auto_delete=auto_delete, passive=passive)
+            self._channel.queue_declare(queue=queue, arguments=arguments, durable=durable, exclusive=exclusive, auto_delete=auto_delete, passive=passive)
         except Exception as e:
             self.log.error(f'Ooopsie boy: I failed declaring queue: {e}')
 
         if self.verbose:
             self.log.info(f"Queue is declared successfully: {queue_declare_info}")
 
-    async def _declare_queue_binding(self, 
+    def _declare_queue_binding(self, 
                             exchange: str, queue: str,
                             routing_key: str | None,
                             arguments: dict[str, str] | None
@@ -244,10 +211,7 @@ class Mrsal:
         if self.verbose:
             self.log.info(f"Binding queue to exchange: queue={queue}, exchange={exchange}, routing_key={routing_key}")
 
-        if self.use_blocking:
-            self._channel.queue_bind(exchange=exchange, queue=queue, routing_key=routing_key, arguments=arguments)
-        else:
-            await self._channel.queue_bind(exchange=exchange, queue=queue, routing_key=routing_key, arguments=arguments)
+        self._channel.queue_bind(exchange=exchange, queue=queue, routing_key=routing_key, arguments=arguments)
         if self.verbose:
             self.log.info(f"The queue is bound to exchange successfully: queue={queue}, exchange={exchange}, routing_key={routing_key}")
     

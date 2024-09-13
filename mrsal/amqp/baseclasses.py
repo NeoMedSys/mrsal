@@ -211,7 +211,7 @@ class MrsalAsyncAMQP(Mrsal):
         wait=wait_fixed(2),
         before_sleep=before_sleep_log(log, log.warning)
            )
-    async def setup_aync_connection(self, context: dict[str, str] | None = None):
+    def setup_aync_connection(self, context: dict[str, str] | None = None):
         """We can use setup_aync_connection for establishing a connection to RabbitMQ server specifying connection parameters.
         The connection is async and is recommended to use if your app is realtime or will handle a lot of traffic.
 
@@ -237,7 +237,7 @@ class MrsalAsyncAMQP(Mrsal):
         credentials = pika.PlainCredentials(*self.credentials)
 
         try:
-            await AsyncioConnection.create_connection(
+            AsyncioConnection.create_connection(
                 pika.ConnectionParameters(
                     host=self.host,
                     port=self.port,
@@ -255,18 +255,18 @@ class MrsalAsyncAMQP(Mrsal):
         self.log.success(f"Boom! Connection established with RabbitMQ on {connection_info}")
 
 
-    async def start_consumer(self,
-                             queue_name: str,
-                             callback: Callable | None = None,
-                             callback_args: dict[str, str | int | float | bool] | None = None,
-                             auto_ack: bool = True,
-                             inactivity_timeout: int = 5,
-                             auto_declare: bool = True,
-                             exchange_name: str | None = None,
-                             exchange_type: str | None = None,
-                             routing_key: str | None = None,
-                             payload_model: Type | None = None
-                             ):
+    def start_consumer(self,
+                     queue_name: str,
+                     callback: Callable | None = None,
+                     callback_args: dict[str, str | int | float | bool] | None = None,
+                     auto_ack: bool = True,
+                     inactivity_timeout: int = 5,
+                     auto_declare: bool = True,
+                     exchange_name: str | None = None,
+                     exchange_type: str | None = None,
+                     routing_key: str | None = None,
+                     payload_model: Type | None = None
+                     ):
         """
         Start the consumer using blocking setup.
         :param queue: The queue to consume from.
@@ -278,7 +278,7 @@ class MrsalAsyncAMQP(Mrsal):
         if auto_declare:
             if None in (exchange_name, queue_name, exchange_type, routing_key):
                 raise TypeError('Make sure that you are passing in all the necessary args for auto_declare')
-            await self._setup_exchange_and_queue(
+            self._setup_exchange_and_queue(
                     exchange_name=exchange_name,
                     queue_name=queue_name,
                     exchange_type=exchange_type,
@@ -286,46 +286,45 @@ class MrsalAsyncAMQP(Mrsal):
                     )
 
         try:
-            async for method_frame, properties, body in self._channel.consume(
-                    queue=queue_name, auto_ack=auto_ack, inactivity_timeout=inactivity_timeout
-                    ):
-                if method_frame:
-                    app_id = properties.app_id if properties else None
-                    msg_id = properties.msg_id if properties else None
+            app_id = properties.app_id if properties else None
+            msg_id = properties.msg_id if properties else None
 
-                    if self.verbose:
-                        self.log.info(
-                                """
-                                Message received with:
-                                - Method Frame: {method_frame)
-                                - Redelivery: {method_frame.redelivered}
-                                - Exchange: {method_frame.exchange}
-                                - Routing Key: {method_frame.routing_key}
-                                - Delivery Tag: {method_frame.delivery_tag}
-                                - Properties: {properties}
-                                """
-                                )
-                    if auto_ack:
-                        self.log.success(f'I successfully received a message from: {app_id} with messageID: {msg_id}')
-                    
-                    if payload_model:
-                        try:
-                            self.validate_payload(body, payload_model)
-                        except (ValidationError, json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
-                            self.log.error(f"Oh lordy lord, payload validation failed for your specific model requirements: {e}")
-                            continue
+            if self.verbose:
+                self.log.info(
+                        """
+                        Message received with:
+                        - Method Frame: {method_frame)
+                        - Redelivery: {method_frame.redelivered}
+                        - Exchange: {method_frame.exchange}
+                        - Routing Key: {method_frame.routing_key}
+                        - Delivery Tag: {method_frame.delivery_tag}
+                        - Properties: {properties}
+                        """
+                        )
+            if auto_ack:
+                self.log.success(f'I successfully received a message from: {app_id} with messageID: {msg_id}')
+            
+            if payload_model:
+                try:
+                    self.validate_payload(body, payload_model)
+                except (ValidationError, json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
+                    self.log.error(f"Oh lordy lord, payload validation failed for your specific model requirements: {e}")
 
-                    if callback:
-                        if callback_args:
-                            await callback(*callback_args, method_frame, properties, body)
-                        else:
-
-                            await callback( method_frame, properties, body)
+            if callback:
+                if callback_args:
+                    callback(*callback_args, method_frame, properties, body)
                 else:
-                    # continue consuming
-                    continue
+
+                    callback( method_frame, properties, body)
         except Exception as e:
             self.log.error(f'Oh lordy lord! I failed consuming ze messaj with: {e}')
+
+    def start_consumer(self):
+        """Start consuming messages asynchronously."""
+        print("Starting to consume messages...")
+        self._channel.basic_consume(on_message_callback=self.consumer, auto_ack=False  # Adjust this as needed
+        )
+        self.connection.ioloop.start()
 
     async def publish_message(
         self,

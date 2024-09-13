@@ -25,9 +25,6 @@ class TestMrsalBlockingAMQP(unittest.TestCase):
         self.consumer = MrsalBlockingAMQP(**SETUP_ARGS)
         self.consumer._channel = self.mock_channel  # Set the channel to the mocked one
 
-    def test_use_blocking(self):
-        self.assertTrue(self.consumer.use_blocking)
-
     def test_valid_message_processing(self):
         # Simulate a valid message
         valid_body = b'{"id": 1, "name": "Test", "active": true}'
@@ -115,7 +112,6 @@ class TestBlockRabbitSSLSetup(unittest.TestCase):
             consumer = MrsalBlockingAMQP(**SETUP_ARGS, ssl=True)
 
             # Check if SSL paths are correctly loaded and blocking is used
-            self.assertTrue(consumer.use_blocking)
             self.assertEqual(consumer.tls_dict['crt'], 'test_cert.crt')
             self.assertEqual(consumer.tls_dict['key'], 'test_key.key')
             self.assertEqual(consumer.tls_dict['ca'], 'test_ca.ca')
