@@ -1,3 +1,4 @@
+import asyncio
 import pika
 from pika import SSLOptions
 from pika.exceptions import AMQPConnectionError, ChannelClosedByBroker, StreamLostError, ConnectionClosedByBroker, UnroutableError
@@ -8,10 +9,10 @@ from pydantic import ValidationError
 from pydantic.dataclasses import dataclass
 from neolibrary.monitoring.logger import NeoLogger
 
-from superclass import Mrsal
+from mrsal.superclass import Mrsal
 from pydantic.deprecated.tools import json
 
-log = NeoLogger(__name__, log_days=10)
+log = NeoLogger(__name__, rotate_days=10)
 
 @dataclass
 class MrsalBlockingAMQP(Mrsal):
@@ -24,12 +25,12 @@ class MrsalBlockingAMQP(Mrsal):
     blocked_connection_timeout: int = 300  # sec
 
     @retry(
-        retry=retry_if_exception_type(
+        retry=retry_if_exception_type((
             AMQPConnectionError,
             ChannelClosedByBroker,
             ConnectionClosedByBroker,
             StreamLostError,
-            ),
+            )),
         stop=stop_after_attempt(3),
         wait=wait_fixed(2),
         before_sleep=before_sleep_log(log, log.warning)
@@ -200,12 +201,12 @@ class MrsalBlockingAMQP(Mrsal):
 @dataclass
 class MrsalAsyncAMQP(Mrsal):
     @retry(
-        retry=retry_if_exception_type(
+        retry=retry_if_exception_type((
             AMQPConnectionError,
             ChannelClosedByBroker,
             ConnectionClosedByBroker,
             StreamLostError,
-            ),
+            )),
         stop=stop_after_attempt(3),
         wait=wait_fixed(2),
         before_sleep=before_sleep_log(log, log.warning)

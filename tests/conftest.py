@@ -1,4 +1,9 @@
 from pydantic.dataclasses import dataclass
+import warnings
+
+# Suppress RuntimeWarnings for unawaited coroutines globally during tests
+warnings.filterwarnings("ignore", message="coroutine '.*' was never awaited", category=RuntimeWarning)
+
 
 SETUP_ARGS = {
     'host': 'localhost',

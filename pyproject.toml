@@ -16,6 +16,8 @@ retry = "^0.9.2"
 ruff = "^0.1.8"
 nox = "^2024.4.15"
 loguru = "^0.7.2"
+tenacity = "^9.0.0"
+neolibrary = {version = "^0.8.0b1", source = "neomedsys"}
 
 [tool.poetry.group.dev.dependencies]
 coverage = "^7.2.7"
@@ -24,3 +26,8 @@ pytest = "^7.4.0"
 [build-system]
 build-backend = "poetry.core.masonry.api"
 requires = ["poetry-core>=1.0.0"]
+
+[[tool.poetry.source]]
+name = "neomedsys"
+url = "https://pypi.neomodels.app/simple"
+priority = "supplemental"

@@ -4,7 +4,8 @@ from unittest.mock import Mock, patch, MagicMock
 from pydantic import ValidationError
 
 from mrsal.amqp.baseclasses import MrsalBlockingAMQP
-from tests.config import config
+from tests.conftest import SETUP_ARGS, ExpectedPayload
+
 
 
 class TestMrsalBlockingAMQP(unittest.TestCase):
@@ -21,7 +22,7 @@ class TestMrsalBlockingAMQP(unittest.TestCase):
         mock_setup_connection.return_value = None  # Simulate setup_connection doing nothing (successful setup)
 
         # Create an instance of BlockRabbit
-        self.consumer = MrsalBlockingAMQP(**config.SETUP_ARGS)
+        self.consumer = MrsalBlockingAMQP(**SETUP_ARGS)
         self.consumer._channel = self.mock_channel  # Set the channel to the mocked one
 
     def test_use_blocking(self):
@@ -47,7 +48,7 @@ class TestMrsalBlockingAMQP(unittest.TestCase):
             exchange_type='direct',
             routing_key='test_route',
             callback=mock_callback,
-            payload_model=config.ExpectedPayload
+            payload_model=ExpectedPayload
         )
 
         # Assert the callback was called once with the correct data
@@ -73,7 +74,7 @@ class TestMrsalBlockingAMQP(unittest.TestCase):
             exchange_type='direct',
             routing_key='test_route',
             callback=mock_callback,
-            payload_model=config.ExpectedPayload
+            payload_model=ExpectedPayload
         )
 
         # Assert the callback was not called since the message should be skipped
@@ -97,7 +98,7 @@ class TestMrsalBlockingAMQP(unittest.TestCase):
                 # exchange_name='test_x',
                 #    exchange_type='direct',
                 #    routing_key='test_route',
-   #             payload_model=config.ExpectedPayload
+   #             payload_model=.ExpectedPayload
    #         )
 
    #         # Assert that basic_nack was called with requeue=True
@@ -105,33 +106,33 @@ class TestMrsalBlockingAMQP(unittest.TestCase):
 
 class TestBlockRabbitSSLSetup(unittest.TestCase):
 
-    @patch.dict(os.environ, {
-        'RABBITMQ_CERT': 'test_cert.crt',
-        'RABBITMQ_KEY': 'test_key.key',
-        'RABBITMQ_CAFILE': 'test_ca.ca'
-    })
     def test_ssl_setup_with_valid_paths(self):
-        consumer = MrsalBlockingAMQP(**config.SETUP_ARGS, ssl=True)
+        with patch.dict('os.environ', {
+            'RABBITMQ_CERT': 'test_cert.crt',
+            'RABBITMQ_KEY': 'test_key.key',
+            'RABBITMQ_CAFILE': 'test_ca.ca'
+        }, clear=True):
+            consumer = MrsalBlockingAMQP(**SETUP_ARGS, ssl=True)
 
-        # Check if SSL paths are correctly loaded and blocking is used
-        self.assertTrue(consumer.use_blocking)
-        self.assertEqual(consumer.tls_dict['tls.crt'], 'test_cert.crt')
-        self.assertEqual(consumer.tls_dict['tls.key'], 'test_key.key')
-        self.assertEqual(consumer.tls_dict['tls.ca'], 'test_ca.ca')
+            # Check if SSL paths are correctly loaded and blocking is used
+            self.assertTrue(consumer.use_blocking)
+            self.assertEqual(consumer.tls_dict['crt'], 'test_cert.crt')
+            self.assertEqual(consumer.tls_dict['key'], 'test_key.key')
+            self.assertEqual(consumer.tls_dict['ca'], 'test_ca.ca')
 
-    @patch.dict(os.environ, {
-        'RABBITMQ_CERT': None,
-        'RABBITMQ_KEY': None,
-        'RABBITMQ_CAFILE': None
+    @patch.dict('os.environ', {
+        'RABBITMQ_CERT': '',
+        'RABBITMQ_KEY': '',
+        'RABBITMQ_CAFILE': ''
     })
     def test_ssl_setup_with_missing_paths(self):
         with self.assertRaises(ValidationError):
-            MrsalBlockingAMQP(**config.SETUP_ARGS, ssl=True)
+            MrsalBlockingAMQP(**SETUP_ARGS, ssl=True)
 
     @patch.dict(os.environ, {}, clear=True)
     def test_ssl_setup_without_env_vars(self):
         with self.assertRaises(ValidationError):
-            MrsalBlockingAMQP(**config.SETUP_ARGS, ssl=True)
+            MrsalBlockingAMQP(**SETUP_ARGS, ssl=True)
 
 
 if __name__ == '__main__':

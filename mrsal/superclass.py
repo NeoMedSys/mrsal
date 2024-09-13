@@ -4,15 +4,24 @@ import ssl
 import asyncio
 from ssl import SSLContext
 from typing import Any, Type
-from pydantic.dataclasses import dataclass
+from pydantic.dataclasses import TYPE_CHECKING, dataclass
 from pika.exceptions import ChannelClosedByBroker, ConnectionClosedByBroker
 from neolibrary.monitoring.logger import NeoLogger
 from pydantic.deprecated.tools import json
 
 # internal
-from amqp.blocking import MrsalBlockingAMQP
-from config import config
+from mrsal import config
+if TYPE_CHECKING:
+    from mrsal.amqp.baseclasses import MrsalBlockingAMQP
 
+import warnings
+# Permanently suppress RuntimeWarnings related to unawaited coroutines
+warnings.filterwarnings(
+    "ignore",
+    message="coroutine '.*' was never awaited",
+    category=RuntimeWarning,
+    module=".*",
+)
 
 @dataclass
 # NOTE! change the doc style to google or numpy
@@ -32,7 +41,7 @@ class Mrsal:
     """
 
     host: str
-    port: str
+    port: int
     credentials: tuple[str, str]
     virtual_host: str
     ssl: bool = False
@@ -45,16 +54,18 @@ class Mrsal:
 
     def __post_init__(self):
         if self.ssl:
-            self.tls_dict = {
-                    'tls.crt': os.environ.get('RABBITMQ_CERT'),
-                    'tls.key': os.environ.get('RABBITMQ_KEY'),
-                    'tls.ca': os.environ.get('RABBITMQ_CAFILE')
+            tls_dict = {
+                    'crt': os.environ.get('RABBITMQ_CERT'),
+                    'key': os.environ.get('RABBITMQ_KEY'),
+                    'ca': os.environ.get('RABBITMQ_CAFILE')
                     }
-            config.ValidateTSL(**self.tls_dict)
+            # empty string handling
+            self.tls_dict = {cert: (env_var if env_var != '' else None) for cert, env_var in tls_dict.items()}
+            config.ValidateTLS(**self.tls_dict)
 
-        self.use_blocking = True if issubclass(self.__class__, MrsalBlockingAMQP) else False
+        self.use_blocking = any(cls.__name__ == 'MrsalBlockingAMQP' for cls in self.__class__.mro())
 
-    def _setup_exchange_and_queue(self, 
+    async def _setup_exchange_and_queue(self, 
                                  exchange_name: str, queue_name: str, exchange_type: str,
                                  routing_key: str, exch_args: dict[str, str] | None = None,
                                  queue_args: dict[str, str] | None = None,
@@ -64,31 +75,40 @@ class Mrsal:
                                  auto_delete: bool = False, exclusive: bool = False
                                  ):
 
-        self._declare_exchange(
-                exchange=exchange_name,
-                exchange_type=exchange_type,
-                arguments=exch_args,
-                durable=exch_durable,
-                passive=passive,
-                internal=internal,
-                auto_delete=auto_delete
-                )
+        declare_exhange_dict = {
+                'exchange': exchange_name,
+                'exchange_type': exchange_type,
+                'arguments': exch_args,
+                'durable': exch_durable,
+                'passive': passive,
+                'internal': internal,
+                'auto_delete': auto_delete
+                }
 
-        self._declare_queue(
-                queue=queue_name,
-                arguments=queue_args,
-                durable=queue_durable,
-                passive=passive,
-                exclusive=exclusive,
-                auto_delete=auto_delete
-                )
+        declare_queue_dict = {
+                'queue': queue_name,
+                'arguments': queue_args,
+                'durable': queue_durable,
+                'passive': passive,
+                'exclusive': exclusive,
+                'auto_delete': auto_delete
+                }
 
-        self._declare_queue_binding(
-                exchange=exchange_name,
-                queue=queue_name,
-                routing_key=routing_key,
-                arguments=bind_args
-                )
+        declare_queue_binding_dict = {
+                'exchange': exchange_name,
+                'queue': queue_name,
+                'routing_key': routing_key,
+                'arguments': bind_args
+
+                }
+        if self.use_blocking:
+            self._declare_exchange(**declare_exhange_dict)
+            self._declare_queue(**declare_queue_dict)
+            self._declare_queue_binding(**declare_queue_binding_dict)
+        else:
+           await self._declare_exchange(**declare_exhange_dict)
+           await self._declare_queue(**declare_queue_dict)
+           await self._declare_queue_binding(**declare_queue_binding_dict)
 
     def on_connection_error(self, _unused_connection, exception):
         """
@@ -164,7 +184,7 @@ class Mrsal:
         if self.verbose:
             self.log.info(f"Exchange is declared successfully with blocking set to {self.use_blocking}: {exchange_declare_info}")
 
-    def _declare_queue(self,
+    async def _declare_queue(self,
                     queue: str, arguments: dict[str, str] | None,
                     durable: bool, exclusive: bool,
                     auto_delete: bool, passive: bool
@@ -206,7 +226,7 @@ class Mrsal:
         if self.verbose:
             self.log.info(f"Queue is declared successfully: {queue_declare_info}")
 
-    def _declare_queue_binding(self, 
+    async def _declare_queue_binding(self, 
                             exchange: str, queue: str,
                             routing_key: str | None,
                             arguments: dict[str, str] | None
@@ -242,8 +262,8 @@ class Mrsal:
         SSLContext
 
         """
-        context = ssl.create_default_context(cafile=self.tls_dict['tls.ca'])
-        context.load_cert_chain(certfile=self.tls_dict['tls.crt'], keyfile=self.tls_dict['tls.key'])
+        context = ssl.create_default_context(cafile=self.tls_dict['ca'])
+        context.load_cert_chain(certfile=self.tls_dict['crt'], keyfile=self.tls_dict['key'])
         return context
 
     def validate_payload(self, payload: Any, model: Type) -> None:
