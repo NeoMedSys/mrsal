@@ -25,6 +25,10 @@ jobs:
         uses: abatilo/actions-poetry@v2
         with:
           poetry-version: '1.8.0'
+      - name: Conifgure Poetry
+        run: |
+          poetry config repositories.neomedsys https://pypi.neomodels.app
+          poetry config http-basic.neomedsys ${{ secrets.PYPI_USERNAME }} ${{ secrets.PYPI_PASSWORD }}
       - name: Install depz
         run: |
           poetry install --no-cache --no-root
@@ -52,14 +56,16 @@ jobs:
         uses: abatilo/actions-poetry@v2
         with:
           poetry-version: '1.8.0'
+      - name: Conifgure Poetry
+        run: |
+          poetry config repositories.neomedsys https://pypi.neomodels.app
+          poetry config http-basic.neomedsys ${{ secrets.PYPI_USERNAME }} ${{ secrets.PYPI_PASSWORD }}
       - name: Install dependencies
         run: |
           poetry install --no-cache --no-root
       - name: Build and publish
-        env:
-          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         run: |
-          poetry config pypi-token.pypi $PYPI_TOKEN
+          poetry config pypi-token.pypi ${{ secrets.PYPI_TOKEN }}
           poetry publish --build
   
   doc_building:
@@ -81,6 +87,10 @@ jobs:
         uses: abatilo/actions-poetry@v2
         with:
           poetry-version: ${{ matrix.poetry-version }}
+      - name: Conifgure Poetry
+        run: |
+          poetry config repositories.neomedsys https://pypi.neomodels.app
+          poetry config http-basic.neomedsys ${{ secrets.PYPI_USERNAME }} ${{ secrets.PYPI_PASSWORD }}
       - name: Install deps and build docs
         run: | 
           poetry lock --no-update
