@@ -4,6 +4,7 @@ import ssl
 import asyncio
 from ssl import SSLContext
 from typing import Any, Type
+from mrsal.exceptions import MrsalSetupError
 from pydantic.dataclasses import TYPE_CHECKING, dataclass
 from pika.exceptions import ChannelClosedByBroker, ConnectionClosedByBroker
 from neolibrary.monitoring.logger import NeoLogger
@@ -88,9 +89,13 @@ class Mrsal:
                 'arguments': bind_args
 
                 }
-        self._declare_exchange(**declare_exhange_dict)
-        self._declare_queue(**declare_queue_dict)
-        self._declare_queue_binding(**declare_queue_binding_dict)
+        try:
+            self._declare_exchange(**declare_exhange_dict)
+            self._declare_queue(**declare_queue_dict)
+            self._declare_queue_binding(**declare_queue_binding_dict)
+            self.auto_declare_ok = True
+        except MrsalSetupError:
+            self.auto_declare_ok = False
 
     def on_connection_error(self, _unused_connection, exception):
         """
@@ -151,8 +156,10 @@ class Mrsal:
                 passive=passive, internal=internal,
                 auto_delete=auto_delete
                 )
-        except (TypeError, AttributeError, ChannelClosedByBroker, ConnectionClosedByBroker) as err:
-                self.log.error(f"I tried to declare an exchange but failed with: {err}")
+        except Exception as e:
+            raise MrsalSetupError(f'Oooopise! I failed declaring the exchange with : {e}')
+        if self.verbose:
+            self.log.success("Exchange declared yo!")
 
     def _declare_queue(self,
                     queue: str, arguments: dict[str, str] | None,
@@ -188,10 +195,9 @@ class Mrsal:
         try:
             self._channel.queue_declare(queue=queue, arguments=arguments, durable=durable, exclusive=exclusive, auto_delete=auto_delete, passive=passive)
         except Exception as e:
-            self.log.error(f'Ooopsie boy: I failed declaring queue: {e}')
-
+            raise MrsalSetupError(f'Oooopise! I failed declaring the queue with : {e}')
         if self.verbose:
-            self.log.info(f"Queue is declared successfully: {queue_declare_info}")
+            self.log.info(f"Queue declared yo")
 
     def _declare_queue_binding(self, 
                             exchange: str, queue: str,
@@ -211,9 +217,14 @@ class Mrsal:
         if self.verbose:
             self.log.info(f"Binding queue to exchange: queue={queue}, exchange={exchange}, routing_key={routing_key}")
 
-        self._channel.queue_bind(exchange=exchange, queue=queue, routing_key=routing_key, arguments=arguments)
+        try:
+            self._channel.queue_bind(exchange=exchange, queue=queue, routing_key=routing_key, arguments=arguments)
+            if self.verbose:
+                self.log.info(f"The queue is bound to exchange successfully: queue={queue}, exchange={exchange}, routing_key={routing_key}")
+        except Exception as e:
+            raise MrsalSetupError(f'I failed binding the queue with : {e}')
         if self.verbose:
-            self.log.info(f"The queue is bound to exchange successfully: queue={queue}, exchange={exchange}, routing_key={routing_key}")
+            self.log.info(f"Queue bound yo")
     
     def _ssl_setup(self) -> SSLContext:
         """_ssl_setup is private method we are using to connect with rabbit server via signed certificates and some TLS settings.

@@ -51,6 +51,28 @@ class TestMrsalBlockingAMQP(unittest.TestCase):
         # Assert the callback was called once with the correct data
         mock_callback.assert_called_once_with(mock_method_frame, mock_properties, valid_body)
 
+    def test_valid_message_processing_no_autoack(self):
+        """Test that a message is acknowledged on successful processing."""
+        valid_body = b'{"id": 1, "name": "Test", "active": true}'
+        mock_method_frame = MagicMock()
+        mock_method_frame.delivery_tag = 123
+        mock_properties = MagicMock()
+
+        self.mock_channel.consume.return_value = [(mock_method_frame, mock_properties, valid_body)]
+        mock_callback = Mock()
+
+        self.consumer.start_consumer(
+            exchange_name="test_x",
+            exchange_type="direct",
+            queue_name="test_q",
+            routing_key="test_route",
+            callback=mock_callback,
+            payload_model=ExpectedPayload,
+            auto_ack=False
+        )
+
+        self.mock_channel.basic_ack.assert_called_once_with(delivery_tag=123)
+
     def test_invalid_message_skipped(self):
         # Simulate an invalid message that fails validation
         invalid_body = b'{"id": "wrong_type", "name": "Test", "active": true}'

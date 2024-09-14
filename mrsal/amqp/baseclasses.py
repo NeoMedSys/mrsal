@@ -1,4 +1,4 @@
-import asyncio
+from mrsal.exceptions import MrsalAbortedSetup
 import pika
 from pika import SSLOptions
 from pika.exceptions import AMQPConnectionError, ChannelClosedByBroker, StreamLostError, ConnectionClosedByBroker, UnroutableError
@@ -136,21 +136,32 @@ class MrsalBlockingAMQP(Mrsal):
                                 """
                                 )
                     if auto_ack:
-                        self.log.success(f'I successfully received a message from: {app_id} with messageID: {msg_id}')
+                        self.log.info(f'I successfully received a message from: {app_id} with messageID: {msg_id}')
                     
                     if payload_model:
                         try:
                             self.validate_payload(body, payload_model)
                         except (ValidationError, json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
                             self.log.error(f"Oh lordy lord, payload validation failed for your specific model requirements: {e}")
+                            if not auto_ack:
+                                self._channel.basic_nack(delivery_tag=method_frame.delivery_tag, requeue=True)
                             continue
                     if callback:
-                        if callback_args:
-                            callback(*callback_args, method_frame, properties, body)
-                        else:
-                            callback( method_frame, properties, body)
+                        try:
+                            if callback_args:
+                                callback(*callback_args, method_frame, properties, body)
+                            else:
+                                callback( method_frame, properties, body)
+                        except Exception as e:
+                            if not auto_ack:
+                                self._channel.basic_nack(delivery_tag=method_frame.delivery_tag, requeue=True)
+                            self.log.error("Callback method failure: {e}")
+                            continue
+                    if not auto_ack:
+                        self.log.success(f'Message ({msg_id}) from {app_id} received and properly processed -- now dance the funky chicken')
+                        self._channel.basic_ack(delivery_tag=method_frame.delivery_tag)
                 else:
-                    # continue consuming
+                    self.log.info("No message received, continuing to listen...")
                     continue
         except Exception as e:
             self.log.error(f'Oh lordy lord! I failed consuming ze messaj with: {e}')
@@ -237,7 +248,7 @@ class MrsalAsyncAMQP(Mrsal):
         credentials = pika.PlainCredentials(*self.credentials)
 
         try:
-            AsyncioConnection.create_connection(
+            self._connection = AsyncioConnection.create_connection(
                 pika.ConnectionParameters(
                     host=self.host,
                     port=self.port,
@@ -275,6 +286,12 @@ class MrsalAsyncAMQP(Mrsal):
         :param callback: The callback function to process messages.
         :param callback_args: Optional arguments to pass to the callback.
         """
+        # Connect and start the I/O loop
+        if self._connection:
+            self._connection.ioloop.run_forever()
+        else:
+            self.log.error('Straigh out of the swamp with no connection! Oh lordy! Something went wrong in the async connection')
+
         if auto_declare:
             if None in (exchange_name, queue_name, exchange_type, routing_key):
                 raise TypeError('Make sure that you are passing in all the necessary args for auto_declare')
@@ -284,49 +301,65 @@ class MrsalAsyncAMQP(Mrsal):
                     exchange_type=exchange_type,
                     routing_key=routing_key
                     )
+            if not self.auto_declare_ok:
+                if self._connection:
+                    self._connection.ioloop.stop()
+                raise MrsalAbortedSetup('Auto declaration for the connection setup failed and is aborted')
 
         try:
-            app_id = properties.app_id if properties else None
-            msg_id = properties.msg_id if properties else None
+            for method_frame, properties, body in self._channel.consume(
+                                queue=queue_name, auto_ack=auto_ack, inactivity_timeout=inactivity_timeout):
+                if method_frame:
+                    app_id = properties.app_id if properties else None
+                    msg_id = properties.msg_id if properties else None
 
-            if self.verbose:
-                self.log.info(
-                        """
-                        Message received with:
-                        - Method Frame: {method_frame)
-                        - Redelivery: {method_frame.redelivered}
-                        - Exchange: {method_frame.exchange}
-                        - Routing Key: {method_frame.routing_key}
-                        - Delivery Tag: {method_frame.delivery_tag}
-                        - Properties: {properties}
-                        """
-                        )
-            if auto_ack:
-                self.log.success(f'I successfully received a message from: {app_id} with messageID: {msg_id}')
-            
-            if payload_model:
-                try:
-                    self.validate_payload(body, payload_model)
-                except (ValidationError, json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
-                    self.log.error(f"Oh lordy lord, payload validation failed for your specific model requirements: {e}")
+                    if self.verbose:
+                        self.log.info(
+                                """
+                                Message received with:
+                                - Method Frame: {method_frame)
+                                - Redelivery: {method_frame.redelivered}
+                                - Exchange: {method_frame.exchange}
+                                - Routing Key: {method_frame.routing_key}
+                                - Delivery Tag: {method_frame.delivery_tag}
+                                - Properties: {properties}
+                                """
+                                )
+                    if auto_ack:
+                        self.log.info(f'I successfully received a message from: {app_id} with messageID: {msg_id}')
+                    
+                    if payload_model:
+                        try:
+                            self.validate_payload(body, payload_model)
+                        except (ValidationError, json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
+                            self.log.error(f"Oh lordy lord, payload validation failed for your specific model requirements: {e}")
+                            if not auto_ack:
+                                self._channel.basic_nack(delivery_tag=method_frame.delivery_tag, requeue=True)
+                            continue
 
-            if callback:
-                if callback_args:
-                    callback(*callback_args, method_frame, properties, body)
+                    if callback:
+                        try:
+                            if callback_args:
+                                callback(*callback_args, method_frame, properties, body)
+                            else:
+                                callback( method_frame, properties, body)
+                        except Exception as e:
+                            if not auto_ack:
+                                self._channel.basic_nack(delivery_tag=method_frame.delivery_tag, requeue=True)
+                            self.log.error("Callback method failure: {e}")
+                            continue
+                    if not auto_ack:
+                        self.log.success(f'Message ({msg_id}) from {app_id} received and properly processed -- now dance the funky chicken')
+                        self._channel.basic_ack(delivery_tag=method_frame.delivery_tag)
                 else:
+                    self.log.info("No message received, continuing to listen...")
+                    continue
 
-                    callback( method_frame, properties, body)
         except Exception as e:
             self.log.error(f'Oh lordy lord! I failed consuming ze messaj with: {e}')
 
-    def start_consumer(self):
-        """Start consuming messages asynchronously."""
-        print("Starting to consume messages...")
-        self._channel.basic_consume(on_message_callback=self.consumer, auto_ack=False  # Adjust this as needed
-        )
-        self.connection.ioloop.start()
 
-    async def publish_message(
+    def publish_message(
         self,
         exchange_name: str,
         routing_key: str,
@@ -352,7 +385,7 @@ class MrsalAsyncAMQP(Mrsal):
         if auto_declare:
             if None in (exchange_name, queue_name, exchange_type, routing_key):
                 raise TypeError('Make sure that you are passing in all the necessary args for auto_declare')
-            await self._setup_exchange_and_queue(
+            self._setup_exchange_and_queue(
                     exchange_name=exchange_name,
                     queue_name=queue_name,
                     exchange_type=exchange_type,
