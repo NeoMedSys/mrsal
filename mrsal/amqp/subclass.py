@@ -33,7 +33,7 @@ class MrsalAMQP(Mrsal):
         ssl_options = pika.SSLOptions(context, self.host) if context else None
         return ssl_options
 
-    def setup_blocking_connection(self):
+    def setup_blocking_connection(self) -> None:
         """We can use setup_blocking_connection for establishing a connection to RabbitMQ server specifying connection parameters.
         The connection is blocking which is only advisable to use for the apps with low througput. 
 
@@ -80,7 +80,7 @@ class MrsalAMQP(Mrsal):
         except Exception as e:
             self.log.error(f"Unexpected error caught: {e}")
 
-    def setup_async_connection(self):
+    def setup_async_connection(self) -> None:
         """We can use setup_aync_connection for establishing a connection to RabbitMQ server specifying connection parameters.
         The connection is async and is recommended to use if your app is realtime or will handle a lot of traffic.
 
@@ -145,7 +145,7 @@ class MrsalAMQP(Mrsal):
                      exchange_type: str | None = None,
                      routing_key: str | None = None,
                      payload_model: Type | None = None
-                     ):
+                     ) -> None:
         """
         Start the consumer using blocking setup.
         :param queue: The queue to consume from.

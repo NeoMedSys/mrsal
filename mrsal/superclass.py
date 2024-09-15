@@ -47,7 +47,7 @@ class Mrsal:
     _channel = None
     log = NeoLogger(__name__, rotate_days=10)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.ssl:
             tls_dict = {
                     'crt': os.environ.get('RABBITMQ_CERT'),
@@ -66,7 +66,7 @@ class Mrsal:
                                  exch_durable: bool = True, queue_durable: bool =True,
                                  passive: bool = False, internal: bool = False,
                                  auto_delete: bool = False, exclusive: bool = False
-                                 ):
+                                 ) -> None:
 
         declare_exhange_dict = {
                 'exchange': exchange_name,
@@ -108,14 +108,14 @@ class Mrsal:
         """
         self.log.error(f"I failed to establish async connection: {exception}")
 
-    def open_channel(self):
+    def open_channel(self) -> None:
         """
         Open a channel once the connection is established.
         """
         self._channel = self.conn.channel()
         self._channel.basic_qos(prefetch_count=self.prefetch_count)
 
-    def on_connection_open(self, connection):
+    def on_connection_open(self, connection) -> None:
         """
         Callback when the async connection is successfully opened.
         """
@@ -127,7 +127,7 @@ class Mrsal:
                              arguments: dict[str, str] | None,
                              durable: bool, passive: bool,
                              internal: bool, auto_delete: bool
-                            ):
+                            ) -> None:
         """This method creates an exchange if it does not already exist, and if the exchange exists, verifies that it is of the correct and expected class.
 
         If passive set, the server will reply with Declare-Ok if the exchange already exists with the same name,
@@ -140,7 +140,6 @@ class Mrsal:
         :param bool auto_delete: Remove when no more queues are bound to it
         :param bool internal: Can only be published to by other exchanges
         :param dict arguments: Custom key/value pair arguments for the exchange
-        :returns: Method frame from the Exchange.Declare-ok response
         :rtype: `pika.frame.Method` having `method` attribute of type `spec.Exchange.DeclareOk`
         """
         exchange_declare_info = f"""
@@ -170,7 +169,7 @@ class Mrsal:
                     queue: str, arguments: dict[str, str] | None,
                     durable: bool, exclusive: bool,
                     auto_delete: bool, passive: bool
-                    ):
+                    ) -> None:
         """Declare queue, create if needed. This method creates or checks a queue.
         When creating a new queue the client can specify various properties that control the durability of the queue and its contents,
         and the level of sharing for the queue.
@@ -208,7 +207,7 @@ class Mrsal:
                             exchange: str, queue: str,
                             routing_key: str | None,
                             arguments: dict[str, str] | None
-                            ):
+                            ) -> None:
         """Bind queue to exchange.
 
         :param str queue: The queue to bind to the exchange
@@ -285,7 +284,7 @@ class Mrsal:
         queue_name: str,
         auto_declare: bool = True,
         prop: pika.BasicProperties | None = None,
-    ):
+    ) -> None:
         """Publish message to the exchange specifying routing key and properties.
 
         :param str exchange: The exchange to publish to
