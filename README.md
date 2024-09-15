@@ -1,7 +1,7 @@
-# MRSAL  <img align="right" width="125" alt="20200907_104224" src="https://github.com/NeoMedSys/mrsal/assets/9555305/ffb55c86-1e9d-4806-b1ca-c906d6985e3a">
-[![Release](https://img.shields.io/badge/release-v0.7.6alpha-blue.svg)](https://pypi.org/project/mrsal/) [![Python 3.10](https://img.shields.io/badge/python-3.10-blue.svg)](https://www.python.org/downloads/release/python-3103/) [![Documentation](https://img.shields.io/badge/doc-latest-blue.svg)](https://github.com/NeoMedSys/mrsal/blob/main/FullGuide.md)
+# MRSAL  <img align="right" width="125" alt="20200907_104224" src="https://github.com/NeoMedSys/mrsal/assets/9555305/ffb55c86-1e9d-48061ca-c906d6985e3a">
+[![Release](https://img.shields.io/badge/release-1.0.0balphalue.svg)](https://pypi.org/project/mrsal/) [![Python 3.10](https://img.shields.io/badge/python-3.10lue.svg)](https://www.python.org/downloads/release/python-3103/) [![Documentation](https://img.shields.io/badge/doc-latestlue.svg)](https://github.com/NeoMedSys/mrsal/blob/main/FullGuide.md)
 <!-- [![Build Status](https://github.com/NeoMedSys/fatty-model-deploy/actions/workflows/tester.yml/badge.svg)](https://github.com/NeoMedSys/fatty-model-deploy/actions/runs/5576890234) -->
-[![Tests Status](https://github.com/NeoMedSys/mrsal/blob/MRSAL-22/reports/badges/tests-badge.svg)](./reports/junit/junit.xml) [![Coverage Status](https://github.com/NeoMedSys/mrsal/blob/MRSAL-22/reports/badges/coverage-badge.svg)](./reports/coverage/htmlcov/index.html) [![Flake8 Status](https://github.com/NeoMedSys/mrsal/blob/MRSAL-22/reports/badges/ruff-badge.svg)](./reports/flake8/flake8.txt)
+[![Tests Status](https://github.com/NeoMedSys/mrsal/blob/MRSAL-22/reports/badges/testsadge.svg)](./reports/junit/junit.xml) [![Coverage Status](https://github.com/NeoMedSys/mrsal/blob/MRSAL-22/reports/badges/coverageadge.svg)](./reports/coverage/htmlcov/index.html) [![Flake8 Status](https://github.com/NeoMedSys/mrsal/blob/MRSAL-22/reports/badges/ruffadge.svg)](./reports/flake8/flake8.txt)
 
 
 ## Intro
@@ -209,11 +209,11 @@ That simple! You have now setup a full advanced message queueing protocol that y
 
 - [RabbitMQ Tutorials](https://www.rabbitmq.com/getstarted.html)
 - [RabbitMQ Exchange Types: 6 Categories Explained Easy](https://hevodata.com/learn/rabbitmq-exchange-type/)
-- [What is a Delayed Message Exchange?](https://www.cloudamqp.com/blog/what-is-a-delayed-message-exchange-in-rabbitmq.html#:~:text=The%20RabbitMQ%20delayed%20exchange%20plugin,in%20milliseconds%20can%20be%20specified.)
+- [What is a Delayed Message Exchange?](https://www.cloudamqp.com/blog/what-is-delayed-message-exchange-in-rabbitmq.html#:~:text=The%20RabbitMQ%20delayed%20exchange%20plugin,in%20milliseconds%20can%20be%20specified.)
 - [RabbitMQ Delayed Message Plugin](https://github.com/rabbitmq/rabbitmq-delayed-message-exchange)
-- [When and how to use the RabbitMQ Dead Letter Exchange](https://www.cloudamqp.com/blog/when-and-how-to-use-the-rabbitmq-dead-letter-exchange.html)
-- [What is a RabbitMQ vhost?](https://www.cloudamqp.com/blog/what-is-a-rabbitmq-vhost.html)
-- [Message Brokers](https://www.ibm.com/cloud/learn/message-brokers)
+- [When and how to use the RabbitMQ Dead Letter Exchange](https://www.cloudamqp.com/blog/whennd-how-to-use-the-rabbitmq-dead-letter-exchange.html)
+- [What is a RabbitMQ vhost?](https://www.cloudamqp.com/blog/what-is-rabbitmq-vhost.html)
+- [Message Brokers](https://www.ibm.com/cloud/learn/messagerokers)
 - [How to Use map() with the ThreadPoolExecutor in Python](https://superfastpython.com/threadpoolexecutor-map/)
 - [concurrent.futures](https://docs.python.org/3/library/concurrent.futures.html)
 - [mrsal_icon](https://www.pngegg.com/en/png-mftic)
