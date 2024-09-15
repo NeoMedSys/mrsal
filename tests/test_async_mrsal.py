@@ -1,7 +1,9 @@
 import unittest
 from unittest.mock import Mock, MagicMock, patch
-from mrsal.amqp.baseclasses import MrsalAMQP
+from mrsal.amqp.subclass import MrsalAMQP
 from mrsal.exceptions import MrsalAbortedSetup, MrsalSetupError
+from pika.exceptions import AMQPConnectionError
+from tenacity import RetryError
 from tests.conftest import SETUP_ARGS, ExpectedPayload
 
 class TestMrsalAsyncAMQP(unittest.TestCase):
@@ -10,7 +12,27 @@ class TestMrsalAsyncAMQP(unittest.TestCase):
         self.consumer = MrsalAMQP(**SETUP_ARGS)
         self.consumer._channel = self.mock_channel
 
-    @patch('mrsal.amqp.baseclasses.MrsalAMQP._setup_exchange_and_queue')
+    @patch.object(MrsalAMQP, 'setup_async_connection')
+    def test_retry_on_connection_failure_blocking(self, mock_async_connection):
+        """Test reconnection retries in blocking consumer mode."""
+
+        # Set up a mock callback function
+        mock_callback = Mock()
+
+        self.mock_channel.consume.side_effect = AMQPConnectionError("Connection lost")
+
+        with self.assertRaises(RetryError):
+            self.consumer.start_consumer(
+                    queue_name='test_q',
+                    exchange_name='test_x',
+                    exchange_type='direct',
+                    routing_key='test_route',
+                    callback=mock_callback
+                    )
+
+        self.assertEqual(mock_async_connection.call_count, 3)
+
+    @patch('mrsal.amqp.subclass.MrsalAMQP._setup_exchange_and_queue')
     def test_raises_mrsal_aborted_setup_on_failed_auto_declaration(self, mock_setup_exchange_and_queue):
         """Test that MrsalAbortedSetup is raised if the auto declaration fails."""
         self.consumer.auto_declare_ok = False  # Simulate auto declaration failure

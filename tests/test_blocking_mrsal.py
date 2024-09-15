@@ -4,15 +4,15 @@ from unittest.mock import Mock, patch, MagicMock, call
 from pika.exceptions import AMQPConnectionError, UnroutableError
 from pydantic import ValidationError
 
-from mrsal.amqp.baseclasses import MrsalAMQP
+from mrsal.amqp.subclass import MrsalAMQP
 from tenacity import RetryError
 from tests.conftest import SETUP_ARGS, ExpectedPayload
 
 
 
 class TestMrsalBlockingAMQP(unittest.TestCase):
-    @patch('mrsal.amqp.baseclasses.MrsalAMQP.setup_blocking_connection')
-    @patch('mrsal.amqp.baseclasses.pika.channel')
+    @patch('mrsal.amqp.subclass.MrsalAMQP.setup_blocking_connection')
+    @patch('mrsal.amqp.subclass.pika.channel')
     def setUp(self, mock_blocking_connection, mock_setup_connection):
         # Set up mock behaviors for the connection and channel
         self.mock_channel = MagicMock()
