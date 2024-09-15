@@ -1,16 +1,16 @@
 import unittest
 from unittest.mock import Mock, MagicMock, patch
-from mrsal.amqp.baseclasses import MrsalAsyncAMQP
+from mrsal.amqp.baseclasses import MrsalAMQP
 from mrsal.exceptions import MrsalAbortedSetup, MrsalSetupError
 from tests.conftest import SETUP_ARGS, ExpectedPayload
 
 class TestMrsalAsyncAMQP(unittest.TestCase):
     def setUp(self):
         self.mock_channel = MagicMock()
-        self.consumer = MrsalAsyncAMQP(**SETUP_ARGS)
+        self.consumer = MrsalAMQP(**SETUP_ARGS)
         self.consumer._channel = self.mock_channel
 
-    @patch('mrsal.amqp.baseclasses.MrsalAsyncAMQP._setup_exchange_and_queue')
+    @patch('mrsal.amqp.baseclasses.MrsalAMQP._setup_exchange_and_queue')
     def test_raises_mrsal_aborted_setup_on_failed_auto_declaration(self, mock_setup_exchange_and_queue):
         """Test that MrsalAbortedSetup is raised if the auto declaration fails."""
         self.consumer.auto_declare_ok = False  # Simulate auto declaration failure
