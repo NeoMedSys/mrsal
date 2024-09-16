@@ -9,29 +9,27 @@ Mrsal is a simple to use message broker abstraction on top of [RabbitMQ](https:/
 
 ## Quick Start guide
 
-### 0. Install
+### 0. Requirements
+1. RabbitMQ server up and running
+2. python 3.10 >=
+3. tested on linux only
 
+### 1. Installing
 First things first: 
 
 ```bash
-pip install mrsal
+poetry add mrsal
 ```
 
-We need to install RabbitMQ to use Mrsal. Head over to [install](https://www.rabbitmq.com/download.html) RabbitMQ. Make sure to stick to the configuration that you give the installation throughout this guide. You can also use the [Dockerfile](https://github.com/NeoMedSys/mrsal/blob/main/Dockerfile) and the [docker-compose](https://github.com/NeoMedSys/mrsal/blob/main/docker-compose.yml) that we are using in the full guide.
-
-Next set the default username, password and servername for your RabbitMQ setup. It's advisable to use a `.env` script or the rc file for persistence.
+Next set the default username, password and servername for your RabbitMQ setup. It's advisable to use a `.env` script or `(.zsh)rc` file for persistence.
 
 ```bash
 [RabbitEnvVars]
-RABBITMQ_DEFAULT_USER=******
-RABBITMQ_DEFAULT_PASS=******
-RABBITMQ_DEFAULT_VHOST=******
+RABBITMQ_USER=******
+RABBITMQ_PASSWORD=******
+RABBITMQ_VHOST=******
 RABBITMQ_DOMAIN=******
-RABBITMQ_DOMAIN_TLS=******
-
-RABBITMQ_GUI_PORT=******
 RABBITMQ_PORT=******
-RABBITMQ_PORT_TLS=******
 
 # FOR TLS
 RABBITMQ_CAFILE=/path/to/file
@@ -39,70 +37,49 @@ RABBITMQ_CERT=/path/to/file
 RABBITMQ_KEY=/path/to/file
 ```
 
-Please read the [full guide](https://github.com/NeoMedSys/mrsal/blob/main/FullGuide.md) to understand what Mrsal currently can and can't do.
-
 ###### Mrsal was first developed by NeoMedSys and the research group [CRAI](https://crai.no/) at the univeristy hospital of Oslo.
 
-### 1. Setup and connect
-
-
-The first thing we need to do is to setup our rabbit server before we can subscribe and publish to it. Lets set up a server on our localhost with the port and credentials we used when spinning up the docker-compose
+### 2. Setup and connect
+- Example 1: Lets create a blocking connection on localhost with no TLS encryption
 
 ```python
-import json
-import pika
-from mrsal.mrsal import Mrsal
-
-# If you want to use SSL for external listening then set it to True
-SSL = False
-
-# Note RabbitMQ container is listening on:
-# 1. When SSL is False the default port 5672 which is exposed to RABBITMQ_PORT in docker-compose
-# 2. When SSL is True the default port 5671 which is exposed to RABBITMQ_PORT_TLS in docker-compose
-port = RABBITMQ_PORT_TLS if SSL else RABBITMQ_PORT
-host = RABBITMQ_DOMAIN_TLS if SSL else RABBITMQ_DOMAIN
-
-# It should match with the env specifications (RABBITMQ_DEFAULT_USER, RABBITMQ_DEFAULT_PASS)
-credentials=(RABBITMQ_DEFAULT_USER, RABBITMQ_DEFAULT_PASS)
-
-# It should match with the env specifications (RABBITMQ_DEFAULT_VHOST)
-v_host = RABBITMQ_DEFAULT_VHOST
-
-mrsal = Mrsal(
-    host=host,
-    port=port,
-    credentials=credentials,
-    virtual_host=v_host,
-    ssl=SSL
+from mrsal.amqp import MrsalAMQP
+mrsal = MrsalAMQP(
+    host=RABBITMQ_DOMAIN,  # Use a custom domain if you are using SSL e.g. mrsal.on-example.com
+    port=int(RABBITMQ_PORT),
+    credentials=(RABBITMQ_USER, RABBITMQ_PASSWORD),
+    virtual_host=RABBITMQ_VHOST,
+    ssl=False, # Set this to True for SSL/TLS (you will need to set the cert paths if you do so)
+    use_blocking=True  # Set this to False if you want to start an async connection
 )
 
-mrsal.connect_to_server()
+# boom you are staged for connection. This instantiation stages for connection only
 ```
 
 ### 2 Publish
 Now lets publish our message of friendship on the friendship exchange.
-Note: When `fast_setup=True` that means Mrsal will create the specified `exchange` and `queue`, then bind them together using `routing_key`.
+Note: When `auto_declare=True` means that MrsalAMQP will create the specified `exchange` and `queue`, then bind them together using `routing_key` in one go. If you want to customize each step then turn off auto_declare and specify each step yourself with custom arguments etc.
 
 ```python
 # BasicProperties is used to set the message properties
 prop = pika.BasicProperties(
-        app_id='friendship_app',
-        message_id='friendship_msg',
-        content_type='text/plain',
+        app_id='zoomer_app',
+        message_id='zoomer_msg',
+        content_type=' application/json',
         content_encoding='utf-8',
         delivery_mode=pika.DeliveryMode.Persistent,
         headers=None)
 
-message_body = 'Hello'
+message_body = {'zoomer_message': 'Get it yia bish'}
 
 # Publish the message to the exchange to be routed to queue
-mrsal.publish_message(exchange='friendship',
+mrsal.publish_message(exchange_name='zoomer_x',
                         exchange_type='direct',
-                        queue='friendship_queue',
-                        routing_key='friendship_key',
-                        message=json.dumps(message_body), 
+                        queue_name='zoomer_q',
+                        routing_key='zoomer_key',
+                        message=message_body, 
                         prop=prop,
-                        fast_setup=True)
+                        auto_declare=True)
 ```
 
 ### 3 Consume
@@ -112,96 +89,38 @@ Now lets setup a consumer that will listen to our very important messages. If yo
 Note: 
 - If you start a consumer with `callback_with_delivery_info=True` then your callback function should have at least these params `(method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str)`. 
 - If not, then it should have at least `(message_param: str)`
+- We can use pydantic BaseModel classes to enforce types in the body
 
 ```python
-import json
+from pydantic import BaseModel
 
-def consumer_callback_with_delivery_info(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
-    str_message = json.loads(message_param).replace('"', '')
-    if 'Hello' in str_message:
+class ZoomerNRJ(BaseModel):
+    zoomer_message: str
+
+def consumer_callback_with_delivery_info(method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, body: str):
+    if 'Get it' in body:
         app_id = properties.app_id
         msg_id = properties.message_id
         print(f'app_id={app_id}, msg_id={msg_id}')
-        print('Hola habibi')
-        return True  # Consumed message processed correctly
-    return False
-
-def consumer_callback(host_param: str, queue_param: str, message_param: str):
-    str_message = json.loads(message_param).replace('"', '')
-    if 'Hello' in str_message:
-        print('Hola habibi')
-        return True  # Consumed message processed correctly
-    return False
+        print('Slay with main character vibe')
+    else:
+        raise SadZoomerEnergyError('Zoomer sad now')
 
 mrsal.start_consumer(
-        queue='friendship_queue',
+        queue_name='zoomer_q',
+        exchange_name='zoomer_x',
+        callback_args=None,  # no need to specifiy if you do not need it
         callback=consumer_callback_with_delivery_info,
-        callback_args=(test_config.HOST, 'friendship_queue'),
-        inactivity_timeout=1,
-        requeue=False,
-        fast_setup=True,
-        callback_with_delivery_info=True
+        auto_declare=False,
+        auto_ack-False
     )
 ```
 
-Done! Your first message of friendship has been sent to the friendship queue on the exchange of friendship.
-
-
-### 3 Concurrent Consumers
-
-Sometimes we need to start multiple consumers to listen to the **same** **queue** and process received messages **concurrently**. 
-You can do that by calling `start_concurrence_consumer` which takes `total_threads` param in addition to the same parameters used in `start_consumer`.
-This method will create a **thread pool** and _spawn new_ `Mrsal` object and start **new consumer** for every thread. 
-
-```python
-import json
-import time
-
-import pika
-from pika.exchange_type import ExchangeType
-
-import mrsal.config.config as config
-import tests.config as test_config
-from mrsal.mrsal import Mrsal
-
-
-mrsal = Mrsal(host=test_config.HOST,
-              port=config.RABBITMQ_PORT,
-              credentials=config.RABBITMQ_CREDENTIALS,
-              virtual_host=config.V_HOST)
-mrsal.connect_to_server()
-
-APP_ID="TEST_CONCURRENT_CONSUMERS"
-EXCHANGE="GoodFriends"
-EXCHANGE_TYPE='direct'
-QUEUE_EMERGENCY="alleSindInkludiert"  # place the excluded (but no fundamentalist danke) in an emergency queue  
-NUM_THREADS=3
-NUM_MESSAGES=3
-INACTIVITY_TIMEOUT=30 # time out after 30 seconds
-ROUTING_KEY="bleib-cool"
-MESSAGE_ID="Bleib cool und alles wird besser"
-
-def test_concurrent_consumer():
-    # Start concurrent consumers
-    mrsal.start_concurrence_consumer(total_threads=NUM_THREADS, queue=QUEUE_EMERGENCY,
-                                     callback=consumer_callback_with_delivery_info,
-                                     callback_args=(test_config.HOST, QUEUE_EMERGENCY),
-                                     exchange=EXCHANGE, exchange_type=EXCHANGE_TYPE,
-                                     routing_key=ROUTING_KEY,
-                                     inactivity_timeout=INACTIVITY_TIMEOUT,
-                                     fast_setup=True,
-                                     callback_with_delivery_info=True)
-
-    mrsal.close_connection()
-
-def consumer_callback_with_delivery_info(host_param: str, queue_param: str, method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str):
-    time.sleep(5)
-    return True
-```
+Done! Your first message of zommerism has been sent to the zoomer queue on the exchange of Zoomeru.
 
 That simple! You have now setup a full advanced message queueing protocol that you can use to promote friendship or other necessary communication between your services.
 
-###### Note! Please refer to the >>>`FULL GUIDE`<<< on how to use customize Mrsal to meet specific needs. There are many parameters and settings that you can use to set up a more sophisticated communication protocol.
+###### Note! There are many parameters and settings that you can use to set up a more sophisticated communication protocol in both blocking or async connection with pydantic BaseModels to enforce data types in the expected payload.
 ---
 ## References
 
@@ -212,7 +131,5 @@ That simple! You have now setup a full advanced message queueing protocol that y
 - [When and how to use the RabbitMQ Dead Letter Exchange](https://www.cloudamqp.com/blog/whennd-how-to-use-the-rabbitmq-dead-letter-exchange.html)
 - [What is a RabbitMQ vhost?](https://www.cloudamqp.com/blog/what-is-rabbitmq-vhost.html)
 - [Message Brokers](https://www.ibm.com/cloud/learn/messagerokers)
-- [How to Use map() with the ThreadPoolExecutor in Python](https://superfastpython.com/threadpoolexecutor-map/)
-- [concurrent.futures](https://docs.python.org/3/library/concurrent.futures.html)
 - [mrsal_icon](https://www.pngegg.com/en/png-mftic)
 ---
