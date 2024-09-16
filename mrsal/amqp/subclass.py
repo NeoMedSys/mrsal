@@ -1,4 +1,5 @@
 import pika
+import json
 from ssl import SSLContext
 from mrsal.exceptions import MrsalAbortedSetup
 from logging import WARNING
@@ -11,9 +12,9 @@ from pydantic.dataclasses import dataclass
 from neolibrary.monitoring.logger import NeoLogger
 
 from mrsal.superclass import Mrsal
-from pydantic.deprecated.tools import json
+from mrsal import config
 
-log = NeoLogger(__name__, rotate_days=10)
+log = NeoLogger(__name__, rotate_days=config.LOG_DAYS)
 
 @dataclass
 class MrsalAMQP(Mrsal):
@@ -23,7 +24,7 @@ class MrsalAMQP(Mrsal):
         for the connection to remain blocked; if the timeout expires,
             the connection will be torn down during connection tuning.
     """
-    blocked_connection_timeout: int = 300  # sec
+    blocked_connection_timeout: int = 60  # sec
     use_blocking: bool = False
 
     def get_ssl_context(self) -> SSLContext | None:

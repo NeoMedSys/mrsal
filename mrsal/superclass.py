@@ -15,7 +15,7 @@ from pydantic.deprecated.tools import json
 # internal
 from mrsal import config
 
-log = NeoLogger(__name__, rotate_days=10)
+log = NeoLogger(__name__, rotate_days=config.LOG_DAYS)
 
 
 @dataclass
@@ -45,7 +45,7 @@ class Mrsal:
     heartbeat: int = 60  # sec
     _connection = None
     _channel = None
-    log = NeoLogger(__name__, rotate_days=10)
+    log = NeoLogger(__name__, rotate_days=config.LOG_DAYS)
 
     def __post_init__(self) -> None:
         if self.ssl:
