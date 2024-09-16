@@ -95,10 +95,15 @@ jobs:
         run: |
           poetry lock --no-update
           poetry install --with dev --no-cache --no-root
-      - name: Generate and Build Documentation
+      - name: Generate Sphinx Project
         run: |
           mkdir -p docs
+          poetry run sphinx-quickstart -q -p "MrsalAMQP" -a "Jon E Nesvold | Raafat Zahran  | Martin S Rovang" -v "1.0.0" docs
+      - name: Generate API Documentation
+        run: |
           poetry run sphinx-apidoc -o ./docs ./mrsal
+      - name: Build HTML Documentation
+        run: |
           poetry run sphinx-build -b html ./docs ./docs/_build/html
       - name: Publish Docs to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
