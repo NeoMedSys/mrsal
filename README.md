@@ -43,7 +43,7 @@ RABBITMQ_KEY=/path/to/file
 - Example 1: Lets create a blocking connection on localhost with no TLS encryption
 
 ```python
-from mrsal.amqp import MrsalAMQP
+from mrsal.amqp.subclass import MrsalAMQP
 mrsal = MrsalAMQP(
     host=RABBITMQ_DOMAIN,  # Use a custom domain if you are using SSL e.g. mrsal.on-example.com
     port=int(RABBITMQ_PORT),
