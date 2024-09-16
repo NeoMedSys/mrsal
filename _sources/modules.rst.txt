@@ -1,0 +1,9 @@
+mrsal
+=====
+
+.. toctree::
+   :maxdepth: 4
+
+   config
+   exceptions
+   superclass
