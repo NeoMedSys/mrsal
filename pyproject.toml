@@ -23,6 +23,8 @@ sphinx = "^8.0.2"
 [tool.poetry.group.dev.dependencies]
 coverage = "^7.2.7"
 pytest = "^7.4.0"
+sphinx = "^8.0.2"
+myst-parser = "^4.0.0"
 
 [build-system]
 build-backend = "poetry.core.masonry.api"
