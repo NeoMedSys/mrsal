@@ -18,6 +18,7 @@ nox = "^2024.4.15"
 loguru = "^0.7.2"
 tenacity = "^9.0.0"
 neolibrary = {version = "^0.8.0b1", source = "neomedsys"}
+sphinx = "^8.0.2"
 
 [tool.poetry.group.dev.dependencies]
 coverage = "^7.2.7"
