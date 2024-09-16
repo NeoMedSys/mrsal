@@ -1,7 +1,5 @@
-# MRSAL  <img align="right" width="125" alt="20200907_104224" src="https://github.com/NeoMedSys/mrsal/assets/9555305/ffb55c86-1e9d-48061ca-c906d6985e3a">
-[![Release](https://img.shields.io/badge/release-1.0.0balphalue.svg)](https://pypi.org/project/mrsal/) [![Python 3.10](https://img.shields.io/badge/python-3.10lue.svg)](https://www.python.org/downloads/release/python-3103/) [![Documentation](https://img.shields.io/badge/doc-latestlue.svg)](https://github.com/NeoMedSys/mrsal/blob/main/FullGuide.md)
-<!-- [![Build Status](https://github.com/NeoMedSys/fatty-model-deploy/actions/workflows/tester.yml/badge.svg)](https://github.com/NeoMedSys/fatty-model-deploy/actions/runs/5576890234) -->
-[![Tests Status](https://github.com/NeoMedSys/mrsal/blob/MRSAL-22/reports/badges/testsadge.svg)](./reports/junit/junit.xml) [![Coverage Status](https://github.com/NeoMedSys/mrsal/blob/MRSAL-22/reports/badges/coverageadge.svg)](./reports/coverage/htmlcov/index.html) [![Flake8 Status](https://github.com/NeoMedSys/mrsal/blob/MRSAL-22/reports/badges/ruffadge.svg)](./reports/flake8/flake8.txt)
+# MRSAL AMQP
+[![Release](https://img.shields.io/badge/release-1.0.3--beta-blue.svg)](https://pypi.org/project/mrsal/) [![Python 3.10](https://img.shields.io/badge/python-3.10--3.11--3.12-blue.svg)](https://www.python.org/downloads/release/python-3103/)[![Mrsal Workflow](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml/badge.svg?branch=main)](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml)
 
 
 ## Intro
