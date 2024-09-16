@@ -92,16 +92,16 @@ jobs:
           poetry config repositories.neomedsys https://pypi.neomodels.app
           poetry config http-basic.neomedsys ${{ secrets.PYPI_USERNAME }} ${{ secrets.PYPI_PASSWORD }}
       - name: Install Dependencies
-      run: |
-        poetry lock --no-update
-        poetry install --with dev --no-cache --no-root
-    - name: Generate and Build Documentation
-      run: |
-        mkdir -p docs
-        poetry run sphinx-apidoc -o ./docs ./mrsal
-        poetry run sphinx-build -b html ./docs ./docs/_build/html
-    - name: Publish Docs to GitHub Pages
-      uses: peaceiris/actions-gh-pages@v3
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        publish_dir: ./docs/_build/html
+        run: |
+          poetry lock --no-update
+          poetry install --with dev --no-cache --no-root
+      - name: Generate and Build Documentation
+        run: |
+          mkdir -p docs
+          poetry run sphinx-apidoc -o ./docs ./mrsal
+          poetry run sphinx-build -b html ./docs ./docs/_build/html
+      - name: Publish Docs to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./docs/_build/html
