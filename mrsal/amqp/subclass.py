@@ -185,8 +185,9 @@ class MrsalAMQP(Mrsal):
             for method_frame, properties, body in self._channel.consume(
                                 queue=queue_name, auto_ack=auto_ack, inactivity_timeout=inactivity_timeout):
                 if method_frame:
-                    app_id = properties.app_id if properties else None
-                    msg_id = properties.msg_id if properties else None
+                    if properties:
+                        app_id = properties.app_id if hasattr(properties, 'app_id') else 'no AppID given'
+                        msg_id = properties.msg_id if hasattr(properties, 'msg_id') else 'no msgID given'
 
                     if self.verbose:
                         self.log.info(
