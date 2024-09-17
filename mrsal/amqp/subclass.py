@@ -1,6 +1,6 @@
+from os import WSTOPSIG
 import pika
 import json
-from ssl import SSLContext
 from mrsal.exceptions import MrsalAbortedSetup
 from logging import WARNING
 from pika.connection import SSLOptions
@@ -102,20 +102,20 @@ class MrsalAMQP(Mrsal):
         if self.verbose:
             self.log.info(f"Establishing connection to RabbitMQ on {connection_info}")
         credentials = pika.PlainCredentials(*self.credentials)
-
+        conn_conf = pika.ConnectionParameters(
+                                host=self.host,
+                                port=self.port,
+                                ssl_options=self.get_ssl_context(),
+                                virtual_host=self.virtual_host,
+                                credentials=credentials,
+                                heartbeat=self.heartbeat,
+                                )
         try:
-            self._connection = AsyncioConnection.create_connection(
-                pika.ConnectionParameters(
-                    host=self.host,
-                    port=self.port,
-                    ssl_options=self.get_ssl_context(),
-                    virtual_host=self.virtual_host,
-                    credentials=credentials,
-                    heartbeat=self.heartbeat,
-                ),
-                on_done=self.on_connection_open,
-                on_open_error_callback=self.on_connection_error
-            )
+            self._connection = AsyncioConnection(
+                    parameters=conn_conf,
+                    on_open_callback=self.on_connection_open,
+                    on_open_error_callback=self.on_connection_error
+                    )
         except (AMQPConnectionError, ChannelClosedByBroker, ConnectionClosedByBroker, StreamLostError) as e:
             self.log.error(f"Oh lordy lord I failed connecting to the Rabbit with: {e}")
             raise
@@ -164,7 +164,7 @@ class MrsalAMQP(Mrsal):
             if self._connection:
                 self._connection.ioloop.run_forever()
             else:
-                self.log.error('Straigh out of the swamp with no connection! Oh lordy! Something went wrong in the async connection')
+                self.log.error('Straigh out of the swamp with no connection! Async connection did not activate')
 
         if auto_declare:
             if None in (exchange_name, queue_name, exchange_type, routing_key):
