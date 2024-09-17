@@ -1,14 +1,10 @@
 # external
 import os
 import ssl
-import pika
-from logging import WARNING
 from ssl import SSLContext
 from typing import Any, Type
 from mrsal.exceptions import MrsalSetupError
-from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type, before_sleep_log
 from pydantic.dataclasses import dataclass
-from pika.exceptions import NackError, UnroutableError
 from neolibrary.monitoring.logger import NeoLogger
 from pydantic.deprecated.tools import json
 
@@ -270,61 +266,4 @@ class Mrsal:
             model(**payload)
         else:
             raise TypeError("Fool, we aint supporting this type yet {type(payload)}.. Bytes or str -- get it straight")
-
-    @retry(
-        retry=retry_if_exception_type((
-            NackError,
-            UnroutableError
-            )),
-        stop=stop_after_attempt(3),
-        wait=wait_fixed(2),
-        before_sleep=before_sleep_log(log, WARNING)
-           )
-    def publish_message(
-        self,
-        exchange_name: str,
-        routing_key: str,
-        message: Any,
-        exchange_type: str,
-        queue_name: str,
-        auto_declare: bool = True,
-        prop: pika.BasicProperties | None = None,
-    ) -> None:
-        """Publish message to the exchange specifying routing key and properties.
-
-        :param str exchange: The exchange to publish to
-        :param str routing_key: The routing key to bind on
-        :param bytes body: The message body; empty string if no body
-        :param pika.spec.BasicProperties properties: message properties
-        :param bool fast_setup:
-                - when True, will the method create the specified exchange, queue and bind them together using the routing kye.
-                - If False, this method will check if the specified exchange and queue already exist before publishing.
-
-        :raises UnroutableError: raised when a message published in publisher-acknowledgments mode (see `BlockingChannel.confirm_delivery`) is returned via `Basic.Return` followed by `Basic.Ack`.
-        :raises NackError: raised when a message published in publisher-acknowledgements mode is Nack'ed by the broker. See `BlockingChannel.confirm_delivery`.
-        """
-        if auto_declare:
-            if None in (exchange_name, queue_name, exchange_type, routing_key):
-                raise TypeError('Make sure that you are passing in all the necessary args for auto_declare')
-
-            self._setup_exchange_and_queue(
-                exchange_name=exchange_name,
-                queue_name=queue_name,
-                exchange_type=exchange_type,
-                routing_key=routing_key
-                )
-        try:
-            # Publish the message by serializing it in json dump
-            # NOTE! we are not dumping a json anymore here! This allows for more flexibility
-            self._channel.basic_publish(exchange=exchange_name, routing_key=routing_key, body=message, properties=prop)
-            self.log.success(f"The message ({message}) is published to the exchange {exchange_name} with the routing key {routing_key}")
-
-        except UnroutableError as e:
-            self.log.error(f"Producer could not publish message:{message} to the exchange {exchange_name} with a routing key {routing_key}: {e}", exc_info=True)
-            raise
-        except NackError as e:
-            self.log.error(f"Message NACKed by broker: {e}")
-            raise
-        except Exception as e:
-            self.log.error(f"Unexpected error while publishing message: {e}")
 
