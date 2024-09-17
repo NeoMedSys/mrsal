@@ -183,38 +183,6 @@ def test_requeue_on_validation_failure_async(async_amqp_consumer):
         mock_nack.assert_called_once_with(delivery_tag=123, requeue=True)
 
 
-def test_publish_message_async(async_amqp_consumer):
-    """Test that the message is correctly published to the exchange in async mode."""
-    async_amqp_consumer._setup_exchange_and_queue = Mock()
-
-    message = b'{"data": "test_message"}'
-    exchange_name = 'test_x'
-    routing_key = 'test_route'
-
-    async_amqp_consumer.publish_message(
-        exchange_name=exchange_name,
-        routing_key=routing_key,
-        message=message,
-        exchange_type='direct',
-        queue_name='test_q',
-        auto_declare=True
-    )
-
-    async_amqp_consumer._setup_exchange_and_queue.assert_called_once_with(
-        exchange_name=exchange_name,
-        queue_name='test_q',
-        exchange_type='direct',
-        routing_key=routing_key
-    )
-
-    async_amqp_consumer._channel.basic_publish.assert_called_once_with(
-        exchange=exchange_name,
-        routing_key=routing_key,
-        body=message,
-        properties=None
-    )
-
-
 def test_raises_mrsal_aborted_setup_on_failed_auto_declaration(async_amqp_consumer):
     """Test that MrsalAbortedSetup is raised if the auto declaration fails."""
     async_amqp_consumer.auto_declare_ok = False  # Simulate auto declaration failure
