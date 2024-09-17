@@ -179,7 +179,7 @@ class MrsalAMQP(Mrsal):
                     self._connection.ioloop.stop()
                 raise MrsalAbortedSetup('Auto declaration for the connection setup failed and is aborted')
 
-        self.log.info(f"Consumer listening on queue: {queue_name}. Waiting for messages...")
+        self.log.info(f"Consumer boi listening on queue: {queue_name} to the exchange {exchange_name}. Waiting for messages...")
 
         try:
             for method_frame, properties, body in self._channel.consume(
