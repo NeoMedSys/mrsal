@@ -1,4 +1,3 @@
-from os import WSTOPSIG
 import pika
 import json
 from mrsal.exceptions import MrsalAbortedSetup
@@ -141,7 +140,7 @@ class MrsalAMQP(Mrsal):
                      callback: Callable | None = None,
                      callback_args: dict[str, str | int | float | bool] | None = None,
                      auto_ack: bool = True,
-                     inactivity_timeout: int = 5,
+                     inactivity_timeout: int | None = None,  # just let conusmer wait patiently damn it
                      auto_declare: bool = True,
                      exchange_name: str | None = None,
                      exchange_type: str | None = None,
@@ -179,6 +178,8 @@ class MrsalAMQP(Mrsal):
                 if self._connection:
                     self._connection.ioloop.stop()
                 raise MrsalAbortedSetup('Auto declaration for the connection setup failed and is aborted')
+
+        self.log.info(f"Consumer boi listening on queue: {queue_name} to the exchange {exchange_name}. Waiting for messages...")
 
         try:
             for method_frame, properties, body in self._channel.consume(
@@ -225,9 +226,6 @@ class MrsalAMQP(Mrsal):
                     if not auto_ack:
                         self.log.success(f'Message ({msg_id}) from {app_id} received and properly processed -- now dance the funky chicken')
                         self._channel.basic_ack(delivery_tag=method_frame.delivery_tag)
-                else:
-                    self.log.info("No message received, continuing to listen...")
-                    continue
 
         except (AMQPConnectionError, ConnectionClosedByBroker, StreamLostError) as e:
             log.error(f"Ooooooopsie! I caught a connection error while consuming: {e}")
