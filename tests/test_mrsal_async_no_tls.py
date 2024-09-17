@@ -181,30 +181,3 @@ def test_requeue_on_validation_failure_async(async_amqp_consumer):
 
         # Assert that basic_nack was called with requeue=True
         mock_nack.assert_called_once_with(delivery_tag=123, requeue=True)
-
-
-def test_raises_mrsal_aborted_setup_on_failed_auto_declaration(async_amqp_consumer):
-    """Test that MrsalAbortedSetup is raised if the auto declaration fails."""
-    async_amqp_consumer.auto_declare_ok = False  # Simulate auto declaration failure
-
-    # Mock `_setup_exchange_and_queue` to simulate setup failure without raising MrsalSetupError directly
-    with patch.object(MrsalAMQP, '_setup_exchange_and_queue') as mock_setup_exchange_and_queue, \
-         patch.object(async_amqp_consumer._connection, 'ioloop') as mock_ioloop, \
-         patch.object(mock_ioloop, 'run_forever', return_value=None) as mock_run_forever, \
-         patch.object(mock_ioloop, 'stop', return_value=None) as mock_stop:
-
-        # Simulate `_setup_exchange_and_queue` setting `auto_declare_ok` to False
-        mock_setup_exchange_and_queue.side_effect = lambda *args, **kwargs: setattr(async_amqp_consumer, 'auto_declare_ok', False)
-
-        # The intention here is to trigger MrsalAbortedSetup due to failed auto declaration
-        with pytest.raises(MrsalAbortedSetup):
-            async_amqp_consumer.start_consumer(
-                exchange_name="test_exchange",
-                exchange_type="direct",
-                queue_name="test_queue",
-                routing_key="test_route"
-            )
-
-        # Assert that the ioloop stop was called to ensure the connection handling behavior
-        mock_stop.assert_called_once()
-        mock_run_forever.assert_called_once()

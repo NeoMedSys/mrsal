@@ -1,3 +1,4 @@
+from functools import partial
 import pika
 import json
 from mrsal.exceptions import MrsalAbortedSetup
@@ -119,7 +120,11 @@ class MrsalAMQP(Mrsal):
         try:
             self._connection = AsyncioConnection(
                     parameters=conn_conf,
-                    on_open_callback=self.on_connection_open,
+                    on_open_callback=partial(
+                        self.on_connection_open,
+                        exchange_name=self.exchange_name, queue_name=self.queue_name,
+                        exchange_type=self.exchange_type, routing_key=self.routing_key
+                        ),
                     on_open_error_callback=self.on_connection_error
                     )
             self.log.info(f"Connection staged with RabbitMQ on {connection_info}")
@@ -166,6 +171,15 @@ class MrsalAMQP(Mrsal):
         if self.use_blocking:
             self.setup_blocking_connection()
         else:
+            # set connection parameters
+            # parametes propagate through a 3 layers in order
+            # to spin up the async connection
+            self.queue_name = queue_name
+            self.exchange_name = exchange_name
+            self.exchange_type = exchange_type
+            self.routing_key = routing_key
+            self.auto_declare = auto_declare
+
             self.setup_async_connection()
             if self._connection.is_open:
                 self.log.success(f"Boom! Async connection established with {exchange_name} on {queue_name}")
@@ -173,7 +187,7 @@ class MrsalAMQP(Mrsal):
             else:
                 self.log.error('Straigh out of the swamp with no connection! Async connection did not activate')
 
-        if auto_declare:
+        if auto_declare and self.use_blocking:
             if None in (exchange_name, queue_name, exchange_type, routing_key):
                 raise TypeError('Make sure that you are passing in all the necessary args for auto_declare')
             self._setup_exchange_and_queue(

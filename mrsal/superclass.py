@@ -1,4 +1,5 @@
 # external
+from functools import partial
 import os
 import ssl
 from ssl import SSLContext
@@ -109,22 +110,44 @@ class Mrsal:
         except Exception as e:
             self.log.error(f'Oh lordy lord! I failed closing the connection with: {e}')
 
-    def open_channel(self) -> None:
+    def on_channel_open(
+            self, exchange_name: str, queue_name: str,
+            exchange_type: str, routing_key: str
+            ) -> None:
         """
         Open a channel once the connection is established.
         """
-        if self._connection and self._connection.is_open:
+        if self._connection and self._connection:
             self._channel = self._connection.channel()
             self._channel.basic_qos(prefetch_count=self.prefetch_count)
+            self.log.info(f"Channel opened with prefetch count: {self.prefetch_count}")
+            self._setup_exchange_and_queue(
+                    exchange_name=exchange_name, queue_name=queue_name,
+                    exchange_type=exchange_type, routing_key=routing_key
+                    )
         else:
             self.log.error("Splæt! Connection is not open. Cannot create a channel.")
 
-    def on_connection_open(self, connection) -> None:
+    def open_channel(self, exchange_name, queue_name, exchange_type, routing_key):
+        """Open a channel once the connection is established."""
+        self._connection.channel(
+                on_open_callback=partial(
+                    self.on_channel_open,
+                    exchange_name=exchange_name, queue_name=queue_name,
+                    exchange_type=exchange_type, routing_key=routing_key
+                    )
+                )
+
+    def on_connection_open(self, 
+                           connection,
+                           exchange_name: str, queue_name: str,
+                           exchange_type: str, routing_key: str
+                           ) -> None:
         """
         Callback when the async connection is successfully opened.
         """
         self._connection = connection
-        self.open_channel()
+        self.open_channel(exchange_name, queue_name, exchange_type, routing_key)
 
     def _declare_exchange(self, 
                              exchange: str, exchange_type: str,
