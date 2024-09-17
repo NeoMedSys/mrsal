@@ -122,6 +122,7 @@ class MrsalAMQP(Mrsal):
                     on_open_callback=self.on_connection_open,
                     on_open_error_callback=self.on_connection_error
                     )
+            self.log.info(f"Connection staged with RabbitMQ on {connection_info}")
         except (AMQPConnectionError, ChannelClosedByBroker, ConnectionClosedByBroker, StreamLostError) as e:
             self.log.error(f"Oh lordy lord I failed connecting to the Rabbit with: {e}")
             raise
@@ -129,7 +130,6 @@ class MrsalAMQP(Mrsal):
             self.log.error(f"Unexpected error caught: {e}")
 
 
-        self.log.success(f"Boom! Connection established with RabbitMQ on {connection_info}")
 
     @retry(
         retry=retry_if_exception_type((
@@ -167,7 +167,8 @@ class MrsalAMQP(Mrsal):
             self.setup_blocking_connection()
         else:
             self.setup_async_connection()
-            if self._connection:
+            if self._connection.is_open:
+                self.log.success(f"Boom! Async connection established with {exchange_name} on {queue_name}")
                 self._connection.ioloop.run_forever()
             else:
                 self.log.error('Straigh out of the swamp with no connection! Async connection did not activate')
@@ -182,7 +183,7 @@ class MrsalAMQP(Mrsal):
                     routing_key=routing_key
                     )
             if not self.auto_declare_ok:
-                if self._connection:
+                if self._connection.is_open:
                     self._connection.ioloop.stop()
                 raise MrsalAbortedSetup('Auto declaration for the connection setup failed and is aborted')
 

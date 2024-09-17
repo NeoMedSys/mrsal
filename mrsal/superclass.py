@@ -104,7 +104,7 @@ class Mrsal:
         """
         self.log.error(f"I failed to establish async connection: {exception}")
         try:
-            if connection.is_open:
+            if connection and connection.is_open:
                 connection.close()
         except Exception as e:
             self.log.error(f'Oh lordy lord! I failed closing the connection with: {e}')
@@ -113,14 +113,17 @@ class Mrsal:
         """
         Open a channel once the connection is established.
         """
-        self._channel = self.conn.channel()
-        self._channel.basic_qos(prefetch_count=self.prefetch_count)
+        if self._connection and self._connection.is_open:
+            self._channel = self._connection.channel()
+            self._channel.basic_qos(prefetch_count=self.prefetch_count)
+        else:
+            self.log.error("Splæt! Connection is not open. Cannot create a channel.")
 
     def on_connection_open(self, connection) -> None:
         """
         Callback when the async connection is successfully opened.
         """
-        self.conn = connection
+        self._connection = connection
         self.open_channel()
 
     def _declare_exchange(self, 
