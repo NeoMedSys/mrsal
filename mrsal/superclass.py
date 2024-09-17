@@ -102,11 +102,16 @@ class Mrsal:
         except MrsalSetupError:
             self.auto_declare_ok = False
 
-    def on_connection_error(self, _unused_connection, exception):
+    def on_connection_error(self, connection, exception):
         """
         Handle connection errors.
         """
         self.log.error(f"I failed to establish async connection: {exception}")
+        try:
+            if connection.is_open:
+                connection.close()
+        except Exception as e:
+            self.log.error(f'Oh lordy lord! I failed closing the connection with: {e}')
 
     def open_channel(self) -> None:
         """
