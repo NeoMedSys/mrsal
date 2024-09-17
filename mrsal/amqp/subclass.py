@@ -187,7 +187,7 @@ class MrsalAMQP(Mrsal):
             else:
                 self.log.error('Straigh out of the swamp with no connection! Async connection did not activate')
 
-        if auto_declare:
+        if auto_declare and self.use_blocking:
             if None in (exchange_name, queue_name, exchange_type, routing_key):
                 raise TypeError('Make sure that you are passing in all the necessary args for auto_declare')
             self._setup_exchange_and_queue(
