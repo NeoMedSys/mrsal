@@ -254,7 +254,7 @@ class MrsalAMQP(Mrsal):
         self,
         exchange_name: str,
         routing_key: str,
-        message: Any,
+        message: str | bytes | None,
         exchange_type: str,
         queue_name: str,
         auto_declare: bool = True,
@@ -273,6 +273,8 @@ class MrsalAMQP(Mrsal):
         :raises UnroutableError: raised when a message published in publisher-acknowledgments mode (see `BlockingChannel.confirm_delivery`) is returned via `Basic.Return` followed by `Basic.Ack`.
         :raises NackError: raised when a message published in publisher-acknowledgements mode is Nack'ed by the broker. See `BlockingChannel.confirm_delivery`.
         """
+        if not isinstance(message, (str, bytes)):
+            raise MrsalAbortedSetup(f'Your message body needs to be string or bytes or serialized dict')
         # connect and use only blocking
         self.setup_blocking_connection()
 
