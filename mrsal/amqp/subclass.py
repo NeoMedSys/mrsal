@@ -3,6 +3,7 @@ import json
 from ssl import SSLContext
 from mrsal.exceptions import MrsalAbortedSetup
 from logging import WARNING
+from pika.connection import SSLOptions
 from pika.exceptions import AMQPConnectionError, ChannelClosedByBroker, StreamLostError, ConnectionClosedByBroker
 from pika.adapters.asyncio_connection import AsyncioConnection
 from typing import Callable, Type
@@ -27,11 +28,11 @@ class MrsalAMQP(Mrsal):
     blocked_connection_timeout: int = 60  # sec
     use_blocking: bool = False
 
-    def get_ssl_context(self) -> SSLContext | None:
+    def get_ssl_context(self) -> SSLOptions | None:
         if self.ssl:
             self.log.info("Setting up TLS connection")
             context = self._ssl_setup()
-        ssl_options = pika.SSLOptions(context, self.host) if context else None
+        ssl_options = pika.SSLOptions(context, self.host) if 'context' in locals() else None
         return ssl_options
 
     def setup_blocking_connection(self) -> None:

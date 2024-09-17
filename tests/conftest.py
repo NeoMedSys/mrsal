@@ -9,7 +9,8 @@ SETUP_ARGS = {
     'host': 'localhost',
     'port': 5672,
     'credentials': ('user', 'password'),
-    'virtual_host': 'testboi'
+    'virtual_host': 'testboi',
+    'prefetch_count': 1
 }
 
 @dataclass
