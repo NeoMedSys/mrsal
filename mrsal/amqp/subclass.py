@@ -1,6 +1,4 @@
-from functools import partial
 import pika
-import aio_pika
 import json
 from mrsal.exceptions import MrsalAbortedSetup
 from logging import WARNING
@@ -12,7 +10,7 @@ from pika.exceptions import (
         NackError,
         UnroutableError
         )
-from aio_pika import connect_robust, Message, ExchangeType as AioExchangeType, Channel as AioChannel
+from aio_pika import connect_robust, Channel as AioChannel
 from typing import Callable, Type
 from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type, before_sleep_log
 from pydantic import ValidationError
@@ -254,17 +252,15 @@ class MrsalBlockingAMQP(Mrsal):
 
 class MrsalAsyncAMQP(Mrsal):
     """Handles asynchronous connection with RabbitMQ using aio-pika."""
-
     async def setup_async_connection(self):
         """Setup an asynchronous connection to RabbitMQ using aio-pika."""
         self.log.info(f"Establishing async connection to RabbitMQ on {self.host}:{self.port}")
-        credentials = aio_pika.PlainCredentials(*self.credentials)
         try:
             self._connection = await connect_robust(
                 host=self.host,
                 port=self.port,
-                login=credentials[0],
-                password=credentials[1],
+                login=self.credentials[0],
+                password=self.credentials[1],
                 virtualhost=self.virtual_host,
                 ssl=self.ssl,
                 ssl_context=self.get_ssl_context(),
@@ -278,7 +274,6 @@ class MrsalAsyncAMQP(Mrsal):
             raise
         except Exception as e:
             self.log.error(f'Oh my lordy lord! I caugth an unexpected exception while trying to connect: {e}', exc_info=True)
-            raise
 
     @retry(
         retry=retry_if_exception_type((
@@ -296,7 +291,7 @@ class MrsalAsyncAMQP(Mrsal):
             queue_name: str,
             callback: Callable | None = None,
             callback_args: dict[str, str | int | float | bool] | None = None,
-            auto_ack: bool = True,
+            auto_ack: bool = False,
             auto_declare: bool = True,
             exchange_name: str | None = None,
             exchange_type: str | None = None,
@@ -336,10 +331,9 @@ class MrsalAsyncAMQP(Mrsal):
             if message is None:
                 continue
 
-            properties = await message.info()
             # Extract message metadata
-            app_id = properties.get('app_id', 'no AppID given')
-            msg_id = properties.get('message_id', 'no msgID given')
+            app_id = message.app_id if hasattr(message, 'app_id') else 'NoAppID'
+            msg_id = message.app_id if hasattr(message, 'message_id') else 'NoMsgID'
 
             if self.verbose:
                 self.log.info(f"""
@@ -348,7 +342,6 @@ class MrsalAsyncAMQP(Mrsal):
                             - Exchange: {message.exchange}
                             - Routing Key: {message.routing_key}
                             - Delivery Tag: {message.delivery_tag}
-                            - Properties: {properties}
                             - Requeue: {requeue}
                             - Auto Ack: {auto_ack}
                             """)

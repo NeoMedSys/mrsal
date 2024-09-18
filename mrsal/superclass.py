@@ -1,7 +1,6 @@
 # external
 import os
 import ssl
-from sys import exc_info
 import pika
 from ssl import SSLContext
 from typing import Any, Type
