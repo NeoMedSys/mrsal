@@ -3,7 +3,7 @@ from unittest.mock import Mock, patch, MagicMock, call
 from pika.exceptions import AMQPConnectionError, UnroutableError
 from pydantic.dataclasses import dataclass
 from tenacity import RetryError
-from mrsal.amqp.subclass import MrsalAMQP
+from mrsal.amqp.subclass import MrsalBlockingAMQP
 
 # Configuration and expected payload definition
 SETUP_ARGS = {
@@ -12,7 +12,6 @@ SETUP_ARGS = {
     'credentials': ('user', 'password'),
     'virtual_host': 'testboi',
     'ssl': False,
-    'use_blocking': True,
     'heartbeat': 60,
     'blocked_connection_timeout': 60,
     'prefetch_count': 1
@@ -29,7 +28,7 @@ class ExpectedPayload:
 @pytest.fixture
 def mock_amqp_connection():
     with patch('mrsal.amqp.subclass.pika.BlockingConnection') as mock_blocking_connection, \
-         patch('mrsal.amqp.subclass.MrsalAMQP.setup_blocking_connection', autospec=True) as mock_setup_blocking_connection:
+         patch('mrsal.amqp.subclass.MrsalBlockingAMQP.setup_blocking_connection', autospec=True) as mock_setup_blocking_connection:
         
         # Set up the mock behaviors for the connection and channel
         mock_channel = MagicMock()
@@ -44,11 +43,11 @@ def mock_amqp_connection():
         yield mock_connection, mock_channel, mock_setup_blocking_connection
 
 
-# Fixture to create a MrsalAMQP consumer with mocked channel
+# Fixture to create a MrsalBlockingAMQP consumer with mocked channel
 @pytest.fixture
 def amqp_consumer(mock_amqp_connection):
     mock_connection, mock_channel, _ = mock_amqp_connection
-    consumer = MrsalAMQP(**SETUP_ARGS)
+    consumer = MrsalBlockingAMQP(**SETUP_ARGS)
     consumer._channel = mock_channel  # Inject the mocked channel into the consumer
     return consumer
 

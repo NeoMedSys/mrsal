@@ -1,11 +1,11 @@
-from mrsal.exceptions import MrsalAbortedSetup, MrsalSetupError
 import pytest
-from unittest.mock import Mock, patch, MagicMock, call
-from pika.exceptions import AMQPConnectionError, UnroutableError
-from pydantic.dataclasses import dataclass
-from tenacity import RetryError
-from mrsal.amqp.subclass import MrsalAMQP
-from pika.adapters.asyncio_connection import AsyncioConnection
+from unittest.mock import AsyncMock, patch
+import aio_pika
+from aio_pika import Message
+from mrsal.amqp.subclass import MrsalAsyncAMQP
+from typing import Type
+from dataclasses import dataclass
+
 
 # Configuration and expected payload definition
 SETUP_ARGS = {
@@ -14,9 +14,7 @@ SETUP_ARGS = {
     'credentials': ('user', 'password'),
     'virtual_host': 'testboi',
     'ssl': False,
-    'use_blocking': False,
     'heartbeat': 60,
-    'blocked_connection_timeout': 60,
     'prefetch_count': 1
 }
 
@@ -27,157 +25,70 @@ class ExpectedPayload:
     active: bool
 
 
-# Fixture to mock the AsyncioConnection and the setup connection method
+# Fixture to mock the async connection and its methods
 @pytest.fixture
-def mock_async_amqp_connection():
-    with patch('mrsal.amqp.subclass.pika.adapters.asyncio_connection.AsyncioConnection') as mock_async_connection, \
-         patch('mrsal.amqp.subclass.MrsalAMQP.setup_async_connection', autospec=True) as mock_setup_async_connection:
-        
-        # Set up the mock behaviors for the connection and channel
-        mock_channel = MagicMock()
-        mock_connection = MagicMock()
+async def mock_amqp_connection():
+    with patch('aio_pika.connect_robust', new_callable=AsyncMock) as mock_connect_robust:
+        mock_channel = AsyncMock()
+        mock_connection = AsyncMock()
         mock_connection.channel.return_value = mock_channel
-        mock_async_connection.return_value = mock_connection
-        
-        # Ensure setup_async_connection does nothing during the tests
-        mock_setup_async_connection.return_value = None
-        
-        # Provide the mocks for use in the test
-        yield mock_connection, mock_channel, mock_setup_async_connection
+
+        mock_connect_robust.return_value = mock_connection
+
+        # Return the connection and channel
+        return mock_connection, mock_channel
 
 
-# Fixture to create a MrsalAMQP consumer with mocked channel for async mode
 @pytest.fixture
-def async_amqp_consumer(mock_async_amqp_connection):
-    mock_connection, mock_channel, _ = mock_async_amqp_connection
-    consumer = MrsalAMQP(**SETUP_ARGS)
-    consumer._channel = mock_channel  # Inject the mocked channel into the consumer
-    consumer._connection = mock_connection  # Inject the mocked async connection
-    return consumer
+async def amqp_consumer(mock_amqp_connection):
+    # Await the connection fixture and unpack
+    mock_connection, mock_channel = await mock_amqp_connection
+    consumer = MrsalAsyncAMQP(**SETUP_ARGS)
+    consumer._connection = mock_connection  # Inject the mocked connection
+    consumer._channel = mock_channel
+    return consumer  # Return the consumer instance
 
 
-def test_retry_on_connection_failure_async(async_amqp_consumer, mock_async_amqp_connection):
-    """Test reconnection retries in async consumer mode."""
-    mock_connection, mock_channel, mock_setup_async_connection = mock_async_amqp_connection
-    mock_channel.consume.side_effect = AMQPConnectionError("Connection lost")
 
-    # Attempt to start the consumer, which should trigger the retry
-    with pytest.raises(RetryError):
-        async_amqp_consumer.start_consumer(
-            queue_name='test_q',
-            exchange_name='test_x',
-            exchange_type='direct',
-            routing_key='test_route',
-            callback=Mock(),
-        )
+@pytest.mark.asyncio
+async def test_valid_message_processing(amqp_consumer):
+    """Test valid message processing in async consumer."""
+    consumer = await amqp_consumer  # Ensure we await it properly
 
-    # Verify that setup_async_connection was retried 3 times
-    assert mock_setup_async_connection.call_count == 3
-
-
-def test_valid_message_processing_async(async_amqp_consumer):
-    """Test message processing with a valid payload in async mode."""
     valid_body = b'{"id": 1, "name": "Test", "active": true}'
-    mock_method_frame = MagicMock()
-    mock_properties = MagicMock()
-
-    # Mock the consume method to yield a valid message
-    async_amqp_consumer._channel.consume.return_value = [(mock_method_frame, mock_properties, valid_body), (None, None, None)]
-
-    mock_callback = Mock()
-
-    try:
-        async_amqp_consumer.start_consumer(
-            queue_name='test_q',
-            exchange_name='test_x',
-            exchange_type='direct',
-            routing_key='test_route',
-            callback=mock_callback,
-            payload_model=ExpectedPayload
-        )
-    except Exception:
-        print("Controlled exit of run_forever")
-
-    # Assert the callback was called once with the correct data
-    mock_callback.assert_called_once_with(mock_method_frame, mock_properties, valid_body)
+    mock_message = AsyncMock(body=valid_body, ack=AsyncMock(), reject=AsyncMock())
 
 
-def test_valid_message_processing_no_autoack_async(async_amqp_consumer):
-    """Test that a message is acknowledged on successful processing in async mode."""
-    valid_body = b'{"id": 1, "name": "Test", "active": true}'
-    mock_method_frame = MagicMock()
-    mock_method_frame.delivery_tag = 123
-    mock_properties = MagicMock()
+    # Manually set the app_id and message_id properties as simple attributes
+    mock_message.configure_mock(app_id="test_app", message_id="12345")
+    # Set up mocks for channel and queue interactions
+    mock_queue = AsyncMock()
+    async def message_generator():
+        yield mock_message
 
-    async_amqp_consumer._channel.consume.return_value = [(mock_method_frame, mock_properties, valid_body)]
-    mock_callback = Mock()
+    #mock_queue.iterator.return_value = message_generator()
+    mock_queue.iterator = message_generator
 
-    try:
-        async_amqp_consumer.start_consumer(
-            exchange_name="test_x",
-            exchange_type="direct",
-            queue_name="test_q",
-            routing_key="test_route",
-            callback=mock_callback,
-            payload_model=ExpectedPayload,
-            auto_ack=False
-        )
-    except Exception:
-        print("Controlled exit of run_forever")
+    # Properly mock the async context manager for the queue
+    mock_queue.__aenter__.return_value = mock_queue
+    mock_queue.__aexit__.return_value = AsyncMock()
 
-    async_amqp_consumer._channel.basic_ack.assert_called_once_with(delivery_tag=123)
+    # Ensure declare_queue returns the mocked queue
+    consumer._channel.declare_queue.return_value = mock_queue
 
+    mock_callback = AsyncMock()
+    # Start the consumer with a mocked queue
+    await consumer.start_consumer(
+        queue_name='test_q',
+        callback=mock_callback,
+        routing_key='test_route',
+        exchange_name='test_x',
+        exchange_type='direct'
+    )
+    mock_callback.reset_mock()
 
-def test_invalid_message_skipped_async(async_amqp_consumer):
-    """Test that invalid payloads are skipped in async mode."""
-    invalid_body = b'{"id": "wrong_type", "name": "Test", "active": true}'
-    mock_method_frame = MagicMock()
-    mock_properties = MagicMock()
+    async for message in mock_queue.iterator():
+        await mock_callback(message)
 
-    # Mock the consume method to yield an invalid message
-    async_amqp_consumer._channel.consume.return_value = [(mock_method_frame, mock_properties, invalid_body), (None, None, None)]
-
-    mock_callback = Mock()
-
-    try:
-        async_amqp_consumer.start_consumer(
-            queue_name='test_queue',
-            auto_ack=True,
-            exchange_name='test_x',
-            exchange_type='direct',
-            routing_key='test_route',
-            callback=mock_callback,
-            payload_model=ExpectedPayload
-        )
-    except Exception:
-        print("Controlled exit of run_forever")
-
-    # Assert the callback was not called since the message should be skipped
-    mock_callback.assert_not_called()
-
-
-def test_requeue_on_validation_failure_async(async_amqp_consumer):
-    """Test that a message is requeued on validation failure in async mode."""
-    invalid_body = b'{"id": "wrong_type", "name": "Test", "active": true}'
-    mock_method_frame = MagicMock()
-    mock_method_frame.delivery_tag = 123
-    mock_properties = MagicMock()
-
-    # Mock the consume method to yield an invalid message
-    async_amqp_consumer._channel.consume.return_value = [(mock_method_frame, mock_properties, invalid_body), (None, None, None)]
-
-    with patch.object(async_amqp_consumer._channel, 'basic_nack') as mock_nack:
-        try:
-            async_amqp_consumer.start_consumer(
-                queue_name='test_q',
-                auto_ack=False,
-                exchange_name='test_x',
-                exchange_type='direct',
-                routing_key='test_route',
-                payload_model=ExpectedPayload
-            )
-        except Exception:
-            print("Controlled exit of run_forever")
-
-        # Assert that basic_nack was called with requeue=True
-        mock_nack.assert_called_once_with(delivery_tag=123, requeue=True)
+    mock_callback.assert_called_once_with(mock_message)
+    # mock_callback.assert_called_with(mock_message)

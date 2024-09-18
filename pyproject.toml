@@ -16,14 +16,16 @@ retry = "^0.9.2"
 tenacity = "^9.0.0"
 sphinx = "^8.0.2"
 neolibrary = "^0.9.4b1"
+aio-pika = "^9.4.3"
 
 [tool.poetry.group.dev.dependencies]
 coverage = "^7.2.7"
-pytest = "^7.4.0"
 sphinx = "^8.0.2"
 myst-parser = "^4.0.0"
 nox = "^2024.4.15"
 ruff = "^0.6.5"
+pytest = "^8.3.3"
+pytest-asyncio = "^0.24.0"
 
 [build-system]
 build-backend = "poetry.core.masonry.api"
