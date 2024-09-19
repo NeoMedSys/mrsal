@@ -70,7 +70,7 @@ async def test_valid_message_processing(amqp_consumer):
     mock_callback = AsyncMock()
 
     # Call the async method directly to avoid the asyncio.run() issue
-    await consumer.async_start_consumer(
+    await consumer.start_consumer(
         queue_name='test_q',
         callback=mock_callback,
         routing_key='test_route',
@@ -107,7 +107,7 @@ async def test_invalid_payload_validation(amqp_consumer):
     mock_callback = AsyncMock()
 
     # Call the async method directly to avoid the asyncio.run() issue
-    await consumer.async_start_consumer(
+    await consumer.start_consumer(
         queue_name='test_q',
         callback=mock_callback,
         routing_key='test_route',
@@ -147,7 +147,7 @@ async def test_requeue_on_invalid_message(amqp_consumer):
     mock_callback = AsyncMock()
 
     # Call the async method directly to avoid the asyncio.run() issue
-    await consumer.async_start_consumer(
+    await consumer.start_consumer(
         queue_name='test_q',
         callback=mock_callback,
         routing_key='test_route',
@@ -187,7 +187,7 @@ async def test_requeue_on_invalid_message(amqp_consumer):
 #    # Patch the setup_async_connection to raise AMQPConnectionError
 #    with patch.object(MrsalAsyncAMQP, 'setup_async_connection', side_effect=AMQPConnectionError("Connection failed")) as mock_setup:
 #        with pytest.raises(RetryError):  # Expect RetryError after 3 failed attempts
-#            await consumer.async_start_consumer(
+#            await consumer.start_consumer(
 #                queue_name='test_q',
 #                callback=AsyncMock(),
 #                routing_key='test_route',
