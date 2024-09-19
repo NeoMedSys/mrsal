@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import patch
 from pydantic import ValidationError
 
-from mrsal.amqp.subclass import MrsalAMQP
+from mrsal.amqp.subclass import MrsalBlockingAMQP
 from tests.conftest import SETUP_ARGS
 
 
@@ -16,7 +16,7 @@ class TestBlockRabbitSSLSetup(unittest.TestCase):
             'RABBITMQ_KEY': 'test_key.key',
             'RABBITMQ_CAFILE': 'test_ca.ca'
         }, clear=True):
-            consumer = MrsalAMQP(**SETUP_ARGS, ssl=True, use_blocking=True)
+            consumer = MrsalBlockingAMQP(**SETUP_ARGS, ssl=True)
 
             # Check if SSL paths are correctly loaded and blocking is used
             self.assertEqual(consumer.tls_dict['crt'], 'test_cert.crt')
@@ -30,12 +30,12 @@ class TestBlockRabbitSSLSetup(unittest.TestCase):
     })
     def test_ssl_setup_with_missing_paths(self):
         with self.assertRaises(ValidationError):
-            MrsalAMQP(**SETUP_ARGS, ssl=True, use_blocking=True)
+            MrsalBlockingAMQP(**SETUP_ARGS, ssl=True)
 
     @patch.dict(os.environ, {}, clear=True)
     def test_ssl_setup_without_env_vars(self):
         with self.assertRaises(ValidationError):
-            MrsalAMQP(**SETUP_ARGS, ssl=True, use_blocking=True)
+            MrsalBlockingAMQP(**SETUP_ARGS, ssl=True)
 
 
 if __name__ == '__main__':

@@ -1,10 +1,12 @@
 # external
-from functools import partial
 import os
 import ssl
+import pika
 from ssl import SSLContext
 from typing import Any, Type
-from mrsal.exceptions import MrsalSetupError
+from mrsal.exceptions import MrsalAbortedSetup, MrsalSetupError
+from pika.connection import SSLOptions
+from aio_pika import ExchangeType as AioExchangeType, Queue as AioQueue, Exchange as AioExchange
 from pydantic.dataclasses import dataclass
 from neolibrary.monitoring.logger import NeoLogger
 from pydantic.deprecated.tools import json
@@ -13,7 +15,6 @@ from pydantic.deprecated.tools import json
 from mrsal import config
 
 log = NeoLogger(__name__, rotate_days=config.LOG_DAYS)
-
 
 @dataclass
 # NOTE! change the doc style to google or numpy
@@ -96,58 +97,62 @@ class Mrsal:
             self._declare_queue(**declare_queue_dict)
             self._declare_queue_binding(**declare_queue_binding_dict)
             self.auto_declare_ok = True
-        except MrsalSetupError:
+            self.log.success(f"Exchange {exchange_name} and Queue {queue_name} set up successfully.")
+        except MrsalSetupError as e:
+            self.log.error(f'Splæt! I failed the declaration setup with {e}', exc_info=True)
             self.auto_declare_ok = False
 
-    def on_connection_error(self, connection, exception):
-        """
-        Handle connection errors.
-        """
-        self.log.error(f"I failed to establish async connection: {exception}")
+    async def _async_setup_exchange_and_queue(self, 
+                                              exchange_name: str, queue_name: str,
+                                              routing_key: str, exchange_type: str,
+                                              exch_args: dict[str, str] | None = None,
+                                              queue_args: dict[str, str] | None = None,
+                                              bind_args: dict[str, str] | None = None,
+                                              exch_durable: bool = True, queue_durable: bool = True,
+                                              passive: bool = False, internal: bool = False,
+                                              auto_delete: bool = False, exclusive: bool = False
+                                              ) -> AioQueue | None:
+        """Setup exchange and queue with bindings asynchronously."""
+        if not self._connection:
+            raise MrsalAbortedSetup("Oh my Oh my! Connection not found when trying to run the setup!")
+
+        async_declare_exhange_dict = {
+                'exchange': exchange_name,
+                'exchange_type': exchange_type,
+                'arguments': exch_args,
+                'durable': exch_durable,
+                'passive': passive,
+                'internal': internal,
+                'auto_delete': auto_delete
+                }
+
+        async_declare_queue_dict = {
+                'queue_name': queue_name,
+                'arguments': queue_args,
+                'durable': queue_durable,
+                'exclusive': exclusive,
+                'auto_delete': auto_delete,
+                'passive': passive
+                }
+
+        async_declare_queue_binding_dict = {
+                'routing_key': routing_key,
+                'arguments': bind_args
+
+                }
+
         try:
-            if connection and connection.is_open:
-                connection.close()
-        except Exception as e:
-            self.log.error(f'Oh lordy lord! I failed closing the connection with: {e}')
+            # Declare exchange and queue
+            exchange = await self._async_declare_exchange(**async_declare_exhange_dict)
+            queue = await self._async_declare_queue(**async_declare_queue_dict)
+            await self._async_declare_queue_binding(queue=queue, exchange=exchange, **async_declare_queue_binding_dict)
+            self.auto_declare_ok = True
+            self.log.success(f"Exchange {exchange_name} and Queue {queue_name} set up successfully.")
+            return queue
+        except MrsalSetupError as e:
+            self.log.error(f'Splæt! I failed the declaration setup with {e}', exc_info=True)
+            self.auto_declare_ok = False
 
-    def on_channel_open(
-            self, exchange_name: str, queue_name: str,
-            exchange_type: str, routing_key: str
-            ) -> None:
-        """
-        Open a channel once the connection is established.
-        """
-        if self._connection and self._connection:
-            self._channel = self._connection.channel()
-            self._channel.basic_qos(prefetch_count=self.prefetch_count)
-            self.log.info(f"Channel opened with prefetch count: {self.prefetch_count}")
-            self._setup_exchange_and_queue(
-                    exchange_name=exchange_name, queue_name=queue_name,
-                    exchange_type=exchange_type, routing_key=routing_key
-                    )
-        else:
-            self.log.error("Splæt! Connection is not open. Cannot create a channel.")
-
-    def open_channel(self, exchange_name, queue_name, exchange_type, routing_key):
-        """Open a channel once the connection is established."""
-        self._connection.channel(
-                on_open_callback=partial(
-                    self.on_channel_open,
-                    exchange_name=exchange_name, queue_name=queue_name,
-                    exchange_type=exchange_type, routing_key=routing_key
-                    )
-                )
-
-    def on_connection_open(self, 
-                           connection,
-                           exchange_name: str, queue_name: str,
-                           exchange_type: str, routing_key: str
-                           ) -> None:
-        """
-        Callback when the async connection is successfully opened.
-        """
-        self._connection = connection
-        self.open_channel(exchange_name, queue_name, exchange_type, routing_key)
 
     def _declare_exchange(self, 
                              exchange: str, exchange_type: str,
@@ -192,6 +197,40 @@ class Mrsal:
         if self.verbose:
             self.log.success("Exchange declared yo!")
 
+    async def _async_declare_exchange(self, 
+                                      exchange: str, 
+                                      exchange_type: AioExchangeType, 
+                                      arguments: dict[str, str] | None = None, 
+                                      durable: bool = True, 
+                                      passive: bool = False, 
+                                      internal: bool = False, 
+                                      auto_delete: bool = False) -> AioExchange:
+        """Declare a RabbitMQ exchange in async mode."""
+        exchange_declare_info = f"""
+                                exchange={exchange},
+                                exchange_type={exchange_type},
+                                durable={durable},
+                                passive={passive},
+                                internal={internal},
+                                auto_delete={auto_delete},
+                                arguments={arguments}
+                                """
+        if self.verbose:
+            print(f"Declaring exchange with: {exchange_declare_info}")
+
+        try:
+            exchange_obj = await self._channel.declare_exchange(
+                name=exchange, 
+                type=exchange_type, 
+                durable=durable, 
+                auto_delete=auto_delete, 
+                internal=internal, 
+                arguments=arguments
+            )
+            return exchange_obj
+        except Exception as e:
+            raise MrsalSetupError(f"Failed to declare async exchange: {e}")
+
     def _declare_queue(self,
                     queue: str, arguments: dict[str, str] | None,
                     durable: bool, exclusive: bool,
@@ -230,6 +269,37 @@ class Mrsal:
         if self.verbose:
             self.log.info(f"Queue declared yo")
 
+    async def _async_declare_queue(self, 
+                                   queue_name: str, 
+                                   durable: bool = True, 
+                                   exclusive: bool = False, 
+                                   auto_delete: bool = False, 
+                                   passive: bool = False,
+                                   arguments: dict[str, Any] | None = None) -> AioQueue:
+        """Declare a RabbitMQ queue asynchronously."""
+        queue_declare_info = f"""
+                                queue={queue_name},
+                                durable={durable},
+                                exclusive={exclusive},
+                                auto_delete={auto_delete},
+                                arguments={arguments}
+                                """
+        if self.verbose:
+            self.log.info(f"Declaring queue with: {queue_declare_info}")
+
+        try:
+            queue_obj = await self._channel.declare_queue(
+                name=queue_name, 
+                durable=durable, 
+                exclusive=exclusive, 
+                auto_delete=auto_delete, 
+                arguments=arguments,
+                passive=passive
+            )
+            return queue_obj
+        except Exception as e:
+            raise MrsalSetupError(f"Failed to declare async queue: {e}")
+
     def _declare_queue_binding(self, 
                             exchange: str, queue: str,
                             routing_key: str | None,
@@ -256,7 +326,27 @@ class Mrsal:
             raise MrsalSetupError(f'I failed binding the queue with : {e}')
         if self.verbose:
             self.log.info(f"Queue bound yo")
-    
+
+    async def _async_declare_queue_binding(self, 
+                                           queue: AioQueue, 
+                                           exchange: AioExchange, 
+                                           routing_key: str | None, 
+                                           arguments: dict[str, Any] | None = None) -> None:
+        """Bind the queue to the exchange asynchronously."""
+        binding_info = f"""
+                        queue={queue.name},
+                        exchange={exchange.name},
+                        routing_key={routing_key},
+                        arguments={arguments}
+                        """
+        if self.verbose:
+            self.log.info(f"Binding queue to exchange with: {binding_info}")
+
+        try:
+            await queue.bind(exchange, routing_key=routing_key, arguments=arguments)
+        except Exception as e:
+            raise MrsalSetupError(f"Failed to bind async queue: {e}")
+
     def _ssl_setup(self) -> SSLContext:
         """_ssl_setup is private method we are using to connect with rabbit server via signed certificates and some TLS settings.
 
@@ -268,9 +358,25 @@ class Mrsal:
         SSLContext
 
         """
-        context = ssl.create_default_context(cafile=self.tls_dict['ca'])
+        context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH, cafile=self.tls_dict['ca'])
         context.load_cert_chain(certfile=self.tls_dict['crt'], keyfile=self.tls_dict['key'])
+            # Ensure the server's certificate is verified
+        context.verify_mode = ssl.CERT_REQUIRED
+        context.check_hostname = True
         return context
+
+    def get_ssl_context(self, async_conn: bool = True) -> SSLOptions | SSLContext | None:
+        if self.ssl:
+            self.log.info("Setting up TLS connection")
+            context = self._ssl_setup()
+            # use_blocking is the same as sync
+            if async_conn:
+                ssl_options = pika.SSLOptions(context, self.host)
+                return ssl_options
+            else:
+                return context
+        else:
+            return None
 
     def validate_payload(self, payload: Any, model: Type) -> None:
         """
