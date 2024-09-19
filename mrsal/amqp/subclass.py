@@ -1,3 +1,4 @@
+import asyncio
 import pika
 import json
 from mrsal.exceptions import MrsalAbortedSetup
@@ -275,18 +276,7 @@ class MrsalAsyncAMQP(Mrsal):
         except Exception as e:
             self.log.error(f'Oh my lordy lord! I caugth an unexpected exception while trying to connect: {e}', exc_info=True)
 
-    @retry(
-        retry=retry_if_exception_type((
-            AMQPConnectionError,
-            ChannelClosedByBroker,
-            ConnectionClosedByBroker,
-            StreamLostError,
-            )),
-        stop=stop_after_attempt(3),
-        wait=wait_fixed(2),
-        before_sleep=before_sleep_log(log, WARNING)
-           )
-    async def start_consumer(
+    async def async_start_consumer(
             self, 
             queue_name: str,
             callback: Callable | None = None,
@@ -335,6 +325,9 @@ class MrsalAsyncAMQP(Mrsal):
             app_id = message.app_id if hasattr(message, 'app_id') else 'NoAppID'
             msg_id = message.app_id if hasattr(message, 'message_id') else 'NoMsgID'
 
+            # add this so it is in line with Pikas awkawrdly old ways
+            properties = config.AioPikaAttributes(app_id=app_id, message_id=msg_id)
+
             if self.verbose:
                 self.log.info(f"""
                             Message received with:
@@ -362,9 +355,9 @@ class MrsalAsyncAMQP(Mrsal):
             if callback:
                 try:
                     if callback_args:
-                        await callback(*callback_args, message)
+                        await callback(*callback_args, message, properties, message.body)
                     else:
-                        await callback(message)
+                        await callback(message, properties, message.body)
                 except Exception as e:
                     self.log.error(f"Splæt! Error processing message with callback: {e}", exc_info=True)
                     if not auto_ack:
@@ -374,3 +367,41 @@ class MrsalAsyncAMQP(Mrsal):
             if not auto_ack:
                 await message.ack()
                 self.log.success(f'Young grasshopper! Message ({msg_id}) from {app_id} received and properly processed.')
+
+    @retry(
+        retry=retry_if_exception_type((
+            AMQPConnectionError,
+            ChannelClosedByBroker,
+            ConnectionClosedByBroker,
+            StreamLostError,
+            )),
+        stop=stop_after_attempt(3),
+        wait=wait_fixed(2),
+        before_sleep=before_sleep_log(log, WARNING)
+           )
+    def start_consumer(
+            self,
+            queue_name: str,
+            callback: Callable | None = None,
+            callback_args: dict[str, str | int | float | bool] | None = None,
+            auto_ack: bool = False,
+            auto_declare: bool = True,
+            exchange_name: str | None = None,
+            exchange_type: str | None = None,
+            routing_key: str | None = None,
+            payload_model: Type | None = None,
+            requeue: bool = True
+            ):
+        """The client-facing method that runs the async consumer"""
+        asyncio.run(self.async_start_consumer(
+            queue_name=queue_name,
+            callback=callback,
+            callback_args=callback_args,
+            auto_ack=auto_ack,
+            auto_declare=auto_declare,
+            exchange_name=exchange_name,
+            exchange_type=exchange_type,
+            routing_key=routing_key,
+            payload_model=payload_model,
+            requeue=requeue
+            ))

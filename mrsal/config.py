@@ -8,3 +8,8 @@ class ValidateTLS(BaseModel):
     ca: str
 
 LOG_DAYS: int = int(os.environ.get('LOG_DAYS', 10))
+
+
+class AioPikaAttributes(BaseModel):
+    message_id: str | None
+    app_id: str | None
