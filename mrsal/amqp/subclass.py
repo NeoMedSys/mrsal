@@ -276,7 +276,18 @@ class MrsalAsyncAMQP(Mrsal):
         except Exception as e:
             self.log.error(f'Oh my lordy lord! I caugth an unexpected exception while trying to connect: {e}', exc_info=True)
 
-    async def async_start_consumer(
+    @retry(
+        retry=retry_if_exception_type((
+            AMQPConnectionError,
+            ChannelClosedByBroker,
+            ConnectionClosedByBroker,
+            StreamLostError,
+            )),
+        stop=stop_after_attempt(3),
+        wait=wait_fixed(2),
+        before_sleep=before_sleep_log(log, WARNING)
+           )
+    async def start_consumer(
             self, 
             queue_name: str,
             callback: Callable | None = None,
@@ -291,6 +302,10 @@ class MrsalAsyncAMQP(Mrsal):
             ):
         """Start the async consumer with the provided setup."""
         # Check if there's a connection; if not, create one
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            raise MrsalNoAsyncioLoopFound(f'Young grasshopper! You forget to add asyncio.run(mrsal.start_consumer(...))')
         if not self._connection:
             await self.setup_async_connection()
 
@@ -368,40 +383,3 @@ class MrsalAsyncAMQP(Mrsal):
                 await message.ack()
                 self.log.success(f'Young grasshopper! Message ({msg_id}) from {app_id} received and properly processed.')
 
-    @retry(
-        retry=retry_if_exception_type((
-            AMQPConnectionError,
-            ChannelClosedByBroker,
-            ConnectionClosedByBroker,
-            StreamLostError,
-            )),
-        stop=stop_after_attempt(3),
-        wait=wait_fixed(2),
-        before_sleep=before_sleep_log(log, WARNING)
-           )
-    def start_consumer(
-            self,
-            queue_name: str,
-            callback: Callable | None = None,
-            callback_args: dict[str, str | int | float | bool] | None = None,
-            auto_ack: bool = False,
-            auto_declare: bool = True,
-            exchange_name: str | None = None,
-            exchange_type: str | None = None,
-            routing_key: str | None = None,
-            payload_model: Type | None = None,
-            requeue: bool = True
-            ):
-        """The client-facing method that runs the async consumer"""
-        asyncio.run(self.async_start_consumer(
-            queue_name=queue_name,
-            callback=callback,
-            callback_args=callback_args,
-            auto_ack=auto_ack,
-            auto_declare=auto_declare,
-            exchange_name=exchange_name,
-            exchange_type=exchange_type,
-            routing_key=routing_key,
-            payload_model=payload_model,
-            requeue=requeue
-            ))
