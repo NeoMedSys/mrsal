@@ -1,9 +1,9 @@
 # MRSAL AMQP
-[![Release](https://img.shields.io/badge/release-1.0.9-etalue.svg)](https://pypi.org/project/mrsal/) [![Python 3.10](https://img.shields.io/badge/python-3.10--3.11--3.12lue.svg)](https://www.python.org/downloads/release/python-3103/)[![Mrsal Workflow](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml/badge.svg?branch=main)](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml)
+[![Release](https://img.shields.io/badge/release-1.0.9-etalue.svg)](https://pypi.org/project/mrsal/) [![Python 3.10](https://img.shields.io/badge/python-3.10--3.11--3.12-blue.svg)](https://www.python.org/downloads/release/python-3103/)[![Mrsal Workflow](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml/badge.svg?branch=main)](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml)
 
 
 ## Intro
-Mrsal is a simple to use message broker abstraction on top of [RabbitMQ](https://www.rabbitmq.com/) and [Pika](https://pika.readthedocs.io/en/stable/index.html). The goal is to make Mrsal trivial to re-use in all services of a distributed system and to make the use of advanced message queing protocols easy and safe. No more big chunks of repetive code across your services or bespoke solutions to handle dead letters. 
+Mrsal is a simple to use message broker abstraction on top of [RabbitMQ](https://www.rabbitmq.com/), [aio-pika](https://aio-pika.readthedocs.io/en/latest/) and [Pika](https://pika.readthedocs.io/en/stable/index.html). The goal is to make Mrsal trivial to re-use in all services of a distributed system and to make the use of advanced message queing protocols easy and safe. No more big chunks of repetive code across your services or bespoke solutions to handle dead letters. 
 
 ###### Mrsal is Arabic for a small arrow and is used to describe something that performs a task with lightness and speed. 
 
@@ -43,8 +43,8 @@ RABBITMQ_KEY=/path/to/file
 - Example 1: Lets create a blocking connection on localhost with no TLS encryption
 
 ```python
-from mrsal.amqp.subclass import MrsalAMQP
-mrsal = MrsalAMQP(
+from mrsal.amqp.subclass import MrsalBlockingAMQP
+mrsal = MrsalBlockingAMQP(
     host=RABBITMQ_DOMAIN,  # Use a custom domain if you are using SSL e.g. mrsal.on-example.com
     port=int(RABBITMQ_PORT),
     credentials=(RABBITMQ_USER, RABBITMQ_PASSWORD),
@@ -56,7 +56,7 @@ mrsal = MrsalAMQP(
 # boom you are staged for connection. This instantiation stages for connection only
 ```
 
-### 2 Publish
+#### 2.1 Publish
 Now lets publish our message of friendship on the friendship exchange.
 Note: When `auto_declare=True` means that MrsalAMQP will create the specified `exchange` and `queue`, then bind them together using `routing_key` in one go. If you want to customize each step then turn off auto_declare and specify each step yourself with custom arguments etc.
 
@@ -82,7 +82,7 @@ mrsal.publish_message(exchange_name='zoomer_x',
                         auto_declare=True)
 ```
 
-### 3 Consume
+#### 2.2 Consume
 
 Now lets setup a consumer that will listen to our very important messages. If you are using scripts rather than notebooks then it's advisable to run consume and publish separately. We are going to need a callback function which is triggered upon receiving the message from the queue we subscribe to. You can use the callback function to activate something in your system.
 
@@ -116,9 +116,53 @@ mrsal.start_consumer(
     )
 ```
 
-Done! Your first message of zommerism has been sent to the zoomer queue on the exchange of Zoomeru.
+Done! Your first message of zommerism has been sent to the zoomer queue on the exchange of Zoomeru in a blocking connection. Lets see how we can do it in async in the next step.
 
-That simple! You have now setup a full advanced message queueing protocol that you can use to promote friendship or other necessary communication between your services.
+### 3. Setup and Connect Async
+Its usually the best practise to use async consumers if high throughput is expected. We can easily do this by adjusting the code a little bit to fit the framework of async connection in python.
+```python
+from mrsal.amqp.subclass import MrsalAsyncAMQP
+mrsal = MrsalAsyncAMQP(
+    host=RABBITMQ_DOMAIN,  # Use a custom domain if you are using SSL e.g. mrsal.on-example.com
+    port=int(RABBITMQ_PORT),
+    credentials=(RABBITMQ_USER, RABBITMQ_PASSWORD),
+    virtual_host=RABBITMQ_VHOST,
+    ssl=False, # Set this to True for SSL/TLS (you will need to set the cert paths if you do so)
+    use_blocking=True  # Set this to False if you want to start an async connection
+)
+
+# boom you are staged for async connection.
+```
+
+#### 3.1 Consume
+Lets go turbo and set up the consumer in async for efficient AMQP handling
+```python
+import asyncio
+from pydantic import BaseModel
+
+class ZoomerNRJ(BaseModel):
+    zoomer_message: str
+
+async def consumer_callback_with_delivery_info(method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, body: str):
+    if 'Get it' in body:
+        app_id = properties.app_id
+        msg_id = properties.message_id
+        print(f'app_id={app_id}, msg_id={msg_id}')
+        print('Slay with main character vibe')
+    else:
+        raise SadZoomerEnergyError('Zoomer sad now')
+
+asyncio.run(mrsal.start_consumer(
+        queue_name='zoomer_q',
+        exchange_name='zoomer_x',
+        callback_args=None,  # no need to specifiy if you do not need it
+        callback=consumer_callback_with_delivery_info,
+        auto_declare=False,
+        auto_ack-False
+    ))
+```
+
+That simple! You have now setups for full advanced message queueing protocols that you can use to promote friendship or other necessary communication between your services in both blocking or async connections.
 
 ###### Note! There are many parameters and settings that you can use to set up a more sophisticated communication protocol in both blocking or async connection with pydantic BaseModels to enforce data types in the expected payload.
 ---
