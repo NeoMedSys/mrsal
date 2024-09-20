@@ -44,13 +44,13 @@ RABBITMQ_KEY=/path/to/file
 
 ```python
 from mrsal.amqp.subclass import MrsalBlockingAMQP
+
 mrsal = MrsalBlockingAMQP(
     host=RABBITMQ_DOMAIN,  # Use a custom domain if you are using SSL e.g. mrsal.on-example.com
     port=int(RABBITMQ_PORT),
     credentials=(RABBITMQ_USER, RABBITMQ_PASSWORD),
     virtual_host=RABBITMQ_VHOST,
-    ssl=False, # Set this to True for SSL/TLS (you will need to set the cert paths if you do so)
-    use_blocking=True  # Set this to False if you want to start an async connection
+    ssl=False # Set this to True for SSL/TLS (you will need to set the cert paths if you do so)
 )
 
 # boom you are staged for connection. This instantiation stages for connection only
@@ -97,7 +97,11 @@ from pydantic import BaseModel
 class ZoomerNRJ(BaseModel):
     zoomer_message: str
 
-def consumer_callback_with_delivery_info(method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, body: str):
+def consumer_callback_with_delivery_info(
+     method_frame: pika.spec.Basic.Deliver,
+     properties: pika.spec.BasicProperties,
+     body: str
+     ):
     if 'Get it' in body:
         app_id = properties.app_id
         msg_id = properties.message_id
@@ -111,7 +115,7 @@ mrsal.start_consumer(
         exchange_name='zoomer_x',
         callback_args=None,  # no need to specifiy if you do not need it
         callback=consumer_callback_with_delivery_info,
-        auto_declare=False,
+        auto_declare=True,
         auto_ack-False
     )
 ```
@@ -122,13 +126,13 @@ Done! Your first message of zommerism has been sent to the zoomer queue on the e
 Its usually the best practise to use async consumers if high throughput is expected. We can easily do this by adjusting the code a little bit to fit the framework of async connection in python.
 ```python
 from mrsal.amqp.subclass import MrsalAsyncAMQP
+
 mrsal = MrsalAsyncAMQP(
     host=RABBITMQ_DOMAIN,  # Use a custom domain if you are using SSL e.g. mrsal.on-example.com
     port=int(RABBITMQ_PORT),
     credentials=(RABBITMQ_USER, RABBITMQ_PASSWORD),
     virtual_host=RABBITMQ_VHOST,
-    ssl=False, # Set this to True for SSL/TLS (you will need to set the cert paths if you do so)
-    use_blocking=True  # Set this to False if you want to start an async connection
+    ssl=False # Set this to True for SSL/TLS (you will need to set the cert paths if you do so)
 )
 
 # boom you are staged for async connection.
@@ -143,7 +147,11 @@ from pydantic import BaseModel
 class ZoomerNRJ(BaseModel):
     zoomer_message: str
 
-async def consumer_callback_with_delivery_info(method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, body: str):
+async def consumer_callback_with_delivery_info(
+     method_frame: pika.spec.Basic.Deliver,
+     properties: pika.spec.BasicProperties,
+     body: str
+     ):
     if 'Get it' in body:
         app_id = properties.app_id
         msg_id = properties.message_id
@@ -157,7 +165,7 @@ asyncio.run(mrsal.start_consumer(
         exchange_name='zoomer_x',
         callback_args=None,  # no need to specifiy if you do not need it
         callback=consumer_callback_with_delivery_info,
-        auto_declare=False,
+        auto_declare=True,
         auto_ack-False
     ))
 ```
