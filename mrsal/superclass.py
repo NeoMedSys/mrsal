@@ -358,11 +358,8 @@ class Mrsal:
         SSLContext
 
         """
-        context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH, cafile=self.tls_dict['ca'])
+        context = ssl.create_default_context(cafile=self.tls_dict['ca'])
         context.load_cert_chain(certfile=self.tls_dict['crt'], keyfile=self.tls_dict['key'])
-            # Ensure the server's certificate is verified
-        context.verify_mode = ssl.CERT_REQUIRED
-        context.check_hostname = True
         return context
 
     def get_ssl_context(self, async_conn: bool = True) -> SSLOptions | SSLContext | None:
