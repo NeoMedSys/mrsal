@@ -1,7 +1,7 @@
 import asyncio
 import pika
 import json
-from mrsal.exceptions import MrsalAbortedSetup
+from mrsal.exceptions import MrsalAbortedSetup, MrsalNoAsyncioLoopError
 from logging import WARNING
 from pika.exceptions import (
         AMQPConnectionError,
@@ -175,7 +175,8 @@ class MrsalBlockingAMQP(Mrsal):
                         except Exception as e:
                             if not auto_ack:
                                 self._channel.basic_nack(delivery_tag=method_frame.delivery_tag, requeue=requeue)
-                            self.log.error("Callback method failure: {e}")
+                            self.log.error(f"Callback method failure: {e}")
+                            self.log.error(f"Oh lordy lord message {msg_id} from {app_id} failed while running callback")
                             continue
 
                     if not auto_ack:
@@ -219,6 +220,7 @@ class MrsalBlockingAMQP(Mrsal):
         :raises UnroutableError: raised when a message published in publisher-acknowledgments mode (see `BlockingChannel.confirm_delivery`) is returned via `Basic.Return` followed by `Basic.Ack`.
         :raises NackError: raised when a message published in publisher-acknowledgements mode is Nack'ed by the broker. See `BlockingChannel.confirm_delivery`.
         """
+        
         if not isinstance(message, (str, bytes)):
             raise MrsalAbortedSetup(f'Your message body needs to be string or bytes or serialized dict')
         # connect and use only blocking
@@ -238,10 +240,10 @@ class MrsalBlockingAMQP(Mrsal):
             # Publish the message by serializing it in json dump
             # NOTE! we are not dumping a json anymore here! This allows for more flexibility
             self._channel.basic_publish(exchange=exchange_name, routing_key=routing_key, body=message, properties=prop)
-            self.log.success(f"The message ({message}) is published to the exchange {exchange_name} with the routing key {routing_key}")
+            self.log.success(f"The message ({message!r}) is published to the exchange {exchange_name} with the routing key {routing_key}")
 
         except UnroutableError as e:
-            self.log.error(f"Producer could not publish message:{message} to the exchange {exchange_name} with a routing key {routing_key}: {e}", exc_info=True)
+            self.log.error(f"Producer could not publish message:{message!r} to the exchange {exchange_name} with a routing key {routing_key}: {e}", exc_info=True)
             raise
         except NackError as e:
             self.log.error(f"Message NACKed by broker: {e}")
@@ -305,7 +307,7 @@ class MrsalAsyncAMQP(Mrsal):
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            raise MrsalNoAsyncioLoopFound(f'Young grasshopper! You forget to add asyncio.run(mrsal.start_consumer(...))')
+            raise MrsalNoAsyncioLoopError(f'Young grasshopper! You forget to add asyncio.run(mrsal.start_consumer(...))')
         if not self._connection:
             await self.setup_async_connection()
 
