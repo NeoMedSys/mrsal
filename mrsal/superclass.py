@@ -367,7 +367,7 @@ class Mrsal:
             self.log.info("Setting up TLS connection")
             context = self._ssl_setup()
             # use_blocking is the same as sync
-            if async_conn:
+            if not async_conn:
                 ssl_options = pika.SSLOptions(context, self.host)
                 return ssl_options
             else:
