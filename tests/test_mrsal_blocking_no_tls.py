@@ -199,6 +199,33 @@ def test_publish_message(amqp_consumer):
     )
 
 
+def test_publish_messages(amqp_consumer):
+    """Test that the message is correctly published to the exchange."""
+    amqp_consumer._setup_exchange_and_queue = Mock()
+
+    mrsal_protocol = {
+            'app1': {
+                'message': b'{"data": "king"}',
+                'routing_key': 'king_route',
+                'queue_name': 'queue-king',
+                'exchange_type': 'topic',
+                'exchange_name': 'exchange.king'
+                },
+
+            'app2': {
+                'message': b'{"data": "unga"}',
+                'routing_key': 'unga_route',
+                'queue_name': 'queue-unga',
+                'exchange_type': 'topic',
+                'exchange_name': 'exchange.unga'
+                }
+            }
+
+    amqp_consumer.publish_messages(
+            mrsal_protocol_collection=mrsal_protocol
+    )
+
+
 def test_retry_on_unroutable_error(amqp_consumer):
     """Test that the publish_message retries 3 times when UnroutableError is raised."""
     amqp_consumer._setup_exchange_and_queue = Mock()

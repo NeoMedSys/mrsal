@@ -1,4 +1,5 @@
 import asyncio
+from mrsal.basemodels import MrsalProtocol
 import pika
 import json
 from mrsal.exceptions import MrsalAbortedSetup, MrsalNoAsyncioLoopError
@@ -171,7 +172,7 @@ class MrsalBlockingAMQP(Mrsal):
                             if callback_args:
                                 callback(*callback_args, method_frame, properties, body)
                             else:
-                                callback( method_frame, properties, body)
+                                callback(method_frame, properties, body)
                         except Exception as e:
                             if not auto_ack:
                                 self._channel.basic_nack(delivery_tag=method_frame.delivery_tag, requeue=requeue)
@@ -251,6 +252,68 @@ class MrsalBlockingAMQP(Mrsal):
         except Exception as e:
             self.log.error(f"Unexpected error while publishing message: {e}")
 
+    @retry(
+        retry=retry_if_exception_type((
+            NackError,
+            UnroutableError
+            )),
+        stop=stop_after_attempt(3),
+        wait=wait_fixed(2),
+        before_sleep=before_sleep_log(log, WARNING)
+           )
+    def publish_messages(
+        self,
+        mrsal_protocol_collection: dict[str, dict[str, str | bytes]],
+        prop: pika.BasicProperties | None = None,
+    ) -> None:
+        """Publish message to the exchange specifying routing key and properties.
+
+        mrsal_protocol_collection :  dict[str, dict[str, str | bytes]] 
+            This is a collection of the protcols needed for publishing to multiple exhanges at once
+
+            expected collection: {
+                inbound_app_1: {message: bytes | str, routing_key: str, queue_name: str, exchange_type: str, exchange_name: str},
+                inbound_app_2: {message: bytes | str, routing_key: str, queue_name: str, exchange_type: str, exchange_name: str},
+                .,
+                .
+            }
+
+        :raises UnroutableError: raised when a message published in publisher-acknowledgments mode (see `BlockingChannel.confirm_delivery`) is returned via `Basic.Return` followed by `Basic.Ack`.
+        :raises NackError: raised when a message published in publisher-acknowledgements mode is Nack'ed by the broker. See `BlockingChannel.confirm_delivery`.
+        """
+        
+        for inbound_app_id, mrsal_protocol in mrsal_protocol_collection.items():
+            protocol = MrsalProtocol(**mrsal_protocol)
+
+            if not isinstance(protocol.message, (str, bytes)):
+                raise MrsalAbortedSetup(f'Your message body needs to be string or bytes or serialized dict')
+                # connect and use only blocking
+            self.setup_blocking_connection()
+            self._setup_exchange_and_queue(
+                exchange_name=protocol.exchange_name,
+                queue_name=protocol.queue_name,
+                exchange_type=protocol.exchange_type,
+                routing_key=protocol.routing_key
+                )
+            try:
+                # Publish the message by serializing it in json dump
+                # NOTE! we are not dumping a json anymore here! This allows for more flexibility
+                self._channel.basic_publish(
+                        exchange=protocol.exchange_name,
+                        routing_key=protocol.routing_key,
+                        body=protocol.message,
+                        properties=prop
+                        )
+                self.log.success(f"The message for inbound app {inbound_app_id} with message -- ({protocol.message!r}) is published to the exchange {protocol.exchange_name} with the routing key {protocol.routing_key}. Oh baby baby")
+
+            except UnroutableError as e:
+                self.log.error(f"Producer could not publish message:{protocol.message!r} to the exchange {protocol.exchange_name} with a routing key {protocol.routing_key}: {e}", exc_info=True)
+                raise
+            except NackError as e:
+                self.log.error(f"Message NACKed by broker: {e}")
+                raise
+            except Exception as e:
+                self.log.error(f"Unexpected error while publishing message: {e}")
 
 
 class MrsalAsyncAMQP(Mrsal):
