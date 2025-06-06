@@ -173,6 +173,132 @@ asyncio.run(mrsal.start_consumer(
 That simple! You have now setups for full advanced message queueing protocols that you can use to promote friendship or other necessary communication between your services in both blocking or async connections.
 
 ###### Note! There are many parameters and settings that you can use to set up a more sophisticated communication protocol in both blocking or async connection with pydantic BaseModels to enforce data types in the expected payload.
+
+
+### 4. Advanced Features
+
+#### 4.1 Dead Letter Exchange & Retry Logic
+
+
+Mrsal automatically handles failed messages with built-in retry and dead letter exchange support:
+
+
+```python
+
+mrsal = MrsalBlockingAMQP(
+host=RABBITMQ_DOMAIN,
+port=int(RABBITMQ_PORT),
+credentials=(RABBITMQ_USER, RABBITMQ_PASSWORD),
+virtual_host=RABBITMQ_VHOST,
+dlx_enable=True,    # Default: creates '<queue_name>.dlx'
+max_retries=5       # Retry failed messages 5 times before DLX
+)
+
+# custom DLX configuration
+
+mrsal.start_consumer(
+queue_name='important_queue',
+exchange_name='important_exchange',
+exchange_type='direct',
+routing_key='important_key',
+callback=my_callback,
+auto_ack=False,              # Required for retry logic
+dlx_enable=True,             # Enable DLX for this queue -- the default is True
+dlx_exchange_name='custom_dlx', # Optional: custom DLX name
+dlx_routing_key='dlx_key'    # Optional: custom DLX routing
+)
+```
+
+How it works:
+
+1. Message processing fails → retry up to max_retries times
+2. After max retries → send to dead letter exchange (if configured)
+3. No DLX configured → message dropped with full logging
+
+Prevents infinite requeue loops automatically
+
+#### 4.2 Quorum Queues
+
+Quorum queues provide better data safety and performance for production environments:
+```python
+mrsal = MrsalBlockingAMQP(
+host=RABBITMQ_DOMAIN,
+port=int(RABBITMQ_PORT),
+credentials=(RABBITMQ_USER, RABBITMQ_PASSWORD),
+virtual_host=RABBITMQ_VHOST,
+use_quorum_queues=True  # Default: enables quorum queues
+)
+
+Per-queue configuration
+
+mrsal.start_consumer(
+queue_name='high_availability_queue',
+exchange_name='ha_exchange',
+exchange_type='direct',
+routing_key='ha_key',
+callback=my_callback,
+use_quorum_queues=True  # This queue will be highly available
+)
+```
+
+Benefits:
+✅ Better data replication across RabbitMQ cluster nodes
+✅ Improved performance under high load
+✅ Automatic leader election and failover
+✅ Works great in Kubernetes and bare metal deployments
+
+```python
+from mrsal.amqp.subclass import MrsalBlockingAMQP
+from pydantic import BaseModel
+import json
+
+class OrderMessage(BaseModel):
+    order_id: str
+    customer_id: str
+    amount: float
+
+    def process_order(method_frame, properties, body):
+        try:
+            order_data = json.loads(body)
+            order = OrderMessage(**order_data)
+                # Process the order
+                print(f"Processing order {order.order_id} for customer {order.customer_id}")
+                
+                # Simulate processing that might fail
+                if order.amount < 0:
+                    raise ValueError("Invalid order amount")
+                
+        except Exception as e:
+            print(f"Order processing failed: {e}")
+            raise  # This will trigger retry logic
+
+    Production-ready setup
+
+    mrsal = MrsalBlockingAMQP(
+        host=RABBITMQ_DOMAIN,
+        port=int(RABBITMQ_PORT),
+        credentials=(RABBITMQ_USER, RABBITMQ_PASSWORD),
+        virtual_host=RABBITMQ_VHOST,
+        dlx_enable=True,         # Automatic DLX for failed orders
+        max_retries=3,           # Retry failed orders 3 times
+        use_quorum_queues=True,  # High availability
+        prefetch_count=10        # Process up to 10 messages concurrently
+    )
+
+    mrsal.start_consumer(
+        queue_name='orders_queue',
+        exchange_name='orders_exchange',
+        exchange_type='direct',
+        routing_key='new_order',
+        callback=process_order,
+        payload_model=OrderMessage,  # Automatic validation
+        auto_ack=False,              # Manual ack for reliability
+        auto_declare=True            # Auto-create exchange/queue/DLX
+    )
+```
+
+Note! There are many parameters and settings that you can use to set up a more sophisticated communication protocol in both blocking or async connection with pydantic BaseModels to enforce data types in the expected payload.
+
 ---
 ## References
 
