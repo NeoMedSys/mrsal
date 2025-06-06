@@ -17,7 +17,6 @@ tenacity = "^9.0.0"
 sphinx = "^8.0.2"
 aio-pika = "^9.4.3"
 pydantic = "^2.11.5"
-neolibrary = "^0.13.1"
 
 [tool.poetry.group.dev.dependencies]
 coverage = "^7.2.7"

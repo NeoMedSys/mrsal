@@ -17,12 +17,12 @@ from typing import Callable, Type
 from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type, before_sleep_log
 from pydantic import ValidationError
 from pydantic.dataclasses import dataclass
-from neolibrary.monitoring.logger import NeoLogger
+from mrsal.logger import get_logger
 
 from mrsal.superclass import Mrsal
 from mrsal import config
 
-log = NeoLogger(__name__, rotate_days=config.LOG_DAYS)
+log = get_logger(__name__, rotate_days=config.LOG_DAYS)
 
 @dataclass
 class MrsalBlockingAMQP(Mrsal):

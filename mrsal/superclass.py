@@ -8,13 +8,14 @@ from mrsal.exceptions import MrsalAbortedSetup, MrsalSetupError
 from pika.connection import SSLOptions
 from aio_pika import ExchangeType as AioExchangeType, Queue as AioQueue, Exchange as AioExchange
 from pydantic.dataclasses import dataclass
-from neolibrary.monitoring.logger import NeoLogger
+from mrsal.logger import get_logger
+
 from pydantic.deprecated.tools import json
 
 # internal
 from mrsal import config
 
-log = NeoLogger(__name__, rotate_days=config.LOG_DAYS)
+log = get_logger(__name__, rotate_days=config.LOG_DAYS)
 
 @dataclass
 class Mrsal:
@@ -45,7 +46,6 @@ class Mrsal:
 	use_quorum_queues: bool = True
 	_connection = None
 	_channel = None
-	log = NeoLogger(__name__, rotate_days=config.LOG_DAYS)
 
 	def __post_init__(self) -> None:
 		if self.ssl:
@@ -57,6 +57,7 @@ class Mrsal:
 			# empty string handling
 			self.tls_dict = {cert: (env_var if env_var != '' else None) for cert, env_var in tls_dict.items()}
 			config.ValidateTLS(**self.tls_dict)
+		self.log = get_logger(__name__, rotate_days=config.LOG_DAYS)
 
 	def _setup_exchange_and_queue(self, 
 								 exchange_name: str, queue_name: str, exchange_type: str,
