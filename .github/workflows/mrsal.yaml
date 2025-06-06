@@ -25,7 +25,7 @@ jobs:
           poetry-version: '1.8.0'
       - name: Conifgure Poetry
         run: |
-          poetry config repositories.neomedsys https://pypi.neomodels.app
+          poetry config repositories.neomedsys https://pypi.neomedsys.dev
           poetry config http-basic.neomedsys ${{ secrets.PYPI_USERNAME }} ${{ secrets.PYPI_PASSWORD }}
       - name: Install depz
         run: |
@@ -55,7 +55,7 @@ jobs:
           poetry-version: '1.8.0'
       - name: Conifgure Poetry
         run: |
-          poetry config repositories.neomedsys https://pypi.neomodels.app
+          poetry config repositories.neomedsys https://pypi.neomedsys.dev
           poetry config http-basic.neomedsys ${{ secrets.PYPI_USERNAME }} ${{ secrets.PYPI_PASSWORD }}
       - name: Install dependencies
         run: |
@@ -85,7 +85,7 @@ jobs:
           poetry-version: ${{ matrix.poetry-version }}
       - name: Conifgure Poetry
         run: |
-          poetry config repositories.neomedsys https://pypi.neomodels.app
+          poetry config repositories.neomedsys https://pypi.neomedsys.dev
           poetry config http-basic.neomedsys ${{ secrets.PYPI_USERNAME }} ${{ secrets.PYPI_PASSWORD }}
       - name: Install Dependencies
         run: |
