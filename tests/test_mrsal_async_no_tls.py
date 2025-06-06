@@ -23,9 +23,9 @@ class ExpectedPayload:
     active: bool
 
 
-# Fixture to mock the async connection and its methods
+# Fixture to mock the async connection and its methods - SYNC fixture
 @pytest.fixture
-async def mock_amqp_connection():
+def mock_amqp_connection():
     with patch('aio_pika.connect_robust', new_callable=AsyncMock) as mock_connect_robust:
         mock_channel = AsyncMock()
         mock_connection = AsyncMock()
@@ -37,9 +37,9 @@ async def mock_amqp_connection():
         return mock_connection, mock_channel
 
 @pytest.fixture
-async def amqp_consumer(mock_amqp_connection):
-    # Await the connection fixture and unpack
-    mock_connection, mock_channel = await mock_amqp_connection
+def amqp_consumer(mock_amqp_connection):
+    # No await needed - it's a sync fixture now
+    mock_connection, mock_channel = mock_amqp_connection
     consumer = MrsalAsyncAMQP(**SETUP_ARGS)
     consumer._connection = mock_connection  # Inject the mocked connection
     consumer._channel = mock_channel
@@ -49,7 +49,7 @@ async def amqp_consumer(mock_amqp_connection):
 @pytest.mark.asyncio
 async def test_valid_message_processing(amqp_consumer):
     """Test valid message processing in async consumer."""
-    consumer = await amqp_consumer
+    consumer = amqp_consumer  # No await needed
 
     valid_body = b'{"id": 1, "name": "Test", "active": true}'
     mock_message = AsyncMock(body=valid_body, ack=AsyncMock(), reject=AsyncMock())
@@ -89,7 +89,7 @@ async def test_valid_message_processing(amqp_consumer):
 async def test_invalid_payload_validation(amqp_consumer):
     """Test invalid payload handling in async consumer."""
     invalid_payload = b'{"id": "wrong_type", "name": 123, "active": "maybe"}'
-    consumer = await amqp_consumer
+    consumer = amqp_consumer  # No await needed
 
     mock_message = AsyncMock(body=invalid_payload, ack=AsyncMock(), reject=AsyncMock())
     mock_message.configure_mock(app_id="test_app", message_id="12345")
@@ -129,7 +129,7 @@ async def test_invalid_payload_validation(amqp_consumer):
 async def test_requeue_on_invalid_message(amqp_consumer):
     """Test that invalid messages are requeued when auto_ack is False."""
     invalid_payload = b'{"id": "wrong_type", "name": 123, "active": "maybe"}'
-    consumer = await amqp_consumer
+    consumer = amqp_consumer  # No await needed
 
     mock_message = AsyncMock(body=invalid_payload, ack=AsyncMock(), reject=AsyncMock(), nack=AsyncMock())
     mock_message.configure_mock(app_id="test_app", message_id="12345")
@@ -153,8 +153,8 @@ async def test_requeue_on_invalid_message(amqp_consumer):
         routing_key='test_route',
         exchange_name='test_x',
         exchange_type='direct',
-        payload_model=ExpectedPayload,  
-        auto_ack=False  
+        payload_model=ExpectedPayload,
+        auto_ack=False
     )
 
     async for message in mock_queue.iterator():
@@ -164,35 +164,3 @@ async def test_requeue_on_invalid_message(amqp_consumer):
 
     mock_callback.assert_not_called()
     mock_message.nack.assert_called_once_with(requeue=True)
-
-
-#@pytest.mark.asyncio
-#async def test_retry_on_connection_failure(amqp_consumer):
-#    """Test that retry is activated when an AMQPConnectionError occurs."""
-#    consumer = await amqp_consumer
-#
-#    valid_body = b'{"id": 1, "name": "Test", "active": true}'
-#    mock_message = AsyncMock(body=valid_body, ack=AsyncMock(), reject=AsyncMock())
-#    mock_message.configure_mock(app_id="test_app", message_id="12345")
-#
-#    mock_queue = AsyncMock()
-#    async def message_generator():
-#        yield mock_message
-#
-#    mock_queue.iterator = message_generator
-#    mock_queue.__aenter__.return_value = mock_queue
-#    mock_queue.__aexit__.return_value = AsyncMock()
-#    consumer._channel.declare_queue.return_value = mock_queue
-#
-#    # Patch the setup_async_connection to raise AMQPConnectionError
-#    with patch.object(MrsalAsyncAMQP, 'setup_async_connection', side_effect=AMQPConnectionError("Connection failed")) as mock_setup:
-#        with pytest.raises(RetryError):  # Expect RetryError after 3 failed attempts
-#            await consumer.start_consumer(
-#                queue_name='test_q',
-#                callback=AsyncMock(),
-#                routing_key='test_route',
-#                exchange_name='test_x_retry',
-#                exchange_type='direct'
-#            )
-#
-#        assert mock_setup.call_count == 3  # Ensure retry happened 3 times

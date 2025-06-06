@@ -93,15 +93,13 @@ def lint(session: Session):
 @nox.session(name="generate_badges", reuse_venv=True)
 def gen_badge(session: Session):
     """
-    Generate badges for test, coverage, and lint results.
+    Generate coverage badge.
     """
     try:
-        session.install("genbadge[tests,coverage,flake8]")
-        session.run("genbadge", "tests", "-i", "./reports/junit/junit.xml", "-o", "./reports/badges/tests-badge.svg")
+        session.install("genbadge[coverage]")
         session.run("genbadge", "coverage", "-i", "./reports/coverage/coverage.xml", "-o", "./reports/badges/coverage-badge.svg")
-        session.run("genbadge", "flake8", "-i", "./reports/ruff/ruff.txt", "-o", "./reports/badges/ruff-badge.svg")
 
-        session.log("Badges generated successfully.")
+        session.log("Coverage badge generated successfully.")
     except Exception as e:
         session.error(f"Badge generation failed: {e}")
 
