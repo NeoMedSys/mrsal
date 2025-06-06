@@ -95,10 +95,14 @@ jobs:
         run: |
           poetry lock --no-update
           poetry install --with dev --no-cache --no-root
+    - name: Copy test reports for GitHub Pages
+      run: |
+        mkdir -p ./docs/_build/html/reports
+        cp -r ./reports/ ./docs/_build/html/reports/ || true
       - name: Generate Sphinx Project
         run: |
           mkdir -p docs
-          poetry run sphinx-quickstart -q -p "MrsalAMQP" -a "Jon E Nesvold | Raafat Zahran  | Martin S Rovang" -v "1.0.0" docs
+          poetry run sphinx-quickstart -q -p "MrsalAMQP" -a "Jon E Nesvold | Martin S Rovang" -v "1.0.0" docs
           echo "extensions.extend(['sphinx.ext.autodoc', 'sphinx.ext.napoleon', 'myst_parser'])" >> docs/conf.py
       - name: Generate API Documentation
         run: |
