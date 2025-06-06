@@ -17,12 +17,12 @@ from typing import Callable, Type
 from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type, before_sleep_log
 from pydantic import ValidationError
 from pydantic.dataclasses import dataclass
-from neolibrary.monitoring.logger import NeoLogger
+from mrsal.logger import get_logger
 
 from mrsal.superclass import Mrsal
 from mrsal import config
 
-log = NeoLogger(__name__, rotate_days=config.LOG_DAYS)
+log = get_logger(__name__, rotate_days=config.LOG_DAYS)
 
 @dataclass
 class MrsalBlockingAMQP(Mrsal):
@@ -104,7 +104,11 @@ class MrsalBlockingAMQP(Mrsal):
                      exchange_type: str | None = None,
                      routing_key: str | None = None,
                      payload_model: Type | None = None,
-                     requeue: bool = True
+                     requeue: bool = True,
+                     dlx_enable: bool = True,
+                     dlx_exchange_name: str | None = None,
+                     dlx_routing_key: str | None = None,
+                     use_quorum_queues: bool = True
                      ) -> None:
         """
         Start the consumer using blocking setup.
@@ -116,6 +120,7 @@ class MrsalBlockingAMQP(Mrsal):
         """
         # Connect and start the I/O loop
         self.setup_blocking_connection()
+        retry_counts = {}
 
         if auto_declare:
             if None in (exchange_name, queue_name, exchange_type, routing_key):
@@ -125,7 +130,11 @@ class MrsalBlockingAMQP(Mrsal):
                     exchange_name=exchange_name,
                     queue_name=queue_name,
                     exchange_type=exchange_type,
-                    routing_key=routing_key
+                    routing_key=routing_key,
+                    dlx_enable=dlx_enable,
+                    dlx_exchange_name=dlx_exchange_name,
+                    dlx_routing_key=dlx_routing_key,
+                    use_quorum_queues=use_quorum_queues
                     )
 
             if not self.auto_declare_ok:
@@ -140,6 +149,7 @@ class MrsalBlockingAMQP(Mrsal):
                     if properties:
                         app_id = properties.app_id if hasattr(properties, 'app_id') else 'no AppID given'
                         msg_id = properties.message_id if hasattr(properties, 'message_id') else 'no msgID given'
+                    delivery_tag = method_frame.delivery_tag
 
                     if self.verbose:
                         self.log.info(
@@ -157,32 +167,52 @@ class MrsalBlockingAMQP(Mrsal):
                                 )
                     if auto_ack:
                         self.log.info(f'I successfully received a message with AutoAck from: {app_id} with messageID: {msg_id}')
+
+                    current_retry = retry_counts.get(delivery_tag, 0)
+                    should_process = True
                     
                     if payload_model:
                         try:
                             self.validate_payload(body, payload_model)
                         except (ValidationError, json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
                             self.log.error(f"Oh lordy lord, payload validation failed for your specific model requirements: {e}")
-                            if not auto_ack:
-                                self._channel.basic_nack(delivery_tag=method_frame.delivery_tag, requeue=True)
-                            continue
+                            should_process = False
 
-                    if callback:
+                    if callback and should_process:
                         try:
                             if callback_args:
                                 callback(*callback_args, method_frame, properties, body)
                             else:
                                 callback(method_frame, properties, body)
                         except Exception as e:
-                            if not auto_ack:
-                                self._channel.basic_nack(delivery_tag=method_frame.delivery_tag, requeue=requeue)
                             self.log.error(f"Callback method failure: {e}")
                             self.log.error(f"Oh lordy lord message {msg_id} from {app_id} failed while running callback")
-                            continue
+                            should_process = False
 
-                    if not auto_ack:
+                    if not should_process and not auto_ack:
+                        if current_retry < self.max_retries and requeue:
+                            # Increment retry count and requeue
+                            retry_counts[delivery_tag] = current_retry + 1
+                            self._channel.basic_nack(delivery_tag=delivery_tag, requeue=True)
+                            self.log.info(f"Message {msg_id} requeued (attempt {current_retry + 1}/{self.max_retries})")
+                        else:
+                            # Max retries reached or requeue disabled
+                            retry_counts.pop(delivery_tag, None)
+                            if dlx_enable:
+                                self._channel.basic_nack(delivery_tag=delivery_tag, requeue=False)
+                                self.log.warning(f"Message {msg_id} sent to dead letter exchange after {current_retry} retries")
+                                self.log.info(f"Its the fault of polictial ideology imposing! Strangle an influencer if it makes you feel better!")
+                            else:
+                                self._channel.basic_nack(delivery_tag=delivery_tag, requeue=False)
+                                self.log.warning(f"No dead letter exchange declared for {queue_name}, proceeding to drop the message -- reflect on your life choices! byebye")
+                                self.log.info(f"Dropped message content: {body}")
+                        continue                   
+
+                    if not auto_ack and should_process:
+                        retry_counts.pop(delivery_tag, None)
                         self.log.success(f'Message ({msg_id}) from {app_id} received and properly processed -- now dance the funky chicken')
-                        self._channel.basic_ack(delivery_tag=method_frame.delivery_tag)
+                        self._channel.basic_ack(delivery_tag=delivery_tag)
+
         except (AMQPConnectionError, ConnectionClosedByBroker, StreamLostError) as e:
             log.error(f"Ooooooopsie! I caught a connection error while consuming: {e}")
             raise
@@ -363,9 +393,15 @@ class MrsalAsyncAMQP(Mrsal):
             exchange_type: str | None = None,
             routing_key: str | None = None,
             payload_model: Type | None = None,
-            requeue: bool = True
+            requeue: bool = True,
+            dlx_enable: bool = True,
+            dlx_exchange_name: str | None = None,
+            dlx_routing_key: str | None = None,
+            use_quorum_queues: bool = True
             ):
         """Start the async consumer with the provided setup."""
+        retry_counts = {}
+
         # Check if there's a connection; if not, create one
         try:
             asyncio.get_running_loop()
@@ -386,7 +422,11 @@ class MrsalAsyncAMQP(Mrsal):
                     exchange_name=exchange_name,
                     queue_name=queue_name,
                     exchange_type=exchange_type,
-                    routing_key=routing_key
+                    routing_key=routing_key,
+                    dlx_enable=dlx_enable,
+                    dlx_exchange_name=dlx_exchange_name,
+                    dlx_routing_key=dlx_routing_key,
+                    use_quorum_queues=use_quorum_queues
                     )
 
             if not self.auto_declare_ok:
@@ -402,6 +442,7 @@ class MrsalAsyncAMQP(Mrsal):
                 continue
 
             # Extract message metadata
+            delivery_tag = message.delivery_tag
             app_id = message.app_id if hasattr(message, 'app_id') else 'NoAppID'
             msg_id = message.app_id if hasattr(message, 'message_id') else 'NoMsgID'
 
@@ -423,16 +464,17 @@ class MrsalAsyncAMQP(Mrsal):
                 await message.ack()
                 self.log.info(f'I successfully received a message from: {app_id} with messageID: {msg_id}')
 
+            current_retry = retry_counts.get(delivery_tag, 0)
+            should_process = True
+
             if payload_model:
                 try:
                     self.validate_payload(message.body, payload_model)
                 except (ValidationError, json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
                     self.log.error(f"Payload validation failed: {e}", exc_info=True)
-                    if not auto_ack:
-                        await message.reject(requeue=requeue)
-                    continue
+                    should_process = False
 
-            if callback:
+            if callback and should_process:
                 try:
                     if callback_args:
                         await callback(*callback_args, message, properties, message.body)
@@ -440,11 +482,30 @@ class MrsalAsyncAMQP(Mrsal):
                         await callback(message, properties, message.body)
                 except Exception as e:
                     self.log.error(f"Splæt! Error processing message with callback: {e}", exc_info=True)
-                    if not auto_ack:
-                        await message.reject(requeue=requeue)
-                    continue
+                    should_process = False
+
+            if not should_process and not auto_ack:
+                if current_retry < self.max_retries and requeue:
+                    # Increment retry count and requeue
+                    retry_counts[delivery_tag] = current_retry + 1
+                    # Note: aio-pika doesn't allow modifying headers after receiving, 
+                    # so we rely on the broker's redelivery mechanism
+                    await message.reject(requeue=True)
+                    self.log.info(f"Message {msg_id} requeued (attempt {current_retry}/{self.max_retries})")
+                else:
+                    # Max retries reached or requeue disabled
+                    retry_counts.pop(delivery_tag, None)
+                    if dlx_enable:
+                        await message.reject(requeue=False)
+                        self.log.warning(f"Message {msg_id} sent to dead letter exchange after {current_retry} retries")
+                    else:
+                        await message.reject(requeue=False)
+                        self.log.warning(f"No dead letter exchange for {queue_name} declared, proceeding to drop the message -- Ponder you life choices! byebye")
+                        self.log.info(f"Dropped message content: {message.body}")
+                continue
 
             if not auto_ack:
+                retry_counts.pop(delivery_tag, None)
                 await message.ack()
                 self.log.success(f'Young grasshopper! Message ({msg_id}) from {app_id} received and properly processed.')
 

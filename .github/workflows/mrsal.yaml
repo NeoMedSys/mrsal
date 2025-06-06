@@ -1,5 +1,4 @@
 name: Mrsal Workflow
-
 on:
   push:
     branches:
@@ -10,7 +9,6 @@ on:
     types: [published]
   pull_request:
   workflow_dispatch:
-
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -27,22 +25,19 @@ jobs:
           poetry-version: '1.8.0'
       - name: Conifgure Poetry
         run: |
-          poetry config repositories.neomedsys https://pypi.neomodels.app
+          poetry config repositories.neomedsys https://pypi.neomedsys.dev
           poetry config http-basic.neomedsys ${{ secrets.PYPI_USERNAME }} ${{ secrets.PYPI_PASSWORD }}
       - name: Install depz
         run: |
           poetry install --no-cache --no-root
-          export msg="s/(-)?v[0-9]+\.[0-9]+\.[0-9]+/\1$(poetry version -s)/g"
-          sed -i -E $msg ./README.md
-          sed -i -E 's/(-b)//g' ./README.md
-          sed -i -E 's/(-a)//g' ./README.md
+          export msg="s/release-[0-9]+\.[0-9]+\.[0-9]+(-[ab][0-9]+)?/release-$(poetry version -s)/g"
+          sed -i -E "$msg" ./README.md
       - name: Run tests
         run: |
           rm -rf ./reports/flake8/*.txt
           poetry run nox
       - name: Commit to GH
         uses: stefanzweifel/git-auto-commit-action@v4
-
   build:
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
@@ -58,7 +53,7 @@ jobs:
           poetry-version: '1.8.0'
       - name: Conifgure Poetry
         run: |
-          poetry config repositories.neomedsys https://pypi.neomodels.app
+          poetry config repositories.neomedsys https://pypi.neomedsys.dev
           poetry config http-basic.neomedsys ${{ secrets.PYPI_USERNAME }} ${{ secrets.PYPI_PASSWORD }}
       - name: Install dependencies
         run: |
@@ -67,7 +62,6 @@ jobs:
         run: |
           poetry config pypi-token.pypi ${{ secrets.PYPI_TOKEN }}
           poetry publish --build
-  
   doc_building:
     if: github.event_name == 'push'
     strategy:
@@ -89,16 +83,23 @@ jobs:
           poetry-version: ${{ matrix.poetry-version }}
       - name: Conifgure Poetry
         run: |
-          poetry config repositories.neomedsys https://pypi.neomodels.app
+          poetry config repositories.neomedsys https://pypi.neomedsys.dev
           poetry config http-basic.neomedsys ${{ secrets.PYPI_USERNAME }} ${{ secrets.PYPI_PASSWORD }}
       - name: Install Dependencies
         run: |
           poetry lock --no-update
           poetry install --with dev --no-cache --no-root
+      - name: Run tests and generate reports
+        run: |
+          poetry run nox -s setup tests generate_badges
+      - name: Copy test reports for GitHub Pages
+        run: |
+          mkdir -p ./docs/_build/html/reports
+          cp -r ./reports/ ./docs/_build/html/reports/ || true
       - name: Generate Sphinx Project
         run: |
           mkdir -p docs
-          poetry run sphinx-quickstart -q -p "MrsalAMQP" -a "Jon E Nesvold | Raafat Zahran  | Martin S Rovang" -v "1.0.0" docs
+          poetry run sphinx-quickstart -q -p "MrsalAMQP" -a "Jon E Nesvold | Martin S Rovang" -v "1.0.0" docs
           echo "extensions.extend(['sphinx.ext.autodoc', 'sphinx.ext.napoleon', 'myst_parser'])" >> docs/conf.py
       - name: Generate API Documentation
         run: |
