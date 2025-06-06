@@ -1,8 +1,8 @@
 # MRSAL AMQP
-[![Release](https://img.shields.io/badge/release-1.0.1lue.svg)](https://pypi.org/project/mrsal/) 
+[![Release](https://img.shields.io/badge/release-1.0.1-blue.svg)](https://pypi.org/project/mrsal/) 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%7C3.11%7C3.12-blue.svg)](https://www.python.org/downloads/)
 [![Mrsal Workflow](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml/badge.svg?branch=main)](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml)
-[![Coverage](https://neomedsys.github.io/mrsal/reports/badges/coverage-badge.svg)](https://neomedsys.github.io/mrsal/reports/coverage/htmlcov/)
+[![Coverage](https://github.com/NeoMedSys/mrsal/blob/main/reports/badges/coverage-badge.svg)](https://neomedsys.github.io/mrsal/reports/coverage/htmlcov/)
 
 ## Intro
 Mrsal is a simple to use message broker abstraction on top of [RabbitMQ](https://www.rabbitmq.com/), [aio-pika](https://aio-pika.readthedocs.io/en/latest/) and [Pika](https://pika.readthedocs.io/en/stable/index.html). The goal is to make Mrsal trivial to re-use in all services of a distributed system and to make the use of advanced message queing protocols easy and safe. No more big chunks of repetive code across your services or bespoke solutions to handle dead letters. 
