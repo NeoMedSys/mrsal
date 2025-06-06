@@ -30,8 +30,8 @@ jobs:
       - name: Install depz
         run: |
           poetry install --no-cache --no-root
-          export msg="s/release-[0-9]+\.[0-9]+\.[0-9]+(-[ab][0-9]*)?/release-$(poetry version -s)/g"
-          sed -i -E $msg ./README.md
+          export msg="s/release-[0-9]+\.[0-9]+\.[0-9]+(-[a-z][0-9]*)?/release-$(poetry version -s)/g"
+          sed -i -E "$msg" ./README.md
       - name: Run tests
         run: |
           rm -rf ./reports/flake8/*.txt
