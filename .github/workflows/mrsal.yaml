@@ -34,11 +34,7 @@ jobs:
           sed -i -E "$msg" ./README.md
       - name: Run tests
         run: |
-          # Remove any existing reports
-          rm -rf ./reports/
-          mkdir -p ./reports/ruff
-          # Run nox but handle potential failures
-          poetry run nox || true
+          poetry run nox -s setup tests
       - name: Commit to GH
         uses: stefanzweifel/git-auto-commit-action@v4
   build:
@@ -94,12 +90,8 @@ jobs:
           poetry install --with dev --no-cache --no-root
       - name: Run tests and generate reports
         run: |
-          # Create reports directory structure
-          mkdir -p ./reports/{junit,coverage,ruff,badges}
-          # Run the main tests and coverage
-          poetry run nox -s setup tests
-          # Generate badges for tests and coverage only (skip ruff badge if file doesn't exist)
-          poetry run nox -s generate_badges || echo "Badge generation completed with some warnings"
+          # Run all nox sessions together to maintain proper flow
+          poetry run nox -s setup tests generate_badges
       - name: Copy test reports for GitHub Pages
         run: |
           mkdir -p ./docs/_build/html/reports
