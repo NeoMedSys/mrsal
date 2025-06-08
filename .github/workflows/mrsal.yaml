@@ -110,6 +110,11 @@ jobs:
         run: |
           # Run all nox sessions together to maintain proper flow
           poetry run nox -s setup tests generate_badges
+      - name: Commit coverage badges
+        uses: stefanzweifel/git-auto-commit-action@v4
+        with:
+          commit_message: 'Update coverage badges [skip ci]'
+          file_pattern: 'reports/badges/*.svg'
       - name: Copy test reports for GitHub Pages
         run: |
           mkdir -p ./docs/_build/html/reports
@@ -117,7 +122,7 @@ jobs:
       - name: Generate Sphinx Project
         run: |
           mkdir -p docs
-          poetry run sphinx-quickstart -q -p "MrsalAMQP" -a "Mrsal Contributors" -v "1.0.0" docs
+          poetry run sphinx-quickstart -q -p "MrsalAMQP" -a "MrsalAMQP Contributors" -v "1.0.0" docs
           echo "extensions.extend(['sphinx.ext.autodoc', 'sphinx.ext.napoleon', 'myst_parser'])" >> docs/conf.py
       - name: Generate API Documentation
         run: |
