@@ -7,5 +7,4 @@ mrsal
    basemodels
    config
    exceptions
-   logger
    superclass
