@@ -9,6 +9,7 @@ on:
     types: [published]
   pull_request:
   workflow_dispatch:
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -23,11 +24,7 @@ jobs:
         uses: abatilo/actions-poetry@v2
         with:
           poetry-version: '1.8.0'
-      - name: Conifgure Poetry
-        run: |
-          poetry config repositories.neomedsys https://pypi.neomedsys.dev
-          poetry config http-basic.neomedsys ${{ secrets.PYPI_USERNAME }} ${{ secrets.PYPI_PASSWORD }}
-      - name: Install depz
+      - name: Install dependencies
         run: |
           poetry install --no-cache --no-root
           export msg="s/release-[0-9]+\.[0-9]+\.[0-9]+(-[ab][0-9]+)?/release-$(poetry version -s)/g"
@@ -37,7 +34,32 @@ jobs:
           poetry run nox -s setup tests
       - name: Commit to GH
         uses: stefanzweifel/git-auto-commit-action@v4
-  build:
+
+  publish_to_pypi:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Set up poetry
+        uses: abatilo/actions-poetry@v2
+        with:
+          poetry-version: '1.8.0'
+      - name: Install dependencies
+        run: |
+          poetry install --no-cache --no-root
+      - name: Build and publish to PyPI
+        env:
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: |
+          poetry config pypi-token.pypi $PYPI_TOKEN
+          poetry build
+          poetry publish
+
+  build_release:
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
     steps:
@@ -50,17 +72,17 @@ jobs:
         uses: abatilo/actions-poetry@v2
         with:
           poetry-version: '1.8.0'
-      - name: Conifgure Poetry
-        run: |
-          poetry config repositories.neomedsys https://pypi.neomedsys.dev
-          poetry config http-basic.neomedsys ${{ secrets.PYPI_USERNAME }} ${{ secrets.PYPI_PASSWORD }}
       - name: Install dependencies
         run: |
           poetry install --no-cache --no-root
-      - name: Build and publish
+      - name: Build and publish release
+        env:
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         run: |
-          poetry config pypi-token.pypi ${{ secrets.PYPI_TOKEN }}
-          poetry publish --build
+          poetry config pypi-token.pypi $PYPI_TOKEN
+          poetry build
+          poetry publish
+
   doc_building:
     if: github.event_name == 'push'
     strategy:
@@ -80,10 +102,6 @@ jobs:
         uses: abatilo/actions-poetry@v2
         with:
           poetry-version: ${{ matrix.poetry-version }}
-      - name: Conifgure Poetry
-        run: |
-          poetry config repositories.neomedsys https://pypi.neomedsys.dev
-          poetry config http-basic.neomedsys ${{ secrets.PYPI_USERNAME }} ${{ secrets.PYPI_PASSWORD }}
       - name: Install Dependencies
         run: |
           poetry lock --no-update
@@ -99,7 +117,7 @@ jobs:
       - name: Generate Sphinx Project
         run: |
           mkdir -p docs
-          poetry run sphinx-quickstart -q -p "MrsalAMQP" -a "Jon E Nesvold | Martin S Rovang" -v "1.0.0" docs
+          poetry run sphinx-quickstart -q -p "MrsalAMQP" -a "Mrsal Contributors" -v "1.0.0" docs
           echo "extensions.extend(['sphinx.ext.autodoc', 'sphinx.ext.napoleon', 'myst_parser'])" >> docs/conf.py
       - name: Generate API Documentation
         run: |

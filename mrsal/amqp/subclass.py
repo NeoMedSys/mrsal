@@ -2,6 +2,7 @@ import asyncio
 from mrsal.basemodels import MrsalProtocol
 import pika
 import json
+import logging
 from mrsal.exceptions import MrsalAbortedSetup, MrsalNoAsyncioLoopError
 from logging import WARNING
 from pika.exceptions import (
@@ -17,12 +18,11 @@ from typing import Callable, Type
 from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type, before_sleep_log
 from pydantic import ValidationError
 from pydantic.dataclasses import dataclass
-from mrsal.logger import get_logger
 
 from mrsal.superclass import Mrsal
 from mrsal import config
 
-log = get_logger(__name__, rotate_days=config.LOG_DAYS)
+log = logging.getLogger(__name__)
 
 @dataclass
 class MrsalBlockingAMQP(Mrsal):
@@ -210,7 +210,7 @@ class MrsalBlockingAMQP(Mrsal):
 
                     if not auto_ack and should_process:
                         retry_counts.pop(delivery_tag, None)
-                        self.log.success(f'Message ({msg_id}) from {app_id} received and properly processed -- now dance the funky chicken')
+                        self.log.info(f'Message ({msg_id}) from {app_id} received and properly processed -- now dance the funky chicken')
                         self._channel.basic_ack(delivery_tag=delivery_tag)
 
         except (AMQPConnectionError, ConnectionClosedByBroker, StreamLostError) as e:
@@ -271,7 +271,7 @@ class MrsalBlockingAMQP(Mrsal):
             # Publish the message by serializing it in json dump
             # NOTE! we are not dumping a json anymore here! This allows for more flexibility
             self._channel.basic_publish(exchange=exchange_name, routing_key=routing_key, body=message, properties=prop)
-            self.log.success(f"The message ({message!r}) is published to the exchange {exchange_name} with the routing key {routing_key}")
+            self.log.info(f"The message ({message!r}) is published to the exchange {exchange_name} with the routing key {routing_key}")
 
         except UnroutableError as e:
             self.log.error(f"Producer could not publish message:{message!r} to the exchange {exchange_name} with a routing key {routing_key}: {e}", exc_info=True)
@@ -334,7 +334,7 @@ class MrsalBlockingAMQP(Mrsal):
                         body=protocol.message,
                         properties=prop
                         )
-                self.log.success(f"The message for inbound app {inbound_app_id} with message -- ({protocol.message!r}) is published to the exchange {protocol.exchange_name} with the routing key {protocol.routing_key}. Oh baby baby")
+                self.log.info(f"The message for inbound app {inbound_app_id} with message -- ({protocol.message!r}) is published to the exchange {protocol.exchange_name} with the routing key {protocol.routing_key}. Oh baby baby")
 
             except UnroutableError as e:
                 self.log.error(f"Producer could not publish message:{protocol.message!r} to the exchange {protocol.exchange_name} with a routing key {protocol.routing_key}: {e}", exc_info=True)
@@ -507,5 +507,5 @@ class MrsalAsyncAMQP(Mrsal):
             if not auto_ack:
                 retry_counts.pop(delivery_tag, None)
                 await message.ack()
-                self.log.success(f'Young grasshopper! Message ({msg_id}) from {app_id} received and properly processed.')
+                self.log.info(f'Young grasshopper! Message ({msg_id}) from {app_id} received and properly processed.')
 
