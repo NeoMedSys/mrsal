@@ -57,7 +57,6 @@ class Mrsal:
 			# empty string handling
 			self.tls_dict = {cert: (env_var if env_var != '' else None) for cert, env_var in tls_dict.items()}
 			config.ValidateTLS(**self.tls_dict)
-		self.log = logging.getLogger(__name__)
 
 	def _setup_exchange_and_queue(self, 
 								 exchange_name: str, queue_name: str, exchange_type: str,
@@ -86,10 +85,10 @@ class Mrsal:
 					auto_delete=auto_delete
 				)
 				if self.verbose:
-					self.log.info(f"Dead letter exchange {dlx_name} declared successfully")
+					log.info(f"Dead letter exchange {dlx_name} declared successfully")
 
 			except MrsalSetupError as e:
-				self.log.warning(f"DLX {dlx_name} might already exist or failed to create: {e}")
+				log.warning(f"DLX {dlx_name} might already exist or failed to create: {e}")
 			
 			if queue_args is None:
 				queue_args = {}
@@ -109,7 +108,7 @@ class Mrsal:
 			})
 
 			if self.verbose:
-				self.log.info(f"Queue {queue_name} configured as quorum queue for enhanced reliability")
+				log.info(f"Queue {queue_name} configured as quorum queue for enhanced reliability")
 
 
 		declare_exhange_dict = {
@@ -143,9 +142,9 @@ class Mrsal:
 			self._declare_queue(**declare_queue_dict)
 			self._declare_queue_binding(**declare_queue_binding_dict)
 			self.auto_declare_ok = True
-			self.log.info(f"Exchange {exchange_name} and Queue {queue_name} set up successfully.")
+			log.info(f"Exchange {exchange_name} and Queue {queue_name} set up successfully.")
 		except MrsalSetupError as e:
-			self.log.error(f'Splæt! I failed the declaration setup with {e}', exc_info=True)
+			log.error(f'Splæt! I failed the declaration setup with {e}', exc_info=True)
 			self.auto_declare_ok = False
 
 	async def _async_setup_exchange_and_queue(self, 
@@ -182,10 +181,10 @@ class Mrsal:
 				)
 
 				if self.verbose:
-					self.log.info(f"Dead letter exchange {dlx_name} declared successfully")
+					log.info(f"Dead letter exchange {dlx_name} declared successfully")
 
 			except MrsalSetupError as e:
-				self.log.warning(f"DLX {dlx_name} might already exist or failed to create: {e}")
+				log.warning(f"DLX {dlx_name} might already exist or failed to create: {e}")
 			
 			if queue_args is None:
 				queue_args = {}
@@ -205,7 +204,7 @@ class Mrsal:
 			})
 
 			if self.verbose:
-				self.log.info(f"Queue {queue_name} configured as quorum queue for enhanced reliability")
+				log.info(f"Queue {queue_name} configured as quorum queue for enhanced reliability")
 
 		async_declare_exhange_dict = {
 				'exchange': exchange_name,
@@ -238,12 +237,12 @@ class Mrsal:
 			queue = await self._async_declare_queue(**async_declare_queue_dict)
 			await self._async_declare_queue_binding(queue=queue, exchange=exchange, **async_declare_queue_binding_dict)
 			self.auto_declare_ok = True
-			self.log.info(f"Exchange {exchange_name} and Queue {queue_name} set up successfully.")
+			log.info(f"Exchange {exchange_name} and Queue {queue_name} set up successfully.")
 			if dlx_enable:
-				self.log.info(f"You have a dead letter exhange {dlx_name} for fault tolerance -- use it well young grasshopper!")
+				log.info(f"You have a dead letter exhange {dlx_name} for fault tolerance -- use it well young grasshopper!")
 			return queue
 		except MrsalSetupError as e:
-			self.log.error(f'Splæt! I failed the declaration setup with {e}', exc_info=True)
+			log.error(f'Splæt! I failed the declaration setup with {e}', exc_info=True)
 			self.auto_declare_ok = False
 
 
@@ -277,7 +276,7 @@ class Mrsal:
 								arguments={arguments}
 								"""
 		if self.verbose:
-			self.log.info(f"Declaring exchange with: {exchange_declare_info}")
+			log.info(f"Declaring exchange with: {exchange_declare_info}")
 		try:
 			self._channel.exchange_declare(
 				exchange=exchange, exchange_type=exchange_type,
@@ -288,7 +287,7 @@ class Mrsal:
 		except Exception as e:
 			raise MrsalSetupError(f'Oooopise! I failed declaring the exchange with : {e}')
 		if self.verbose:
-			self.log.info("Exchange declared yo!")
+			log.info("Exchange declared yo!")
 
 	async def _async_declare_exchange(self, 
 									  exchange: str, 
@@ -353,14 +352,14 @@ class Mrsal:
 								arguments={arguments}
 								"""
 		if self.verbose:
-			self.log.info(f"Declaring queue with: {queue_declare_info}")
+			log.info(f"Declaring queue with: {queue_declare_info}")
 
 		try:
 			self._channel.queue_declare(queue=queue, arguments=arguments, durable=durable, exclusive=exclusive, auto_delete=auto_delete, passive=passive)
 		except Exception as e:
 			raise MrsalSetupError(f'Oooopise! I failed declaring the queue with : {e}')
 		if self.verbose:
-			self.log.info(f"Queue declared yo")
+			log.info(f"Queue declared yo")
 
 	async def _async_declare_queue(self, 
 								   queue_name: str, 
@@ -378,7 +377,7 @@ class Mrsal:
 								arguments={arguments}
 								"""
 		if self.verbose:
-			self.log.info(f"Declaring queue with: {queue_declare_info}")
+			log.info(f"Declaring queue with: {queue_declare_info}")
 
 		try:
 			queue_obj = await self._channel.declare_queue(
@@ -409,16 +408,16 @@ class Mrsal:
 		:rtype: `pika.frame.Method` having `method` attribute of type `spec.Queue.BindOk`
 		"""
 		if self.verbose:
-			self.log.info(f"Binding queue to exchange: queue={queue}, exchange={exchange}, routing_key={routing_key}")
+			log.info(f"Binding queue to exchange: queue={queue}, exchange={exchange}, routing_key={routing_key}")
 
 		try:
 			self._channel.queue_bind(exchange=exchange, queue=queue, routing_key=routing_key, arguments=arguments)
 			if self.verbose:
-				self.log.info(f"The queue is bound to exchange successfully: queue={queue}, exchange={exchange}, routing_key={routing_key}")
+				log.info(f"The queue is bound to exchange successfully: queue={queue}, exchange={exchange}, routing_key={routing_key}")
 		except Exception as e:
 			raise MrsalSetupError(f'I failed binding the queue with : {e}')
 		if self.verbose:
-			self.log.info(f"Queue bound yo")
+			log.info(f"Queue bound yo")
 
 	async def _async_declare_queue_binding(self, 
 										   queue: AioQueue, 
@@ -433,7 +432,7 @@ class Mrsal:
 						arguments={arguments}
 						"""
 		if self.verbose:
-			self.log.info(f"Binding queue to exchange with: {binding_info}")
+			log.info(f"Binding queue to exchange with: {binding_info}")
 
 		try:
 			await queue.bind(exchange, routing_key=routing_key, arguments=arguments)
@@ -457,7 +456,7 @@ class Mrsal:
 
 	def get_ssl_context(self, async_conn: bool = True) -> SSLOptions | SSLContext | None:
 		if self.ssl:
-			self.log.info("Setting up TLS connection")
+			log.info("Setting up TLS connection")
 			context = self._ssl_setup()
 			# use_blocking is the same as sync
 			if not async_conn:

@@ -94,6 +94,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v3
+      - name: Generate access token
+        uses: qoomon/actions--access-token@v2
+        id: access-token
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Setup python
         uses: actions/setup-python@v4
         with:
@@ -115,6 +120,7 @@ jobs:
         with:
           commit_message: 'Update coverage badges [skip ci]'
           file_pattern: 'reports/badges/*.svg'
+          token: ${{ steps.access-token.outputs.token }}
       - name: Copy test reports for GitHub Pages
         run: |
           mkdir -p ./docs/_build/html/reports

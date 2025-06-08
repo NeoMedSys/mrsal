@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import Mock, MagicMock, patch, AsyncMock
 from mrsal.amqp.subclass import MrsalBlockingAMQP, MrsalAsyncAMQP
+import mrsal.amqp.subclass
 from tests.conftest import SETUP_ARGS, ExpectedPayload
 
 
@@ -187,7 +188,7 @@ class TestRetryMechanism:
 			(mock_method_frame, mock_properties, invalid_body)
 		] * 10
 		
-		with patch.object(mock_consumer.log, 'warning') as mock_log_warning:
+		with patch.object(mrsal.amqp.subclass.log, 'warning') as mock_log_warning:
 			mock_consumer.start_consumer(
 				queue_name="test_queue",
 				callback=Mock(),

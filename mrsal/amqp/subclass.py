@@ -55,7 +55,7 @@ class MrsalBlockingAMQP(Mrsal):
                             ssl={self.ssl}
                             """
         if self.verbose:
-            self.log.info(f"Establishing connection to RabbitMQ on {connection_info}")
+            log.info(f"Establishing connection to RabbitMQ on {connection_info}")
         credentials = pika.PlainCredentials(*self.credentials)
         try:
             self._connection = pika.BlockingConnection(
@@ -75,12 +75,12 @@ class MrsalBlockingAMQP(Mrsal):
             # In production you will want to test with different prefetch values to find which one provides the best performance and usability for your solution.
             # use a high number of prefecth if you think the pods with Mrsal installed can handle it. A prefetch 4 will mean up to 4 async runs before ack is required
             self._channel.basic_qos(prefetch_count=self.prefetch_count)
-            self.log.info(f"Boom! Connection established with RabbitMQ on {connection_info}")
+            log.info(f"Boom! Connection established with RabbitMQ on {connection_info}")
         except (AMQPConnectionError, ChannelClosedByBroker, ConnectionClosedByBroker, StreamLostError) as e:
-            self.log.error(f"I tried to connect with the RabbitMQ server but failed with: {e}")
+            log.error(f"I tried to connect with the RabbitMQ server but failed with: {e}")
             raise
         except Exception as e:
-            self.log.error(f"Unexpected error caught: {e}")
+            log.error(f"Unexpected error caught: {e}")
 
     @retry(
         retry=retry_if_exception_type((
@@ -140,7 +140,7 @@ class MrsalBlockingAMQP(Mrsal):
             if not self.auto_declare_ok:
                 raise MrsalAbortedSetup('Auto declaration for the connection setup failed and is aborted')
 
-        self.log.info(f"Straigh out of the swamps -- consumer boi listening on queue: {queue_name} to the exchange {exchange_name}. Waiting for messages...")
+        log.info(f"Straigh out of the swamps -- consumer boi listening on queue: {queue_name} to the exchange {exchange_name}. Waiting for messages...")
 
         try:
             for method_frame, properties, body in self._channel.consume(
@@ -152,7 +152,7 @@ class MrsalBlockingAMQP(Mrsal):
                     delivery_tag = method_frame.delivery_tag
 
                     if self.verbose:
-                        self.log.info(
+                        log.info(
                                 f"""
                                 Message received with:
                                 - Method Frame: {method_frame}
@@ -166,7 +166,7 @@ class MrsalBlockingAMQP(Mrsal):
                                 """
                                 )
                     if auto_ack:
-                        self.log.info(f'I successfully received a message with AutoAck from: {app_id} with messageID: {msg_id}')
+                        log.info(f'I successfully received a message with AutoAck from: {app_id} with messageID: {msg_id}')
 
                     current_retry = retry_counts.get(delivery_tag, 0)
                     should_process = True
@@ -175,7 +175,7 @@ class MrsalBlockingAMQP(Mrsal):
                         try:
                             self.validate_payload(body, payload_model)
                         except (ValidationError, json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
-                            self.log.error(f"Oh lordy lord, payload validation failed for your specific model requirements: {e}")
+                            log.error(f"Oh lordy lord, payload validation failed for your specific model requirements: {e}")
                             should_process = False
 
                     if callback and should_process:
@@ -185,8 +185,8 @@ class MrsalBlockingAMQP(Mrsal):
                             else:
                                 callback(method_frame, properties, body)
                         except Exception as e:
-                            self.log.error(f"Callback method failure: {e}")
-                            self.log.error(f"Oh lordy lord message {msg_id} from {app_id} failed while running callback")
+                            log.error(f"Callback method failure: {e}")
+                            log.error(f"Oh lordy lord message {msg_id} from {app_id} failed while running callback")
                             should_process = False
 
                     if not should_process and not auto_ack:
@@ -194,30 +194,30 @@ class MrsalBlockingAMQP(Mrsal):
                             # Increment retry count and requeue
                             retry_counts[delivery_tag] = current_retry + 1
                             self._channel.basic_nack(delivery_tag=delivery_tag, requeue=True)
-                            self.log.info(f"Message {msg_id} requeued (attempt {current_retry + 1}/{self.max_retries})")
+                            log.info(f"Message {msg_id} requeued (attempt {current_retry + 1}/{self.max_retries})")
                         else:
                             # Max retries reached or requeue disabled
                             retry_counts.pop(delivery_tag, None)
                             if dlx_enable:
                                 self._channel.basic_nack(delivery_tag=delivery_tag, requeue=False)
-                                self.log.warning(f"Message {msg_id} sent to dead letter exchange after {current_retry} retries")
-                                self.log.info(f"Its the fault of polictial ideology imposing! Strangle an influencer if it makes you feel better!")
+                                log.warning(f"Message {msg_id} sent to dead letter exchange after {current_retry} retries")
+                                log.info(f"Its the fault of polictial ideology imposing! Strangle an influencer if it makes you feel better!")
                             else:
                                 self._channel.basic_nack(delivery_tag=delivery_tag, requeue=False)
-                                self.log.warning(f"No dead letter exchange declared for {queue_name}, proceeding to drop the message -- reflect on your life choices! byebye")
-                                self.log.info(f"Dropped message content: {body}")
+                                log.warning(f"No dead letter exchange declared for {queue_name}, proceeding to drop the message -- reflect on your life choices! byebye")
+                                log.info(f"Dropped message content: {body}")
                         continue                   
 
                     if not auto_ack and should_process:
                         retry_counts.pop(delivery_tag, None)
-                        self.log.info(f'Message ({msg_id}) from {app_id} received and properly processed -- now dance the funky chicken')
+                        log.info(f'Message ({msg_id}) from {app_id} received and properly processed -- now dance the funky chicken')
                         self._channel.basic_ack(delivery_tag=delivery_tag)
 
         except (AMQPConnectionError, ConnectionClosedByBroker, StreamLostError) as e:
             log.error(f"Ooooooopsie! I caught a connection error while consuming: {e}")
             raise
         except Exception as e:
-            self.log.error(f'Oh lordy lord! I failed consuming ze messaj with: {e}')
+            log.error(f'Oh lordy lord! I failed consuming ze messaj with: {e}')
 
     @retry(
         retry=retry_if_exception_type((
@@ -271,16 +271,16 @@ class MrsalBlockingAMQP(Mrsal):
             # Publish the message by serializing it in json dump
             # NOTE! we are not dumping a json anymore here! This allows for more flexibility
             self._channel.basic_publish(exchange=exchange_name, routing_key=routing_key, body=message, properties=prop)
-            self.log.info(f"The message ({message!r}) is published to the exchange {exchange_name} with the routing key {routing_key}")
+            log.info(f"The message ({message!r}) is published to the exchange {exchange_name} with the routing key {routing_key}")
 
         except UnroutableError as e:
-            self.log.error(f"Producer could not publish message:{message!r} to the exchange {exchange_name} with a routing key {routing_key}: {e}", exc_info=True)
+            log.error(f"Producer could not publish message:{message!r} to the exchange {exchange_name} with a routing key {routing_key}: {e}", exc_info=True)
             raise
         except NackError as e:
-            self.log.error(f"Message NACKed by broker: {e}")
+            log.error(f"Message NACKed by broker: {e}")
             raise
         except Exception as e:
-            self.log.error(f"Unexpected error while publishing message: {e}")
+            log.error(f"Unexpected error while publishing message: {e}")
 
     @retry(
         retry=retry_if_exception_type((
@@ -334,23 +334,23 @@ class MrsalBlockingAMQP(Mrsal):
                         body=protocol.message,
                         properties=prop
                         )
-                self.log.info(f"The message for inbound app {inbound_app_id} with message -- ({protocol.message!r}) is published to the exchange {protocol.exchange_name} with the routing key {protocol.routing_key}. Oh baby baby")
+                log.info(f"The message for inbound app {inbound_app_id} with message -- ({protocol.message!r}) is published to the exchange {protocol.exchange_name} with the routing key {protocol.routing_key}. Oh baby baby")
 
             except UnroutableError as e:
-                self.log.error(f"Producer could not publish message:{protocol.message!r} to the exchange {protocol.exchange_name} with a routing key {protocol.routing_key}: {e}", exc_info=True)
+                log.error(f"Producer could not publish message:{protocol.message!r} to the exchange {protocol.exchange_name} with a routing key {protocol.routing_key}: {e}", exc_info=True)
                 raise
             except NackError as e:
-                self.log.error(f"Message NACKed by broker: {e}")
+                log.error(f"Message NACKed by broker: {e}")
                 raise
             except Exception as e:
-                self.log.error(f"Unexpected error while publishing message: {e}")
+                log.error(f"Unexpected error while publishing message: {e}")
 
 
 class MrsalAsyncAMQP(Mrsal):
     """Handles asynchronous connection with RabbitMQ using aio-pika."""
     async def setup_async_connection(self):
         """Setup an asynchronous connection to RabbitMQ using aio-pika."""
-        self.log.info(f"Establishing async connection to RabbitMQ on {self.host}:{self.port}")
+        log.info(f"Establishing async connection to RabbitMQ on {self.host}:{self.port}")
         try:
             self._connection = await connect_robust(
                 host=self.host,
@@ -364,12 +364,12 @@ class MrsalAsyncAMQP(Mrsal):
             )
             self._channel = await self._connection.channel()
             await self._channel.set_qos(prefetch_count=self.prefetch_count)
-            self.log.info("Async connection established successfully.")
+            log.info("Async connection established successfully.")
         except (AMQPConnectionError, StreamLostError, ChannelClosedByBroker, ConnectionClosedByBroker) as e:
-            self.log.error(f"Error establishing async connection: {e}", exc_info=True)
+            log.error(f"Error establishing async connection: {e}", exc_info=True)
             raise
         except Exception as e:
-            self.log.error(f'Oh my lordy lord! I caugth an unexpected exception while trying to connect: {e}', exc_info=True)
+            log.error(f'Oh my lordy lord! I caugth an unexpected exception while trying to connect: {e}', exc_info=True)
 
     @retry(
         retry=retry_if_exception_type((
@@ -434,7 +434,7 @@ class MrsalAsyncAMQP(Mrsal):
                     await self._connection.close()
                 raise MrsalAbortedSetup('Auto declaration failed during setup.')
 
-        self.log.info(f"Straight out of the swamps -- Consumer boi listening on queue: {queue_name}, exchange: {exchange_name}")
+        log.info(f"Straight out of the swamps -- Consumer boi listening on queue: {queue_name}, exchange: {exchange_name}")
 
         # async with queue.iterator() as queue_iter:
         async for message in queue.iterator():
@@ -450,7 +450,7 @@ class MrsalAsyncAMQP(Mrsal):
             properties = config.AioPikaAttributes(app_id=app_id, message_id=msg_id)
 
             if self.verbose:
-                self.log.info(f"""
+                log.info(f"""
                             Message received with:
                             - Redelivery: {message.redelivered}
                             - Exchange: {message.exchange}
@@ -462,7 +462,7 @@ class MrsalAsyncAMQP(Mrsal):
 
             if auto_ack:
                 await message.ack()
-                self.log.info(f'I successfully received a message from: {app_id} with messageID: {msg_id}')
+                log.info(f'I successfully received a message from: {app_id} with messageID: {msg_id}')
 
             current_retry = retry_counts.get(delivery_tag, 0)
             should_process = True
@@ -471,7 +471,7 @@ class MrsalAsyncAMQP(Mrsal):
                 try:
                     self.validate_payload(message.body, payload_model)
                 except (ValidationError, json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
-                    self.log.error(f"Payload validation failed: {e}", exc_info=True)
+                    log.error(f"Payload validation failed: {e}", exc_info=True)
                     should_process = False
 
             if callback and should_process:
@@ -481,7 +481,7 @@ class MrsalAsyncAMQP(Mrsal):
                     else:
                         await callback(message, properties, message.body)
                 except Exception as e:
-                    self.log.error(f"Splæt! Error processing message with callback: {e}", exc_info=True)
+                    log.error(f"Splæt! Error processing message with callback: {e}", exc_info=True)
                     should_process = False
 
             if not should_process and not auto_ack:
@@ -491,21 +491,21 @@ class MrsalAsyncAMQP(Mrsal):
                     # Note: aio-pika doesn't allow modifying headers after receiving, 
                     # so we rely on the broker's redelivery mechanism
                     await message.reject(requeue=True)
-                    self.log.info(f"Message {msg_id} requeued (attempt {current_retry}/{self.max_retries})")
+                    log.info(f"Message {msg_id} requeued (attempt {current_retry}/{self.max_retries})")
                 else:
                     # Max retries reached or requeue disabled
                     retry_counts.pop(delivery_tag, None)
                     if dlx_enable:
                         await message.reject(requeue=False)
-                        self.log.warning(f"Message {msg_id} sent to dead letter exchange after {current_retry} retries")
+                        log.warning(f"Message {msg_id} sent to dead letter exchange after {current_retry} retries")
                     else:
                         await message.reject(requeue=False)
-                        self.log.warning(f"No dead letter exchange for {queue_name} declared, proceeding to drop the message -- Ponder you life choices! byebye")
-                        self.log.info(f"Dropped message content: {message.body}")
+                        log.warning(f"No dead letter exchange for {queue_name} declared, proceeding to drop the message -- Ponder you life choices! byebye")
+                        log.info(f"Dropped message content: {message.body}")
                 continue
 
             if not auto_ack:
                 retry_counts.pop(delivery_tag, None)
                 await message.ack()
-                self.log.info(f'Young grasshopper! Message ({msg_id}) from {app_id} received and properly processed.')
+                log.info(f'Young grasshopper! Message ({msg_id}) from {app_id} received and properly processed.')
 
