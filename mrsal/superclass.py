@@ -2,20 +2,20 @@
 import os
 import ssl
 import pika
+import logging
 from ssl import SSLContext
 from typing import Any, Type
-from mrsal.exceptions import MrsalAbortedSetup, MrsalSetupError
 from pika.connection import SSLOptions
 from aio_pika import ExchangeType as AioExchangeType, Queue as AioQueue, Exchange as AioExchange
 from pydantic.dataclasses import dataclass
-from mrsal.logger import get_logger
 
 from pydantic.deprecated.tools import json
 
 # internal
 from mrsal import config
+from mrsal.exceptions import MrsalAbortedSetup, MrsalSetupError
 
-log = get_logger(__name__, rotate_days=config.LOG_DAYS)
+log = logging.getLogger(__name__)
 
 @dataclass
 class Mrsal:
@@ -57,7 +57,7 @@ class Mrsal:
 			# empty string handling
 			self.tls_dict = {cert: (env_var if env_var != '' else None) for cert, env_var in tls_dict.items()}
 			config.ValidateTLS(**self.tls_dict)
-		self.log = get_logger(__name__, rotate_days=config.LOG_DAYS)
+		self.log = logging.getLogger(__name__)
 
 	def _setup_exchange_and_queue(self, 
 								 exchange_name: str, queue_name: str, exchange_type: str,
@@ -143,7 +143,7 @@ class Mrsal:
 			self._declare_queue(**declare_queue_dict)
 			self._declare_queue_binding(**declare_queue_binding_dict)
 			self.auto_declare_ok = True
-			self.log.success(f"Exchange {exchange_name} and Queue {queue_name} set up successfully.")
+			self.log.info(f"Exchange {exchange_name} and Queue {queue_name} set up successfully.")
 		except MrsalSetupError as e:
 			self.log.error(f'Splæt! I failed the declaration setup with {e}', exc_info=True)
 			self.auto_declare_ok = False
@@ -238,9 +238,9 @@ class Mrsal:
 			queue = await self._async_declare_queue(**async_declare_queue_dict)
 			await self._async_declare_queue_binding(queue=queue, exchange=exchange, **async_declare_queue_binding_dict)
 			self.auto_declare_ok = True
-			self.log.success(f"Exchange {exchange_name} and Queue {queue_name} set up successfully.")
+			self.log.info(f"Exchange {exchange_name} and Queue {queue_name} set up successfully.")
 			if dlx_enable:
-				self.log.success(f"You have a dead letter exhange {dlx_name} for fault tolerance -- use it well young grasshopper!")
+				self.log.info(f"You have a dead letter exhange {dlx_name} for fault tolerance -- use it well young grasshopper!")
 			return queue
 		except MrsalSetupError as e:
 			self.log.error(f'Splæt! I failed the declaration setup with {e}', exc_info=True)
@@ -288,7 +288,7 @@ class Mrsal:
 		except Exception as e:
 			raise MrsalSetupError(f'Oooopise! I failed declaring the exchange with : {e}')
 		if self.verbose:
-			self.log.success("Exchange declared yo!")
+			self.log.info("Exchange declared yo!")
 
 	async def _async_declare_exchange(self, 
 									  exchange: str, 
