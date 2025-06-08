@@ -112,19 +112,8 @@ jobs:
   doc_building:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      id-token: write
     steps:
       - uses: actions/checkout@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Generate access token
-        uses: qoomon/actions--access-token@v3
-        id: access-token
-        with:
-          permissions: |
-            contents: write
       - name: Setup python
         uses: actions/setup-python@v4
         with:
@@ -141,13 +130,7 @@ jobs:
         run: |
           # Run all nox sessions together to maintain proper flow
           poetry run nox -s setup tests generate_badges
-      - name: Commit coverage badges
-        uses: stefanzweifel/git-auto-commit-action@v4
-        with:
-          commit_message: 'Update coverage badges [skip ci]'
-          file_pattern: 'reports/badges/*.svg'
-          token: ${{ steps.access-token.outputs.token }}
-      - name: Copy test reports for GitHub Pages
+      - name: Copy test reports and badges for GitHub Pages
         run: |
           mkdir -p ./docs/_build/html/reports
           cp -r ./reports/ ./docs/_build/html/reports/ || true
