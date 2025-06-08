@@ -132,8 +132,8 @@ jobs:
           poetry run nox -s setup tests generate_badges
       - name: Copy test reports and badges for GitHub Pages
         run: |
-          mkdir -p ./docs/_build/html/reports
-          cp -r ./reports/ ./docs/_build/html/reports/ || true
+          mkdir -p ./docs/_build/html/
+          cp -r ./reports ./docs/_build/html/ || true
       - name: Generate Sphinx Project
         run: |
           mkdir -p docs
