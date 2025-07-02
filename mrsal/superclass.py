@@ -1,4 +1,4 @@
-# external
+ # external
 import os
 import ssl
 import pika
@@ -43,7 +43,7 @@ class Mrsal:
 	prefetch_count: int = 5
 	heartbeat: int = 60  # sec
 	dlx_enable: bool = True
-	dlx_exhange_name = None
+	dlx_exchange_name = None
 	max_retries: int = 3
 	use_quorum_queues: bool = True
 	_connection = None
@@ -558,7 +558,7 @@ class Mrsal:
 
 		return headers
 
-	def _handle_dlx_with_retry_cycle(
+	def _handle_dlx_with_retry_cycle_sync(
 			self, method_frame, properties, body, processing_error: str,
 			original_exchange: str, original_routing_key: str,
 			enable_retry_cycles: bool, retry_cycle_interval: int,
@@ -593,6 +593,50 @@ class Mrsal:
 
 		# Call subclass-specific publish method
 		self._publish_to_dlx(dlx_name, dlx_routing, body, dlx_properties)
+
+		# Log result
+		if should_cycle:
+			log.info(f"Message sent to DLX for retry cycle {retry_info['cycle_count'] + 1} "
+					f"(next retry in {retry_cycle_interval}m)")
+		else:
+			log.error(f"Message permanently failed after {retry_info['cycle_count']} cycles "
+					 f"- staying in DLX for manual replay")
+
+	async def _handle_dlx_with_retry_cycle_async(
+			self, message, properties, processing_error: str,
+			original_exchange: str, original_routing_key: str,
+			enable_retry_cycles: bool, retry_cycle_interval: int,
+            max_retry_time_limit: int, dlx_exchange_name: str | None):
+		"""Base method for DLX handling with retry cycles."""
+		# Get retry info
+		retry_info = self._get_retry_cycle_info(properties)
+		should_cycle = self._should_continue_retry_cycles(retry_info, enable_retry_cycles, max_retry_time_limit)
+
+		# Get DLX info
+		dlx_name = dlx_exchange_name or f"{original_exchange}.dlx"
+		dlx_routing = original_routing_key
+
+		# Create enhanced headers
+		original_headers = getattr(properties, 'headers', {}) or {}
+		enhanced_headers = self._create_retry_cycle_headers(
+			original_headers, retry_info['cycle_count'], retry_info['first_failure'],
+			processing_error, should_cycle, original_exchange, original_routing_key
+		)
+
+		# Create properties for DLX message
+		dlx_properties = {
+			'headers': enhanced_headers,
+			'delivery_mode': 2,  # Persistent
+			'content_type': getattr(properties, 'content_type', 'application/json')
+		}
+
+		# Set TTL if cycling
+		if should_cycle:
+			ttl_ms = retry_cycle_interval * 60 * 1000
+			dlx_properties['expiration'] = str(ttl_ms)
+
+		# Call subclass-specific publish method
+		await self._publish_to_dlx(dlx_name, dlx_routing, message.body, dlx_properties)
 
 		# Log result
 		if should_cycle:

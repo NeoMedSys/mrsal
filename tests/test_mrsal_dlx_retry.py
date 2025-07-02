@@ -1,10 +1,8 @@
 import pytest
 from unittest.mock import Mock, MagicMock, AsyncMock, patch
 from pydantic.dataclasses import dataclass
-from pydantic import ValidationError
 
 from mrsal.amqp.subclass import MrsalBlockingAMQP, MrsalAsyncAMQP
-from mrsal.exceptions import MrsalAbortedSetup
 
 
 @dataclass
