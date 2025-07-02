@@ -43,6 +43,7 @@ class Mrsal:
 	prefetch_count: int = 5
 	heartbeat: int = 60  # sec
 	dlx_enable: bool = True
+	dlx_exhange_name = None
 	max_retries: int = 3
 	use_quorum_queues: bool = True
 	_connection = None
@@ -73,7 +74,7 @@ class Mrsal:
 
 
 		if dlx_enable:
-			dlx_name = dlx_exchange_name or f"{queue_name}.dlx"
+			dlx_name = dlx_exchange_name or f"{exchange_name}.dlx"
 			dlx_routing = dlx_routing_key or routing_key
 			try:
 				self._declare_exchange(
@@ -167,7 +168,7 @@ class Mrsal:
 			raise MrsalAbortedSetup("Oh my Oh my! Connection not found when trying to run the setup!")
 
 		if dlx_enable:
-			dlx_name = dlx_exchange_name or f"{queue_name}.dlx"
+			dlx_name = dlx_exchange_name or f"{exchange_name}.dlx"
 			dlx_routing = dlx_routing_key or routing_key
 
 			try:
@@ -557,17 +558,18 @@ class Mrsal:
 
 		return headers
 
-	def _handle_dlx_with_retry_cycle(self, method_frame, properties, body, processing_error: str,
-								   original_exchange: str, original_routing_key: str,
-								   enable_retry_cycles: bool, retry_cycle_interval: int,
-								   max_retry_time_limit: int):
+	def _handle_dlx_with_retry_cycle(
+			self, method_frame, properties, body, processing_error: str,
+			original_exchange: str, original_routing_key: str,
+			enable_retry_cycles: bool, retry_cycle_interval: int,
+            max_retry_time_limit: int, dlx_exchange_name: str | None):
 		"""Base method for DLX handling with retry cycles."""
 		# Get retry info
 		retry_info = self._get_retry_cycle_info(properties)
 		should_cycle = self._should_continue_retry_cycles(retry_info, enable_retry_cycles, max_retry_time_limit)
 
 		# Get DLX info
-		dlx_name = f"{method_frame.routing_key}.dlx"
+		dlx_name = dlx_exchange_name or f"{original_exchange}.dlx"
 		dlx_routing = original_routing_key
 
 		# Create enhanced headers
