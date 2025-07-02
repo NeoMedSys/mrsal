@@ -211,7 +211,7 @@ class MrsalBlockingAMQP(Mrsal):
 								self._publish_to_dlx_with_retry_cycle(
 									method_frame, properties, body, "Callback processing failed", 
 									exchange_name, routing_key, enable_retry_cycles, 
-									retry_cycle_interval, max_retry_time_limit
+									retry_cycle_interval, max_retry_time_limit, dlx_exchange_name
 								)
 							elif dlx_enable:
 								# Original DLX behavior  
@@ -361,17 +361,26 @@ class MrsalBlockingAMQP(Mrsal):
 			except Exception as e:
 				log.error(f"Unexpected error while publishing message: {e}")
 
-	def _publish_to_dlx_with_retry_cycle(self, method_frame, properties, body, processing_error: str,
-										original_exchange: str, original_routing_key: str,
-										enable_retry_cycles: bool, retry_cycle_interval: int,
-										max_retry_time_limit: int):
+	def _publish_to_dlx_with_retry_cycle(
+			self,
+			method_frame, properties, body, processing_error: str,
+			original_exchange: str, original_routing_key: str,
+			enable_retry_cycles: bool, retry_cycle_interval: int,
+			max_retry_time_limit: int, dlx_exchange_name: str | None):
 		"""Publish message to DLX with retry cycle headers."""
 		try:
 			# Use common logic from superclass
-			self._handle_dlx_with_retry_cycle(
-				method_frame, properties, body, processing_error,
-				original_exchange, original_routing_key,
-				enable_retry_cycles, retry_cycle_interval, max_retry_time_limit
+			self._handle_dlx_with_retry_cycle_sync(
+				method_frame=method_frame,
+				properties=properties,
+				body=body,
+				processing_error=processing_error,
+				original_exchange=original_exchange,
+				original_routing_key=original_routing_key,
+				enable_retry_cycles=enable_retry_cycles,
+				retry_cycle_interval=retry_cycle_interval,
+				max_retry_time_limit=max_retry_time_limit,
+				dlx_exchange_name=dlx_exchange_name
 			)
 			
 			# Acknowledge original message
@@ -390,7 +399,7 @@ class MrsalBlockingAMQP(Mrsal):
 			content_type=properties.get('content_type', 'application/json'),
 			expiration=properties.get('expiration')
 		)
-		
+
 		self._channel.basic_publish(
 			exchange=dlx_exchange,
 			routing_key=routing_key,
@@ -561,7 +570,7 @@ class MrsalAsyncAMQP(Mrsal):
 						await self._async_publish_to_dlx_with_retry_cycle(
 							message, properties, "Callback processing failed",
 							exchange_name, routing_key, enable_retry_cycles,
-							retry_cycle_interval, max_retry_time_limit
+							retry_cycle_interval, max_retry_time_limit, dlx_exchange_name
 						)
 					elif dlx_enable:
 						# Original DLX behavior
@@ -581,14 +590,20 @@ class MrsalAsyncAMQP(Mrsal):
 	async def _async_publish_to_dlx_with_retry_cycle(self, message, properties, processing_error: str,
 												   original_exchange: str, original_routing_key: str,
 												   enable_retry_cycles: bool, retry_cycle_interval: int,
-												   max_retry_time_limit: int):
+												  max_retry_time_limit: int, dlx_exchange_name: str | None):
 		"""Async publish message to DLX with retry cycle headers."""
 		try:
 			# Use common logic from superclass
-			self._handle_dlx_with_retry_cycle(
-				message, properties, message.body, processing_error,
-				original_exchange, original_routing_key,
-				enable_retry_cycles, retry_cycle_interval, max_retry_time_limit
+			await self._handle_dlx_with_retry_cycle_async(
+				message=message,
+				properties=properties,
+				processing_error=processing_error,
+				original_exchange=original_exchange,
+				original_routing_key=original_routing_key,
+				enable_retry_cycles=enable_retry_cycles,
+				retry_cycle_interval=retry_cycle_interval,
+				max_retry_time_limit=max_retry_time_limit,
+				dlx_exchange_name=dlx_exchange_name
 			)
 			
 			# Acknowledge original message
