@@ -1,5 +1,5 @@
 # MRSAL AMQP
-[![Release](https://img.shields.io/badge/release-2.0.1-blue.svg)](https://pypi.org/project/mrsal/) 
+[![Release](https://img.shields.io/badge/release-2.1.0-blue.svg)](https://pypi.org/project/mrsal/) 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%7C3.11%7C3.12-blue.svg)](https://www.python.org/downloads/)
 [![Mrsal Workflow](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml/badge.svg?branch=main)](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml)
 [![Coverage](https://neomedsys.github.io/mrsal/reports/badges/coverage-badge.svg)](https://neomedsys.github.io/mrsal/reports/coverage/htmlcov/)
