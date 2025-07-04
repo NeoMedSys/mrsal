@@ -1,12 +1,28 @@
 [tool.poetry]
-authors = ["Jon E. Nesvold <jnesvold@pm.me>"]
-description = "Mrsal is a simple to use message broker abstraction on top of RabbitMQ and Pika."
-keywords = ["message broker", "RabbitMQ", "Pika", "Mrsal"]
-license = ""
-maintainers = ["Jon E Nesvold <jnesvold@pm.me>"]
+authors = ["Jon E. Nesvold <jnesvold@neomedsys.io>"]
+description = "Production-ready AMQP message broker abstraction with advanced retry logic, dead letter exchanges, and high availability features."
+keywords = ["message broker", "RabbitMQ", "Pika", "Mrsal", "AMQP", "async", "dead letter exchange"]
+license = "GPL-3.0-or-later"
+maintainers = ["Jon E Nesvold <jnesvold@neomedsys.io>"]
 name = "mrsal"
 readme = "README.md"
-version = "2.0.2"
+version = "2.1.0"
+homepage = "https://github.com/NeoMedSys/mrsal"
+repository = "https://github.com/NeoMedSys/mrsal"
+documentation = "https://neomedsys.github.io/mrsal/"
+
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Networking",
+    "Topic :: Communications",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11", 
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: POSIX :: Linux"
+]
 
 [tool.poetry.dependencies]
 colorlog = "^6.7.0"
@@ -29,8 +45,3 @@ pytest-asyncio = "^0.24.0"
 [build-system]
 build-backend = "poetry.core.masonry.api"
 requires = ["poetry-core>=1.0.0"]
-
-[[tool.poetry.source]]
-name = "neomedsys"
-url = "https://pypi.neomedsys.dev/simple"
-priority = "supplemental"

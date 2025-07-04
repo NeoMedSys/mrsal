@@ -114,14 +114,39 @@ class MrsalBlockingAMQP(Mrsal):
 					 retry_cycle_interval: int = 10,		 # Minutes between cycles
 					 max_retry_time_limit: int = 60,		 # Minutes total before permanent DLX
 					 immediate_retry_delay: int = 4,		 # Seconds between immediate retries
+					 max_queue_length: int | None = None,
+					 max_queue_length_bytes: int | None = None,
+					 queue_overflow: str | None = None,
+					 single_active_consumer: bool | None = None,
+					 lazy_queue: bool | None = None,
 					 ) -> None:
 		"""
 		Start the consumer using blocking setup.
-		:param queue: The queue to consume from.
-		:param auto_ack: If True, messages are automatically acknowledged.
-		:param inactivity_timeout: Timeout for inactivity in the consumer loop.
-		:param callback: The callback function to process messages.
-		:param callback_args: Optional arguments to pass to the callback.
+		:param str queue_name: The queue to consume from
+		:param Callable callback: The callback function to process messages
+		:param dict callback_args: Optional arguments to pass to the callback
+		:param bool auto_ack: If True, messages are automatically acknowledged
+		:param int inactivity_timeout: Timeout for inactivity in the consumer loop
+		:param bool auto_declare: If True, will declare exchange/queue before consuming
+		:param bool passive: If True, only check if exchange/queue exists (False for consumers)
+		:param str exchange_name: Exchange name for auto_declare
+		:param str exchange_type: Exchange type for auto_declare
+		:param str routing_key: Routing key for auto_declare
+		:param Type payload_model: Pydantic model for payload validation
+		:param bool requeue: Whether to requeue failed messages
+		:param bool dlx_enable: Enable dead letter exchange
+		:param str dlx_exchange_name: Custom DLX exchange name
+		:param str dlx_routing_key: Custom DLX routing key
+		:param bool use_quorum_queues: Use quorum queues for durability
+		:param bool enable_retry_cycles: Enable DLX retry cycles
+		:param int retry_cycle_interval: Minutes between retry cycles
+		:param int max_retry_time_limit: Minutes total before permanent DLX
+		:param int immediate_retry_delay: Seconds between immediate retries
+		:param int max_queue_length: Maximum number of messages in queue
+		:param int max_queue_length_bytes: Maximum queue size in bytes
+		:param str queue_overflow: "drop-head" or "reject-publish"
+		:param bool single_active_consumer: Only one consumer processes at a time
+		:param bool lazy_queue: Store messages on disk to save memory
 		"""
 		# Connect and start the I/O loop
 		self.setup_blocking_connection()
@@ -139,13 +164,28 @@ class MrsalBlockingAMQP(Mrsal):
 					dlx_enable=dlx_enable,
 					dlx_exchange_name=dlx_exchange_name,
 					dlx_routing_key=dlx_routing_key,
-					use_quorum_queues=use_quorum_queues
+					use_quorum_queues=use_quorum_queues,
+					max_queue_length=max_queue_length,
+					max_queue_length_bytes=max_queue_length_bytes,
+					queue_overflow=queue_overflow,
+					single_active_consumer=single_active_consumer,
+					lazy_queue=lazy_queue
 					)
 
 			if not self.auto_declare_ok:
 				raise MrsalAbortedSetup('Auto declaration for the connection setup failed and is aborted')
 
-		log.info(f"Straigh out of the swamps -- consumer boi listening on queue: {queue_name} to the exchange {exchange_name}. Waiting for messages...")
+		# Log consumer configuration
+		consumer_config = {
+			"queue": queue_name,
+			"exchange": exchange_name,
+			"max_length": max_queue_length or self.max_queue_length,
+			"overflow": queue_overflow or self.queue_overflow,
+			"single_consumer": single_active_consumer if single_active_consumer is not None else self.single_active_consumer,
+			"lazy": lazy_queue if lazy_queue is not None else self.lazy_queue
+		}
+		
+		log.info(f"Straight out of the swamps -- consumer boi listening with config: {consumer_config}")
 
 		try:
 			for method_frame, properties, body in self._channel.consume(
@@ -283,7 +323,7 @@ class MrsalBlockingAMQP(Mrsal):
 				queue_name=queue_name,
 				exchange_type=exchange_type,
 				routing_key=routing_key,
-                passive=passive
+				passive=passive
 				)
 		try:
 			# Publish the message by serializing it in json dump
@@ -313,7 +353,8 @@ class MrsalBlockingAMQP(Mrsal):
 		self,
 		mrsal_protocol_collection: dict[str, dict[str, str | bytes]],
 		prop: pika.BasicProperties | None = None,
-        passive: bool = True
+		auto_declare: bool = True,
+		passive: bool = True
 	) -> None:
 		"""Publish message to the exchange specifying routing key and properties.
 
@@ -336,15 +377,17 @@ class MrsalBlockingAMQP(Mrsal):
 
 			if not isinstance(protocol.message, (str, bytes)):
 				raise MrsalAbortedSetup(f'Your message body needs to be string or bytes or serialized dict')
-				# connect and use only blocking
+
+			# connect and use only blocking
 			self.setup_blocking_connection()
-			self._setup_exchange_and_queue(
-				exchange_name=protocol.exchange_name,
-				queue_name=protocol.queue_name,
-				exchange_type=protocol.exchange_type,
-				routing_key=protocol.routing_key,
-                passive=passive
-				)
+			if auto_declare:
+				self._setup_exchange_and_queue(
+					exchange_name=protocol.exchange_name,
+					queue_name=protocol.queue_name,
+					exchange_type=protocol.exchange_type,
+					routing_key=protocol.routing_key,
+					passive=passive
+					)
 			try:
 				# Publish the message by serializing it in json dump
 				# NOTE! we are not dumping a json anymore here! This allows for more flexibility
@@ -468,6 +511,12 @@ class MrsalAsyncAMQP(Mrsal):
 			retry_cycle_interval: int = 10,			# Minutes between cycles
 			max_retry_time_limit: int = 60,			# Minutes total before permanent DLX
 			immediate_retry_delay: int = 4,			# Seconds between immediate retries
+			max_queue_length: int | None = None,
+			max_queue_length_bytes: int | None = None,
+			queue_overflow: str | None = None,
+			single_active_consumer: bool | None = None,
+			lazy_queue: bool | None = None,
+	
 			):
 		"""Start the async consumer with the provided setup."""
 		retry_counts = {}
@@ -496,7 +545,12 @@ class MrsalAsyncAMQP(Mrsal):
 					dlx_enable=dlx_enable,
 					dlx_exchange_name=dlx_exchange_name,
 					dlx_routing_key=dlx_routing_key,
-					use_quorum_queues=use_quorum_queues
+					use_quorum_queues=use_quorum_queues,
+					max_queue_length=max_queue_length,
+					max_queue_length_bytes=max_queue_length_bytes,
+					queue_overflow=queue_overflow,
+					single_active_consumer=single_active_consumer,
+					lazy_queue=lazy_queue
 					)
 
 			if not self.auto_declare_ok:
@@ -504,7 +558,17 @@ class MrsalAsyncAMQP(Mrsal):
 					await self._connection.close()
 				raise MrsalAbortedSetup('Auto declaration failed during setup.')
 
-		log.info(f"Straight out of the swamps -- Consumer boi listening on queue: {queue_name}, exchange: {exchange_name}")
+		# Log consumer configuration
+		consumer_config = {
+			"queue": queue_name,
+			"exchange": exchange_name,
+			"max_length": max_queue_length or self.max_queue_length,
+			"overflow": queue_overflow or self.queue_overflow,
+			"single_consumer": single_active_consumer if single_active_consumer is not None else self.single_active_consumer,
+			"lazy": lazy_queue if lazy_queue is not None else self.lazy_queue
+		}
+
+		log.info(f"Straight out of the swamps -- consumer boi listening with config: {consumer_config}")
 
 		# async with queue.iterator() as queue_iter:
 		async for message in queue.iterator():

@@ -32,6 +32,11 @@ class Mrsal:
 		:param int heartbeat: Controls RabbitMQ's server heartbeat timeout negotiation
 		:param int prefetch_count: Specifies a prefetch window in terms of whole messages.
 		:param bool ssl: Set this flag to true if you want to connect externally to the rabbit server.
+		:param int max_queue_length: Maximum number of messages in queue before overflow behavior triggers
+		:param int max_queue_length_bytes: Maximum queue size in bytes (optional)
+		:param str queue_overflow: Behavior when queue is full - "drop-head" or "reject-publish"
+		:param bool single_active_consumer: If True, only one consumer processes messages at a time
+		:param bool lazy_queue: If True, messages are stored on disk to save memory
 	"""
 
 	host: str
@@ -46,6 +51,11 @@ class Mrsal:
 	dlx_exchange_name = None
 	max_retries: int = 3
 	use_quorum_queues: bool = True
+	max_queue_length: int = 10000  # Good default for most use cases
+	max_queue_length_bytes: int | None = None  # Optional memory limit
+	queue_overflow: str = "drop-head"  # Drop old messages by default
+	single_active_consumer: bool = False  # Allow parallel processing
+	lazy_queue: bool = False  # Keep messages in RAM for speed
 	_connection = None
 	_channel = None
 
@@ -69,9 +79,16 @@ class Mrsal:
 								 passive: bool = False, internal: bool = False,
 								 auto_delete: bool = False, exclusive: bool = False,
 								 dlx_enable: bool = True, dlx_exchange_name: str | None = None,
-								 dlx_routing_key: str | None = None, use_quorum_queues: bool = True
+								 dlx_routing_key: str | None = None, use_quorum_queues: bool = True,
+								 max_queue_length: int | None = None,
+								 max_queue_length_bytes: int | None = None,
+								 queue_overflow: str | None = None,
+								 single_active_consumer: bool | None = None,
+								 lazy_queue: bool | None = None
 								 ) -> None:
 
+		if queue_args is None:
+			queue_args = {}
 
 		if dlx_enable:
 			dlx_name = dlx_exchange_name or f"{exchange_name}.dlx"
@@ -92,26 +109,41 @@ class Mrsal:
 			except MrsalSetupError as e:
 				log.warning(f"DLX {dlx_name} might already exist or failed to create: {e}")
 
-			if queue_args is None:
-				queue_args = {}
-
 			queue_args.update({
 				'x-dead-letter-exchange': dlx_name,
 				'x-dead-letter-routing-key': dlx_routing
 			})
 
 		if use_quorum_queues:
-			if queue_args is None:
-				queue_args = {}
-
 			queue_args.update({
 				'x-queue-type': 'quorum',
-				'x-quorum-initial-group-size': 3  # Good default for 3+ node clusters
+				'x-quorum-initial-group-size': 3 
 			})
 
 			if self.verbose:
 				log.info(f"Queue {queue_name} configured as quorum queue for enhanced reliability")
 
+		# Add max length settings
+		if max_queue_length  and max_queue_length > 0:
+			queue_args['x-max-length'] = max_queue_length
+			
+		if max_queue_length_bytes and max_queue_length_bytes > 0:
+			queue_args['x-max-length-bytes'] = max_queue_length_bytes
+
+		# Add overflow behavior
+		if queue_overflow in ["drop-head", "reject-publish"]:
+			queue_args['x-overflow'] = queue_overflow
+
+		# Add single active consumer
+		if single_active_consumer:
+			queue_args['x-single-active-consumer'] = True
+
+		# Add lazy queue setting
+		if lazy_queue:
+			queue_args['x-queue-mode'] = 'lazy'
+
+		if self.verbose and queue_args:
+			log.info(f"Queue {queue_name} configured with arguments: {queue_args}")
 
 		declare_exhange_dict = {
 				'exchange': exchange_name,
@@ -161,11 +193,19 @@ class Mrsal:
 											  dlx_enable: bool = True,
 											  dlx_exchange_name: str | None = None,
 											  dlx_routing_key: str | None = None,
-											  use_quorum_queues: bool = True
+											  use_quorum_queues: bool = True,
+											  max_queue_length: int | None = None,
+											  max_queue_length_bytes: int | None = None,
+											  queue_overflow: str | None = None,
+											  single_active_consumer: bool | None = None,
+											  lazy_queue: bool | None = None
 											  ) -> AioQueue | None:
 		"""Setup exchange and queue with bindings asynchronously."""
 		if not self._connection:
 			raise MrsalAbortedSetup("Oh my Oh my! Connection not found when trying to run the setup!")
+
+		if queue_args is None:
+			queue_args = {}
 
 		if dlx_enable:
 			dlx_name = dlx_exchange_name or f"{exchange_name}.dlx"
@@ -188,18 +228,12 @@ class Mrsal:
 			except MrsalSetupError as e:
 				log.warning(f"DLX {dlx_name} might already exist or failed to create: {e}")
 
-			if queue_args is None:
-				queue_args = {}
-
 			queue_args.update({
 				'x-dead-letter-exchange': dlx_name,
 				'x-dead-letter-routing-key': dlx_routing
 			})
 
 		if use_quorum_queues:
-			if queue_args is None:
-				queue_args = {}
-
 			queue_args.update({
 				'x-queue-type': 'quorum',
 				'x-quorum-initial-group-size': 3  # Good default for 3+ node clusters
@@ -207,6 +241,27 @@ class Mrsal:
 
 			if self.verbose:
 				log.info(f"Queue {queue_name} configured as quorum queue for enhanced reliability")
+
+		if max_queue_length and max_queue_length > 0:
+			queue_args['x-max-length'] = max_queue_length
+			
+		if max_queue_length_bytes and max_queue_length_bytes > 0:
+			queue_args['x-max-length-bytes'] = max_queue_length_bytes
+
+		# Add overflow behavior
+		if queue_overflow and queue_overflow in ["drop-head", "reject-publish"]:
+			queue_args['x-overflow'] = queue_overflow
+
+		# Add single active consumer
+		if single_active_consumer:
+			queue_args['x-single-active-consumer'] = True
+
+		# Add lazy queue setting
+		if lazy_queue:
+			queue_args['x-queue-mode'] = 'lazy'
+
+		if self.verbose and queue_args:
+			log.info(f"Queue {queue_name} configured with arguments: {queue_args}")
 
 		async_declare_exhange_dict = {
 				'exchange': exchange_name,
@@ -562,7 +617,7 @@ class Mrsal:
 			self, method_frame, properties, body, processing_error: str,
 			original_exchange: str, original_routing_key: str,
 			enable_retry_cycles: bool, retry_cycle_interval: int,
-            max_retry_time_limit: int, dlx_exchange_name: str | None):
+			max_retry_time_limit: int, dlx_exchange_name: str | None):
 		"""Base method for DLX handling with retry cycles."""
 		# Get retry info
 		retry_info = self._get_retry_cycle_info(properties)
@@ -606,7 +661,7 @@ class Mrsal:
 			self, message, properties, processing_error: str,
 			original_exchange: str, original_routing_key: str,
 			enable_retry_cycles: bool, retry_cycle_interval: int,
-            max_retry_time_limit: int, dlx_exchange_name: str | None):
+			max_retry_time_limit: int, dlx_exchange_name: str | None):
 		"""Base method for DLX handling with retry cycles."""
 		# Get retry info
 		retry_info = self._get_retry_cycle_info(properties)
