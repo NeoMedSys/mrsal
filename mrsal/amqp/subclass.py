@@ -252,6 +252,7 @@ class MrsalBlockingAMQP(Mrsal):
 		exchange_type: str,
 		queue_name: str,
 		auto_declare: bool = True,
+        passive: bool = True,
 		prop: pika.BasicProperties | None = None,
 	) -> None:
 		"""Publish message to the exchange specifying routing key and properties.
@@ -281,7 +282,8 @@ class MrsalBlockingAMQP(Mrsal):
 				exchange_name=exchange_name,
 				queue_name=queue_name,
 				exchange_type=exchange_type,
-				routing_key=routing_key
+				routing_key=routing_key,
+                passive=passive
 				)
 		try:
 			# Publish the message by serializing it in json dump
@@ -311,6 +313,7 @@ class MrsalBlockingAMQP(Mrsal):
 		self,
 		mrsal_protocol_collection: dict[str, dict[str, str | bytes]],
 		prop: pika.BasicProperties | None = None,
+        passive: bool = True
 	) -> None:
 		"""Publish message to the exchange specifying routing key and properties.
 
@@ -339,7 +342,8 @@ class MrsalBlockingAMQP(Mrsal):
 				exchange_name=protocol.exchange_name,
 				queue_name=protocol.queue_name,
 				exchange_type=protocol.exchange_type,
-				routing_key=protocol.routing_key
+				routing_key=protocol.routing_key,
+                passive=passive
 				)
 			try:
 				# Publish the message by serializing it in json dump

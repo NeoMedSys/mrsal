@@ -82,7 +82,7 @@ class Mrsal:
 					exchange_type=exchange_type,
 					arguments=None,
 					durable=exch_durable,
-					passive=False,
+					passive=passive,
 					internal=internal,
 					auto_delete=auto_delete
 				)
@@ -177,7 +177,7 @@ class Mrsal:
 					exchange_type=exchange_type,
 					arguments=None,
 					durable=exch_durable,
-					passive=False,
+					passive=passive,
 					internal=internal,
 					auto_delete=auto_delete
 				)
