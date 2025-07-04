@@ -89,66 +89,71 @@ class Mrsal:
 
 		if queue_args is None:
 			queue_args = {}
+		if not passive:
+			if dlx_enable:
+				dlx_name = dlx_exchange_name or f"{exchange_name}.dlx"
+				dlx_routing = dlx_routing_key or routing_key
+				try:
+					self._declare_exchange(
+						exchange=dlx_name,
+						exchange_type=exchange_type,
+						arguments=None,
+						durable=exch_durable,
+						passive=passive,
+						internal=internal,
+						auto_delete=auto_delete
+					)
+					if self.verbose:
+						log.info(f"Dead letter exchange {dlx_name} declared successfully")
 
-		if dlx_enable:
-			dlx_name = dlx_exchange_name or f"{exchange_name}.dlx"
-			dlx_routing = dlx_routing_key or routing_key
-			try:
-				self._declare_exchange(
-					exchange=dlx_name,
-					exchange_type=exchange_type,
-					arguments=None,
-					durable=exch_durable,
-					passive=passive,
-					internal=internal,
-					auto_delete=auto_delete
-				)
+				except MrsalSetupError as e:
+					log.warning(f"DLX {dlx_name} might already exist or failed to create: {e}")
+
+				queue_args.update({
+					'x-dead-letter-exchange': dlx_name,
+					'x-dead-letter-routing-key': dlx_routing
+				})
+
+			if use_quorum_queues:
+				queue_args.update({
+					'x-queue-type': 'quorum',
+					'x-quorum-initial-group-size': 3 
+				})
+
 				if self.verbose:
-					log.info(f"Dead letter exchange {dlx_name} declared successfully")
+					log.info(f"Queue {queue_name} configured as quorum queue for enhanced reliability")
 
-			except MrsalSetupError as e:
-				log.warning(f"DLX {dlx_name} might already exist or failed to create: {e}")
+			# Add max length settings
+			if max_queue_length  and max_queue_length > 0:
+				queue_args['x-max-length'] = max_queue_length
+				
+			if max_queue_length_bytes and max_queue_length_bytes > 0:
+				queue_args['x-max-length-bytes'] = max_queue_length_bytes
 
-			queue_args.update({
-				'x-dead-letter-exchange': dlx_name,
-				'x-dead-letter-routing-key': dlx_routing
-			})
+			# Add overflow behavior
+			if queue_overflow in ["drop-head", "reject-publish"]:
+				queue_args['x-overflow'] = queue_overflow
 
-		if use_quorum_queues:
-			queue_args.update({
-				'x-queue-type': 'quorum',
-				'x-quorum-initial-group-size': 3 
-			})
+			# Add single active consumer
+			if single_active_consumer:
+				queue_args['x-single-active-consumer'] = True
 
+			# Add lazy queue setting
+			if lazy_queue:
+				queue_args['x-queue-mode'] = 'lazy'
+
+			if self.verbose and queue_args:
+				log.info(f"Queue {queue_name} configured with arguments: {queue_args}")
+		else:
+			queue_args = {}
 			if self.verbose:
-				log.info(f"Queue {queue_name} configured as quorum queue for enhanced reliability")
+				log.info(f"Passive mode: checking existence of queue {queue_name} without configuration")
 
-		# Add max length settings
-		if max_queue_length  and max_queue_length > 0:
-			queue_args['x-max-length'] = max_queue_length
-			
-		if max_queue_length_bytes and max_queue_length_bytes > 0:
-			queue_args['x-max-length-bytes'] = max_queue_length_bytes
-
-		# Add overflow behavior
-		if queue_overflow in ["drop-head", "reject-publish"]:
-			queue_args['x-overflow'] = queue_overflow
-
-		# Add single active consumer
-		if single_active_consumer:
-			queue_args['x-single-active-consumer'] = True
-
-		# Add lazy queue setting
-		if lazy_queue:
-			queue_args['x-queue-mode'] = 'lazy'
-
-		if self.verbose and queue_args:
-			log.info(f"Queue {queue_name} configured with arguments: {queue_args}")
 
 		declare_exhange_dict = {
 				'exchange': exchange_name,
 				'exchange_type': exchange_type,
-				'arguments': exch_args,
+				'arguments': exch_args if not passive else None,
 				'durable': exch_durable,
 				'passive': passive,
 				'internal': internal,
@@ -174,9 +179,13 @@ class Mrsal:
 		try:
 			self._declare_exchange(**declare_exhange_dict)
 			self._declare_queue(**declare_queue_dict)
-			self._declare_queue_binding(**declare_queue_binding_dict)
+			if not passive:
+				self._declare_queue_binding(**declare_queue_binding_dict)
 			self.auto_declare_ok = True
-			log.info(f"Exchange {exchange_name} and Queue {queue_name} set up successfully.")
+			if not passive:
+				log.info(f"Exchange {exchange_name} and Queue {queue_name} set up successfully.")
+			else:
+				log.info(f"Exchange {exchange_name} and Queue {queue_name} set up successfully.")
 		except MrsalSetupError as e:
 			log.error(f'Splæt! I failed the declaration setup with {e}', exc_info=True)
 			self.auto_declare_ok = False
@@ -207,66 +216,72 @@ class Mrsal:
 		if queue_args is None:
 			queue_args = {}
 
-		if dlx_enable:
-			dlx_name = dlx_exchange_name or f"{exchange_name}.dlx"
-			dlx_routing = dlx_routing_key or routing_key
+		if not passive:
+			if dlx_enable:
+				dlx_name = dlx_exchange_name or f"{exchange_name}.dlx"
+				dlx_routing = dlx_routing_key or routing_key
 
-			try:
-				await self._async_declare_exchange(
-					exchange=dlx_name,
-					exchange_type=exchange_type,
-					arguments=None,
-					durable=exch_durable,
-					passive=passive,
-					internal=internal,
-					auto_delete=auto_delete
-				)
+				try:
+					await self._async_declare_exchange(
+						exchange=dlx_name,
+						exchange_type=exchange_type,
+						arguments=None,
+						durable=exch_durable,
+						passive=passive,
+						internal=internal,
+						auto_delete=auto_delete
+					)
+
+					if self.verbose:
+						log.info(f"Dead letter exchange {dlx_name} declared successfully")
+
+				except MrsalSetupError as e:
+					log.warning(f"DLX {dlx_name} might already exist or failed to create: {e}")
+
+				queue_args.update({
+					'x-dead-letter-exchange': dlx_name,
+					'x-dead-letter-routing-key': dlx_routing
+				})
+
+			if use_quorum_queues:
+				queue_args.update({
+					'x-queue-type': 'quorum',
+					'x-quorum-initial-group-size': 3  # Good default for 3+ node clusters
+				})
 
 				if self.verbose:
-					log.info(f"Dead letter exchange {dlx_name} declared successfully")
+					log.info(f"Queue {queue_name} configured as quorum queue for enhanced reliability")
 
-			except MrsalSetupError as e:
-				log.warning(f"DLX {dlx_name} might already exist or failed to create: {e}")
+			if max_queue_length and max_queue_length > 0:
+				queue_args['x-max-length'] = max_queue_length
+				
+			if max_queue_length_bytes and max_queue_length_bytes > 0:
+				queue_args['x-max-length-bytes'] = max_queue_length_bytes
 
-			queue_args.update({
-				'x-dead-letter-exchange': dlx_name,
-				'x-dead-letter-routing-key': dlx_routing
-			})
+			# Add overflow behavior
+			if queue_overflow and queue_overflow in ["drop-head", "reject-publish"]:
+				queue_args['x-overflow'] = queue_overflow
 
-		if use_quorum_queues:
-			queue_args.update({
-				'x-queue-type': 'quorum',
-				'x-quorum-initial-group-size': 3  # Good default for 3+ node clusters
-			})
+			# Add single active consumer
+			if single_active_consumer:
+				queue_args['x-single-active-consumer'] = True
 
+			# Add lazy queue setting
+			if lazy_queue:
+				queue_args['x-queue-mode'] = 'lazy'
+
+			if self.verbose and queue_args:
+				log.info(f"Queue {queue_name} configured with arguments: {queue_args}")
+		else:
+			queue_args = {}
 			if self.verbose:
-				log.info(f"Queue {queue_name} configured as quorum queue for enhanced reliability")
+				log.info(f"Passive mode: checking existence of queue {queue_name} without configuration")
 
-		if max_queue_length and max_queue_length > 0:
-			queue_args['x-max-length'] = max_queue_length
-			
-		if max_queue_length_bytes and max_queue_length_bytes > 0:
-			queue_args['x-max-length-bytes'] = max_queue_length_bytes
-
-		# Add overflow behavior
-		if queue_overflow and queue_overflow in ["drop-head", "reject-publish"]:
-			queue_args['x-overflow'] = queue_overflow
-
-		# Add single active consumer
-		if single_active_consumer:
-			queue_args['x-single-active-consumer'] = True
-
-		# Add lazy queue setting
-		if lazy_queue:
-			queue_args['x-queue-mode'] = 'lazy'
-
-		if self.verbose and queue_args:
-			log.info(f"Queue {queue_name} configured with arguments: {queue_args}")
 
 		async_declare_exhange_dict = {
 				'exchange': exchange_name,
 				'exchange_type': exchange_type,
-				'arguments': exch_args,
+				'arguments': exch_args if not passive else None,
 				'durable': exch_durable,
 				'passive': passive,
 				'internal': internal,
@@ -292,9 +307,13 @@ class Mrsal:
 			# Declare exchange and queue
 			exchange = await self._async_declare_exchange(**async_declare_exhange_dict)
 			queue = await self._async_declare_queue(**async_declare_queue_dict)
-			await self._async_declare_queue_binding(queue=queue, exchange=exchange, **async_declare_queue_binding_dict)
+			if not passive:
+				await self._async_declare_queue_binding(queue=queue, exchange=exchange, **async_declare_queue_binding_dict)
 			self.auto_declare_ok = True
-			log.info(f"Exchange {exchange_name} and Queue {queue_name} set up successfully.")
+			if not passive:
+				log.info(f"Exchange {exchange_name} and Queue {queue_name} set up successfully.")
+			else:
+				log.info(f"Exchange {exchange_name} and Queue {queue_name} set up successfully.")
 			if dlx_enable:
 				log.info(f"You have a dead letter exhange {dlx_name} for fault tolerance -- use it well young grasshopper!")
 			return queue
