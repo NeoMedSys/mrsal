@@ -188,7 +188,8 @@ def test_publish_message(amqp_consumer):
         exchange_name=exchange_name,
         queue_name='test_q',
         exchange_type='direct',
-        routing_key=routing_key
+        routing_key=routing_key,
+        passive=True
     )
 
     amqp_consumer._channel.basic_publish.assert_called_once_with(
