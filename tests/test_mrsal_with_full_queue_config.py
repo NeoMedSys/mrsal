@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import MagicMock
 from mrsal.amqp.subclass import MrsalBlockingAMQP
+from pika.exceptions import ChannelClosedByBroker
 
 
 class TestPassiveDeclarationAndQueueSettings:
@@ -111,4 +112,44 @@ class TestPassiveDeclarationAndQueueSettings:
             queue_overflow=None,
             single_active_consumer=None,
             lazy_queue=None
+        )
+
+
+    def test_publisher_passive_false_with_queue_mismatch(self, mock_consumer):
+        """Test that publisher with passive=False can cause configuration conflicts"""
+        # Mock a RabbitMQ error when queue config doesn't match
+        mock_consumer._setup_exchange_and_queue.side_effect = ChannelClosedByBroker(
+            406, "PRECONDITION_FAILED - inequivalent arg 'x-max-length'"
+        )
+        
+        with pytest.raises(Exception):  # Should fail with config mismatch
+            mock_consumer.publish_message(
+                exchange_name="test_exch",
+                routing_key="test_key", 
+                message="test_message",
+                exchange_type="direct",
+                queue_name="test_queue",
+                passive=False,  # This should cause problems!
+                # Publisher trying to configure queue = bad idea
+            )
+
+    def test_publisher_passive_true_no_conflicts(self, mock_consumer):
+        """Test that publisher with passive=True avoids configuration conflicts"""
+        # This should work fine - no config arguments sent
+        mock_consumer.publish_message(
+            exchange_name="test_exch",
+            routing_key="test_key",
+            message="test_message", 
+            exchange_type="direct",
+            queue_name="test_queue",
+            passive=True  # Safe mode - just check existence
+        )
+        
+        # Should succeed without issues
+        mock_consumer._setup_exchange_and_queue.assert_called_with(
+            exchange_name="test_exch",
+            queue_name="test_queue",
+            exchange_type="direct", 
+            routing_key="test_key",
+            passive=True
         )

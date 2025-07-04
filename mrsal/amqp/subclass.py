@@ -292,7 +292,7 @@ class MrsalBlockingAMQP(Mrsal):
 		exchange_type: str,
 		queue_name: str,
 		auto_declare: bool = True,
-		passive: bool = True,
+        passive: bool = True,
 		prop: pika.BasicProperties | None = None,
 	) -> None:
 		"""Publish message to the exchange specifying routing key and properties.
@@ -380,7 +380,6 @@ class MrsalBlockingAMQP(Mrsal):
 
 			# connect and use only blocking
 			self.setup_blocking_connection()
-
 			if auto_declare:
 				self._setup_exchange_and_queue(
 					exchange_name=protocol.exchange_name,
