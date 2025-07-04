@@ -1,12 +1,35 @@
 # MRSAL AMQP
-[![Release](https://img.shields.io/badge/release-2.0.1-blue.svg)](https://pypi.org/project/mrsal/) 
+[![Release](https://img.shields.io/badge/release-2.1.0-blue.svg)](https://pypi.org/project/mrsal/) 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%7C3.11%7C3.12-blue.svg)](https://www.python.org/downloads/)
 [![Mrsal Workflow](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml/badge.svg?branch=main)](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml)
 [![Coverage](https://neomedsys.github.io/mrsal/reports/badges/coverage-badge.svg)](https://neomedsys.github.io/mrsal/reports/coverage/htmlcov/)
-## Intro
-Mrsal is a simple to use message broker abstraction on top of [RabbitMQ](https://www.rabbitmq.com/), [aio-pika](https://aio-pika.readthedocs.io/en/latest/) and [Pika](https://pika.readthedocs.io/en/stable/index.html). The goal is to make Mrsal trivial to re-use in all services of a distributed system and to make the use of advanced message queing protocols easy and safe. No more big chunks of repetive code across your services or bespoke solutions to handle dead letters. 
 
-###### Mrsal is Arabic for a small arrow and is used to describe something that performs a task with lightness and speed. 
+## Intro
+Mrsal is a **production-ready** message broker abstraction on top of [RabbitMQ](https://www.rabbitmq.com/), [aio-pika](https://aio-pika.readthedocs.io/en/latest/) and [Pika](https://pika.readthedocs.io/en/stable/index.html). 
+
+**Why Mrsal?** Setting up robust AMQP in production is complex. You need dead letter exchanges, retry logic, quorum queues, proper error handling, queue management, and more. Mrsal gives you **enterprise-grade messaging** out of the box with just a few lines of code.
+
+**What makes Mrsal production-ready:**
+
+- **Intelligent Retry Logic**: Immediate retries + time-delayed retry cycles prevent message loss  
+- **Dead Letter Exchange**: Automatic DLX setup with configurable retry cycles  
+- **High Availability**: Quorum queues for data safety across cluster nodes  
+- **Performance Tuning**: Queue limits, overflow behavior, lazy queues, prefetch control  
+- **Zero Configuration**: Sensible defaults that work in production  
+- **Full Observability**: Comprehensive logging and retry tracking  
+- **Type Safety**: Pydantic integration for payload validation  
+- **Async & Sync**: Both blocking and async implementations  
+
+The goal is to make Mrsal **trivial to re-use** across all services in your distributed system and to make advanced message queuing protocols **easy and safe**. No more big chunks of repetitive code across your services or bespoke solutions to handle dead letters.
+
+**Perfect for:**
+- Microservices communication
+- Event-driven architectures  
+- Background job processing
+- Real-time data pipelines
+- Mission-critical message processing
+
+###### Mrsal is Arabic for a small arrow and is used to describe something that performs a task with lightness and speed.
 
 ## Quick Start guide
 
@@ -16,13 +39,13 @@ Mrsal is a simple to use message broker abstraction on top of [RabbitMQ](https:/
 3. tested on linux only
 
 ### 1. Installing
-First things first: 
+First things first:
 
 ```bash
 poetry add mrsal
 ```
 
-Next set the default username, password and servername for your RabbitMQ setup. It's advisable to use a `.env` script or `(.zsh)rc` file for persistence.
+Next set the default username, password and servername for your RabbitMQ setup. It's advisable to use a \`.env\` script or \`(.zsh)rc\` file for persistence.
 
 ```bash
 [RabbitEnvVars]
@@ -38,7 +61,7 @@ RABBITMQ_CERT=/path/to/file
 RABBITMQ_KEY=/path/to/file
 ```
 
-###### Mrsal was first developed by NeoMedSys and the research group [CRAI](https://crai.no/) at the univeristy hospital of Oslo.
+###### Mrsal was first developed by NeoMedSys and the research group \[CRAI\](https://crai.no/) at the univeristy hospital of Oslo.
 
 ### 2. Setup and connect
 - Example 1: Lets create a blocking connection on localhost with no TLS encryption
@@ -78,7 +101,7 @@ mrsal.publish_message(exchange_name='zoomer_x',
                         exchange_type='direct',
                         queue_name='zoomer_q',
                         routing_key='zoomer_key',
-                        message=message_body, 
+                        message=message_body,
                         prop=prop,
                         auto_declare=True)
 ```
@@ -87,8 +110,8 @@ mrsal.publish_message(exchange_name='zoomer_x',
 
 Now lets setup a consumer that will listen to our very important messages. If you are using scripts rather than notebooks then it's advisable to run consume and publish separately. We are going to need a callback function which is triggered upon receiving the message from the queue we subscribe to. You can use the callback function to activate something in your system.
 
-Note: 
-- If you start a consumer with `callback_with_delivery_info=True` then your callback function should have at least these params `(method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str)`. 
+Note:
+- If you start a consumer with `callback_with_delivery_info=True` then your callback function should have at least these params `(method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str)`.
 - If not, then it should have at least `(message_param: str)`
 - We can use pydantic BaseModel classes to enforce types in the body
 
@@ -117,7 +140,7 @@ mrsal.start_consumer(
         callback_args=None,  # no need to specifiy if you do not need it
         callback=consumer_callback_with_delivery_info,
         auto_declare=True,
-        auto_ack-False
+        auto_ack=False
     )
 ```
 
@@ -167,7 +190,7 @@ asyncio.run(mrsal.start_consumer(
         callback_args=None,  # no need to specifiy if you do not need it
         callback=consumer_callback_with_delivery_info,
         auto_declare=True,
-        auto_ack-False
+        auto_ack=False
     ))
 ```
 
@@ -175,78 +198,124 @@ That simple! You have now setups for full advanced message queueing protocols th
 
 ###### Note! There are many parameters and settings that you can use to set up a more sophisticated communication protocol in both blocking or async connection with pydantic BaseModels to enforce data types in the expected payload.
 
-
 ### 4. Advanced Features
 
-#### 4.1 Dead Letter Exchange & Retry Logic
+#### 4.1 Dead Letter Exchange & Retry Logic with Cycles
 
-
-Mrsal automatically handles failed messages with built-in retry and dead letter exchange support:
-
+Mrsal provides sophisticated retry mechanisms with both immediate retries and time-delayed retry cycles:
 
 ```python
-
 mrsal = MrsalBlockingAMQP(
-host=RABBITMQ_DOMAIN,
-port=int(RABBITMQ_PORT),
-credentials=(RABBITMQ_USER, RABBITMQ_PASSWORD),
-virtual_host=RABBITMQ_VHOST,
-dlx_enable=True,    # Default: creates '<queue_name>.dlx'
-max_retries=5       # Retry failed messages 5 times before DLX
+    host=RABBITMQ_DOMAIN,
+    port=int(RABBITMQ_PORT),
+    credentials=(RABBITMQ_USER, RABBITMQ_PASSWORD),
+    virtual_host=RABBITMQ_VHOST,
+    dlx_enable=True,        # Default: creates '<exchange_name>.dlx'
+    max_retries=3           # Immediate retries before DLX
 )
 
-# custom DLX configuration
-
+# Advanced retry configuration with cycles
 mrsal.start_consumer(
-queue_name='important_queue',
-exchange_name='important_exchange',
-exchange_type='direct',
-routing_key='important_key',
-callback=my_callback,
-auto_ack=False,              # Required for retry logic
-dlx_enable=True,             # Enable DLX for this queue -- the default is True
-dlx_exchange_name='custom_dlx', # Optional: custom DLX name
-dlx_routing_key='dlx_key'    # Optional: custom DLX routing
+    queue_name='critical_queue',
+    exchange_name='critical_exchange',
+    exchange_type='direct',
+    routing_key='critical_key',
+    callback=my_callback,
+    auto_ack=False,                    # Required for retry logic
+    dlx_enable=True,                   # Enable DLX for this queue
+    dlx_exchange_name='custom_dlx',    # Optional: custom DLX name
+    dlx_routing_key='dlx_key',         # Optional: custom DLX routing
+    enable_retry_cycles=True,          # Enable time-delayed retry cycles
+    retry_cycle_interval=10,           # Minutes between retry cycles
+    max_retry_time_limit=60,           # Total minutes before permanent failure
+    immediate_retry_delay=4,           # Seconds between immediate retries
+    requeue=True                       # Enable requeuing for retries
 )
 ```
 
-How it works:
+**How the advanced retry logic works:**
 
-1. Message processing fails → retry up to max_retries times
-2. After max retries → send to dead letter exchange (if configured)
-3. No DLX configured → message dropped with full logging
+1. **Immediate Retries**: Message fails → retry up to \`max_retries\` times with \`immediate_retry_delay\` seconds between attempts
+2. **Retry Cycles**: After immediate retries exhausted → send to DLX with TTL for time-delayed retry
+3. **Cycle Tracking**: Each cycle increments counters and tracks total elapsed time
+4. **Permanent Failure**: After \`max_retry_time_limit\` exceeded → message stays in DLX for manual review
 
-Prevents infinite requeue loops automatically
+**Benefits:**
+- Handles transient failures with immediate retries  
+- Handles longer outages with time-delayed cycles  
+- Prevents infinite retry loops  
+- Full observability with retry tracking  
+- Manual intervention capability for persistent failures
 
-#### 4.2 Quorum Queues
+#### 4.2 Queue Management & Performance
+
+Configure queues for optimal performance and resource management:
+
+```python
+mrsal.start_consumer(
+    queue_name='high_performance_queue',
+    exchange_name='perf_exchange',
+    exchange_type='direct',
+    routing_key='perf_key',
+    callback=my_callback,
+    
+    # Queue limits and overflow behavior
+    max_queue_length=10000,              # Max messages before overflow
+    max_queue_length_bytes=None,         # Optional: max queue size in bytes
+    queue_overflow="drop-head",          # "drop-head" or "reject-publish"
+    
+    # Performance settings
+    single_active_consumer=False,        # Allow parallel processing
+    lazy_queue=False,                    # Keep messages in RAM for speed
+    use_quorum_queues=True,              # High availability
+    
+    # Memory optimization (for low-priority queues)
+    lazy_queue=True,                     # Store messages on disk
+    single_active_consumer=True          # Sequential processing
+)
+```
+
+**Queue Configuration Options:**
+
+- **\`max_queue_length\`**: Limit queue size to prevent memory issues
+- **\`queue_overflow\`**: 
+  - \`"drop-head"\`: Remove oldest messages when full
+  - \`"reject-publish"\`: Reject new messages when full
+- **\`single_active_consumer\`**: Only one consumer processes at a time (good for ordered processing)
+- **\`lazy_queue\`**: Store messages on disk instead of RAM (memory efficient)
+- **\`use_quorum_queues\`**: Enhanced durability and performance in clusters
+
+#### 4.3 Quorum Queues
 
 Quorum queues provide better data safety and performance for production environments:
+
 ```python
 mrsal = MrsalBlockingAMQP(
-host=RABBITMQ_DOMAIN,
-port=int(RABBITMQ_PORT),
-credentials=(RABBITMQ_USER, RABBITMQ_PASSWORD),
-virtual_host=RABBITMQ_VHOST,
-use_quorum_queues=True  # Default: enables quorum queues
+    host=RABBITMQ_DOMAIN,
+    port=int(RABBITMQ_PORT),
+    credentials=(RABBITMQ_USER, RABBITMQ_PASSWORD),
+    virtual_host=RABBITMQ_VHOST,
+    use_quorum_queues=True  # Default: enables quorum queues
 )
 
-Per-queue configuration
-
+# Per-queue configuration
 mrsal.start_consumer(
-queue_name='high_availability_queue',
-exchange_name='ha_exchange',
-exchange_type='direct',
-routing_key='ha_key',
-callback=my_callback,
-use_quorum_queues=True  # This queue will be highly available
+    queue_name='high_availability_queue',
+    exchange_name='ha_exchange',
+    exchange_type='direct',
+    routing_key='ha_key',
+    callback=my_callback,
+    use_quorum_queues=True  # This queue will be highly available
 )
 ```
 
-Benefits:
-✅ Better data replication across RabbitMQ cluster nodes
-✅ Improved performance under high load
-✅ Automatic leader election and failover
-✅ Works great in Kubernetes and bare metal deployments
+**Benefits:**
+- Better data replication across RabbitMQ cluster nodes  
+- Improved performance under high load  
+- Automatic leader election and failover  
+- Works great in Kubernetes and bare metal deployments
+
+#### 4.4 Production-Ready Example
 
 ```python
 from mrsal.amqp.subclass import MrsalBlockingAMQP
@@ -258,57 +327,57 @@ class OrderMessage(BaseModel):
     customer_id: str
     amount: float
 
-    def process_order(method_frame, properties, body):
-        try:
-            order_data = json.loads(body)
-            order = OrderMessage(**order_data)
-                # Process the order
-                print(f"Processing order {order.order_id} for customer {order.customer_id}")
-                
-                # Simulate processing that might fail
-                if order.amount < 0:
-                    raise ValueError("Invalid order amount")
-                
-        except Exception as e:
-            print(f"Order processing failed: {e}")
-            raise  # This will trigger retry logic
+def process_order(method_frame, properties, body):
+    try:
+        order_data = json.loads(body)
+        order = OrderMessage(**order_data)
+        
+        # Process the order
+        print(f"Processing order {order.order_id} for customer {order.customer_id}")
+        
+        # Simulate processing that might fail
+        if order.amount < 0:
+            raise ValueError("Invalid order amount")
+            
+    except Exception as e:
+        print(f"Order processing failed: {e}")
+        raise  # This will trigger retry logic
 
-    Production-ready setup
+# Production-ready setup with full retry cycles
+mrsal = MrsalBlockingAMQP(
+    host=RABBITMQ_DOMAIN,
+    port=int(RABBITMQ_PORT),
+    credentials=(RABBITMQ_USER, RABBITMQ_PASSWORD),
+    virtual_host=RABBITMQ_VHOST,
+    dlx_enable=True,         # Automatic DLX for failed orders
+    max_retries=3,           # Immediate retries
+    use_quorum_queues=True,  # High availability
+    prefetch_count=10        # Process up to 10 messages concurrently
+)
 
-    mrsal = MrsalBlockingAMQP(
-        host=RABBITMQ_DOMAIN,
-        port=int(RABBITMQ_PORT),
-        credentials=(RABBITMQ_USER, RABBITMQ_PASSWORD),
-        virtual_host=RABBITMQ_VHOST,
-        dlx_enable=True,         # Automatic DLX for failed orders
-        max_retries=3,           # Retry failed orders 3 times
-        use_quorum_queues=True,  # High availability
-        prefetch_count=10        # Process up to 10 messages concurrently
-    )
-
-    mrsal.start_consumer(
-        queue_name='orders_queue',
-        exchange_name='orders_exchange',
-        exchange_type='direct',
-        routing_key='new_order',
-        callback=process_order,
-        payload_model=OrderMessage,  # Automatic validation
-        auto_ack=False,              # Manual ack for reliability
-        auto_declare=True            # Auto-create exchange/queue/DLX
-    )
+mrsal.start_consumer(
+    queue_name='orders_queue',
+    exchange_name='orders_exchange',
+    exchange_type='direct',
+    routing_key='new_order',
+    callback=process_order,
+    payload_model=OrderMessage,        # Automatic validation
+    auto_ack=False,                    # Manual ack for reliability
+    auto_declare=True,                 # Auto-create exchange/queue/DLX
+    
+    # Advanced retry configuration
+    enable_retry_cycles=True,          # Enable retry cycles
+    retry_cycle_interval=15,           # 15 minutes between cycles
+    max_retry_time_limit=120,          # 2 hours total retry time
+    immediate_retry_delay=5,           # 5 seconds between immediate retries
+    
+    # Queue performance settings
+    max_queue_length=50000,            # Handle large order volumes
+    queue_overflow="reject-publish",   # Reject when full (backpressure)
+    single_active_consumer=False       # Parallel processing for speed
+)
 ```
 
-Note! There are many parameters and settings that you can use to set up a more sophisticated communication protocol in both blocking or async connection with pydantic BaseModels to enforce data types in the expected payload.
+**Note!** There are many parameters and settings that you can use to set up a more sophisticated communication protocol in both blocking or async connection with pydantic BaseModels to enforce data types in the expected payload.
 
----
-## References
-
-- [RabbitMQ Tutorials](https://www.rabbitmq.com/getstarted.html)
-- [RabbitMQ Exchange Types: 6 Categories Explained Easy](https://hevodata.com/learn/rabbitmq-exchange-type/)
-- [What is a Delayed Message Exchange?](https://www.cloudamqp.com/blog/what-is-delayed-message-exchange-in-rabbitmq.html#:~:text=The%20RabbitMQ%20delayed%20exchange%20plugin,in%20milliseconds%20can%20be%20specified.)
-- [RabbitMQ Delayed Message Plugin](https://github.com/rabbitmq/rabbitmq-delayed-message-exchange)
-- [When and how to use the RabbitMQ Dead Letter Exchange](https://www.cloudamqp.com/blog/whennd-how-to-use-the-rabbitmq-dead-letter-exchange.html)
-- [What is a RabbitMQ vhost?](https://www.cloudamqp.com/blog/what-is-rabbitmq-vhost.html)
-- [Message Brokers](https://www.ibm.com/cloud/learn/messagerokers)
-- [mrsal_icon](https://www.pngegg.com/en/png-mftic)
 ---
