@@ -5,7 +5,7 @@
 [![Coverage](https://neomedsys.github.io/mrsal/reports/badges/coverage-badge.svg)](https://neomedsys.github.io/mrsal/reports/coverage/htmlcov/)
 
 ## Intro
-Mrsal is a **production-ready** message broker abstraction on top of \[RabbitMQ\](https://www.rabbitmq.com/), \[aio-pika\](https://aio-pika.readthedocs.io/en/latest/) and \[Pika\](https://pika.readthedocs.io/en/stable/index.html). 
+Mrsal is a **production-ready** message broker abstraction on top of [RabbitMQ](https://www.rabbitmq.com/), [aio-pika](https://aio-pika.readthedocs.io/en/latest/) and [Pika](https://pika.readthedocs.io/en/stable/index.html). 
 
 **Why Mrsal?** Setting up robust AMQP in production is complex. You need dead letter exchanges, retry logic, quorum queues, proper error handling, queue management, and more. Mrsal gives you **enterprise-grade messaging** out of the box with just a few lines of code.
 
@@ -241,11 +241,11 @@ mrsal.start_consumer(
 4. **Permanent Failure**: After \`max_retry_time_limit\` exceeded → message stays in DLX for manual review
 
 **Benefits:**
-✅ Handles transient failures with immediate retries  
-✅ Handles longer outages with time-delayed cycles  
-✅ Prevents infinite retry loops  
-✅ Full observability with retry tracking  
-✅ Manual intervention capability for persistent failures
+- Handles transient failures with immediate retries  
+- Handles longer outages with time-delayed cycles  
+- Prevents infinite retry loops  
+- Full observability with retry tracking  
+- Manual intervention capability for persistent failures
 
 #### 4.2 Queue Management & Performance
 
