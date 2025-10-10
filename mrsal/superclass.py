@@ -49,7 +49,6 @@ class Mrsal:
 	heartbeat: int = 60  # sec
 	dlx_enable: bool = True
 	dlx_exchange_name = None
-	max_retries: int = 3
 	use_quorum_queues: bool = True
 	max_queue_length: int = 10000  # Good default for most use cases
 	max_queue_length_bytes: int | None = None  # Optional memory limit

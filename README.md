@@ -1,5 +1,5 @@
 # MRSAL AMQP
-[![Release](https://img.shields.io/badge/release-2.1.1-blue.svg)](https://pypi.org/project/mrsal/) 
+[![Release](https://img.shields.io/badge/release-3.0.0-blue.svg)](https://pypi.org/project/mrsal/) 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%7C3.11%7C3.12-blue.svg)](https://www.python.org/downloads/)
 [![Mrsal Workflow](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml/badge.svg?branch=main)](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml)
 [![Coverage](https://neomedsys.github.io/mrsal/reports/badges/coverage-badge.svg)](https://neomedsys.github.io/mrsal/reports/coverage/htmlcov/)
@@ -11,7 +11,6 @@ Mrsal is a **production-ready** message broker abstraction on top of [RabbitMQ](
 
 **What makes Mrsal production-ready:**
 
-- **Intelligent Retry Logic**: Immediate retries + time-delayed retry cycles prevent message loss  
 - **Dead Letter Exchange**: Automatic DLX setup with configurable retry cycles  
 - **High Availability**: Quorum queues for data safety across cluster nodes  
 - **Performance Tuning**: Queue limits, overflow behavior, lazy queues, prefetch control  
@@ -211,7 +210,6 @@ mrsal = MrsalBlockingAMQP(
     credentials=(RABBITMQ_USER, RABBITMQ_PASSWORD),
     virtual_host=RABBITMQ_VHOST,
     dlx_enable=True,        # Default: creates '<exchange_name>.dlx'
-    max_retries=3           # Immediate retries before DLX
 )
 
 # Advanced retry configuration with cycles
@@ -228,22 +226,17 @@ mrsal.start_consumer(
     enable_retry_cycles=True,          # Enable time-delayed retry cycles
     retry_cycle_interval=10,           # Minutes between retry cycles
     max_retry_time_limit=60,           # Total minutes before permanent failure
-    immediate_retry_delay=4,           # Seconds between immediate retries
-    requeue=True                       # Enable requeuing for retries
 )
 ```
 
 **How the advanced retry logic works:**
 
-1. **Immediate Retries**: Message fails → retry up to \`max_retries\` times with \`immediate_retry_delay\` seconds between attempts
-2. **Retry Cycles**: After immediate retries exhausted → send to DLX with TTL for time-delayed retry
+2. **Retry Cycles**: Send to DLX with TTL for time-delayed retry
 3. **Cycle Tracking**: Each cycle increments counters and tracks total elapsed time
 4. **Permanent Failure**: After \`max_retry_time_limit\` exceeded → message stays in DLX for manual review
 
 **Benefits:**
-- Handles transient failures with immediate retries  
 - Handles longer outages with time-delayed cycles  
-- Prevents infinite retry loops  
 - Full observability with retry tracking  
 - Manual intervention capability for persistent failures
 
@@ -350,7 +343,6 @@ mrsal = MrsalBlockingAMQP(
     credentials=(RABBITMQ_USER, RABBITMQ_PASSWORD),
     virtual_host=RABBITMQ_VHOST,
     dlx_enable=True,         # Automatic DLX for failed orders
-    max_retries=3,           # Immediate retries
     use_quorum_queues=True,  # High availability
     prefetch_count=10        # Process up to 10 messages concurrently
 )
@@ -369,7 +361,6 @@ mrsal.start_consumer(
     enable_retry_cycles=True,          # Enable retry cycles
     retry_cycle_interval=15,           # 15 minutes between cycles
     max_retry_time_limit=120,          # 2 hours total retry time
-    immediate_retry_delay=5,           # 5 seconds between immediate retries
     
     # Queue performance settings
     max_queue_length=50000,            # Handle large order volumes

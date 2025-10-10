@@ -7,585 +7,415 @@ from mrsal.amqp.subclass import MrsalBlockingAMQP, MrsalAsyncAMQP
 
 @dataclass
 class ExpectedPayload:
-    id: int
-    name: str
-    active: bool
+	id: int
+	name: str
+	active: bool
 
 
 class AsyncIteratorMock:
-    """Mock async iterator for aio-pika queue.iterator()"""
-    def __init__(self, items):
-        self.items = iter(items)
-    
-    def __aiter__(self):
-        return self
-    
-    async def __anext__(self):
-        try:
-            return next(self.items)
-        except StopIteration:
-            raise StopAsyncIteration
+	"""Mock async iterator for aio-pika queue.iterator()"""
+	def __init__(self, items):
+		self.items = iter(items)
+
+	def __aiter__(self):
+		return self
+
+	async def __anext__(self):
+		try:
+			return next(self.items)
+		except StopIteration:
+			raise StopAsyncIteration
 
 
-class TestRetryMechanism:
-    """Test retry mechanism with DLX cycles"""
+class TestDLXRetryCycleOnly:
+	"""Test DLX retry cycle mechanism WITHOUT immediate retries"""
 
-    @pytest.fixture
-    def mock_consumer(self):
-        """Create a mock consumer with mocked connection and channel"""
-        consumer = MrsalBlockingAMQP(
-            host="localhost",
-            port=5672,
-            credentials=("user", "password"),
-            virtual_host="testboi",
-            ssl=False,
-            verbose=False,
-            prefetch_count=1,
-            heartbeat=60,
-            dlx_enable=True,
-            max_retries=2,
-            use_quorum_queues=True,
-            blocked_connection_timeout=60
-        )
-        
-        # Mock connection and channel
-        consumer._connection = MagicMock()
-        consumer._channel = MagicMock()
-        consumer.auto_declare_ok = True
-        
-        # Mock setup methods
-        consumer.setup_blocking_connection = MagicMock()
-        consumer._setup_exchange_and_queue = MagicMock()
-        
-        return consumer
+	@pytest.fixture
+	def mock_consumer(self):
+		"""Create a mock consumer with mocked connection and channel"""
+		consumer = MrsalBlockingAMQP(
+			host="localhost",
+			port=5672,
+			credentials=("user", "password"),
+			virtual_host="testboi",
+			ssl=False,
+			verbose=False,
+			prefetch_count=1,
+			heartbeat=60,
+			dlx_enable=True,
+			use_quorum_queues=True,
+			blocked_connection_timeout=60
+		)
 
-    def test_immediate_retry_params_exist(self, mock_consumer):
-        """Test that start_consumer accepts immediate retry parameters"""
-        # Should not raise error when passing immediate retry parameters
-        mock_consumer._channel.consume.return_value = []
-        
-        try:
-            mock_consumer.start_consumer(
-                queue_name="test_queue",
-                auto_declare=True,
-                exchange_name="test_exchange",
-                exchange_type="direct",
-                routing_key="test_key",
-                immediate_retry_delay=5,
-                enable_retry_cycles=True,
-                retry_cycle_interval=10,
-                max_retry_time_limit=60
-            )
-        except Exception as e:
-            if "unexpected keyword argument" in str(e):
-                pytest.fail(f"start_consumer doesn't accept retry parameters: {e}")
+		consumer._connection = MagicMock()
+		consumer._channel = MagicMock()
+		consumer.auto_declare_ok = True
+		consumer.setup_blocking_connection = MagicMock()
+		consumer._setup_exchange_and_queue = MagicMock()
 
-    def test_retry_cycle_params_exist(self, mock_consumer):
-        """Test that start_consumer accepts retry cycle parameters"""
-        mock_consumer._channel.consume.return_value = []
-        
-        try:
-            mock_consumer.start_consumer(
-                queue_name="test_queue", 
-                auto_declare=True,
-                exchange_name="test_exchange",
-                exchange_type="direct", 
-                routing_key="test_key",
-                enable_retry_cycles=True,
-                retry_cycle_interval=15,
-                max_retry_time_limit=90
-            )
-        except Exception as e:
-            if "unexpected keyword argument" in str(e):
-                pytest.fail(f"start_consumer doesn't accept retry cycle parameters: {e}")
+		return consumer
 
-    @patch('mrsal.amqp.subclass.time.sleep')
-    def test_immediate_retry_delay(self, mock_sleep, mock_consumer):
-        """Test that immediate retry delay is applied between retries"""
-        mock_method_frame = MagicMock()
-        mock_method_frame.delivery_tag = 123
-        mock_properties = MagicMock()
-        mock_properties.message_id = 'test_msg'
-        invalid_body = b'{"id": "wrong_type", "name": "Test", "active": true}'
+	def test_validation_failure_sends_to_dlx_immediately(self, mock_consumer):
+		"""
+		Test that validation failures send message directly to DLX
+		NO immediate retries - goes straight to DLX
+		"""
+		mock_method_frame = MagicMock()
+		mock_method_frame.delivery_tag = 456
+		mock_method_frame.routing_key = "test_key"
+		mock_method_frame.exchange = "test_exchange"
 
-        # Create generator that yields same message multiple times (simulating redelivery)
-        def consume_generator():
-            for _ in range(3):  # 3 attempts (initial + 2 retries)
-                yield (mock_method_frame, mock_properties, invalid_body)
+		invalid_body = b'{"id": "not_an_int", "name": "Test", "active": true}'
 
-        mock_consumer._channel.consume.return_value = consume_generator()
+		props = MagicMock()
+		props.message_id = 'validation_test'
+		props.app_id = 'test_app'
+		props.headers = None
 
-        mock_consumer.start_consumer(
-            queue_name="test_queue",
-            callback=Mock(),
-            auto_ack=False,
-            auto_declare=True,
-            exchange_name="test_exchange", 
-            exchange_type="direct",
-            routing_key="test_key",
-            payload_model=ExpectedPayload,
-            immediate_retry_delay=3  # 3 seconds delay
-        )
+		mock_consumer._channel.consume.return_value = [
+			(mock_method_frame, props, invalid_body)
+		]
 
-        # Should have called sleep during retries
-        mock_sleep.assert_called_with(3)
+		mock_consumer._publish_to_dlx_with_retry_cycle = MagicMock()
 
-    def test_validation_failure_with_retry_cycles_disabled(self, mock_consumer):
-        """Test that original DLX behavior is used when retry cycles disabled."""
-        mock_method_frame = MagicMock()
-        mock_method_frame.delivery_tag = 123
-        mock_method_frame.routing_key = "test_key"
-        mock_properties = MagicMock()
-        mock_properties.message_id = 'test_msg'
-        mock_properties.app_id = 'test_app'
-        invalid_body = b'{"id": "wrong_type", "name": "Test", "active": true}'
+		mock_consumer.start_consumer(
+			queue_name="test_queue",
+			callback=Mock(),
+			auto_ack=False,
+			auto_declare=True,
+			exchange_name="test_exchange",
+			exchange_type="direct",
+			routing_key="test_key",
+			payload_model=ExpectedPayload,
+			dlx_enable=True,
+			enable_retry_cycles=True,
+			retry_cycle_interval=10,
+			max_retry_time_limit=60
+		)
 
-        # Create generator that simulates redelivery cycle
-        def consume_generator():
-            # Initial delivery + max_retries (2) = 3 total attempts
-            for _ in range(3):
-                yield (mock_method_frame, mock_properties, invalid_body)
+		# Should NOT nack with requeue
+		mock_consumer._channel.basic_nack.assert_not_called()
 
-        mock_consumer._channel.consume.return_value = consume_generator()
+		# Should call DLX immediately (no immediate retries)
+		mock_consumer._publish_to_dlx_with_retry_cycle.assert_called_once()
+		
+		# Verify the call had correct parameters
+		call_args = mock_consumer._publish_to_dlx_with_retry_cycle.call_args
+		assert call_args[0][0] == mock_method_frame
+		assert call_args[0][1] == props
+		assert call_args[0][2] == invalid_body
 
-        mock_consumer.start_consumer(
-            queue_name="test_queue",
-            callback=Mock(),
-            auto_ack=False,
-            auto_declare=True,
-            exchange_name="test_exchange",
-            exchange_type="direct",
-            routing_key="test_key",
-            payload_model=ExpectedPayload,
-            dlx_enable=True,
-            enable_retry_cycles=False  # Disable retry cycles
-        )
+	def test_callback_failure_sends_to_dlx_with_cycles_enabled(self, mock_consumer):
+		"""
+		Test callback failure with retry_cycles enabled.
+		Should send to DLX immediately for retry cycle
+		"""
+		mock_method_frame = MagicMock()
+		mock_method_frame.delivery_tag = 789
+		mock_method_frame.routing_key = "test_key"
+		mock_method_frame.exchange = "test_exchange"
 
-        # Should use original behavior (basic_nack with requeue=False) after max retries
-        nack_calls = mock_consumer._channel.basic_nack.call_args_list
-        
-        # First calls should be requeue=True (immediate retries)
-        for i in range(mock_consumer.max_retries):
-            assert nack_calls[i][1]['requeue'] == True
-        
-        # Final call should be requeue=False (goes to DLX)
-        final_nack_call = nack_calls[-1]
-        assert final_nack_call[1]['delivery_tag'] == 123
-        assert final_nack_call[1]['requeue'] == False  # Goes to DLX
+		valid_body = b'{"id": 123, "name": "Test", "active": true}'
 
-    def test_validation_failure_with_retry_cycles_enabled(self, mock_consumer):
-        """Test that retry cycle DLX logic is used when enabled"""
-        mock_method_frame = MagicMock()
-        mock_method_frame.delivery_tag = 123
-        mock_method_frame.routing_key = "test_key"
-        mock_properties = MagicMock()
-        mock_properties.message_id = 'test_msg'
-        mock_properties.app_id = 'test_app'
-        mock_properties.headers = None
-        invalid_body = b'{"id": "wrong_type", "name": "Test", "active": true}'
+		props = MagicMock()
+		props.message_id = 'callback_fail'
+		props.app_id = 'test_app'
+		props.headers = None
 
-        # Create generator that simulates redelivery cycle
-        def consume_generator():
-            # Initial delivery + max_retries (2) = 3 total attempts
-            for _ in range(3):
-                yield (mock_method_frame, mock_properties, invalid_body)
+		mock_consumer._channel.consume.return_value = [
+			(mock_method_frame, props, valid_body)
+		]
 
-        mock_consumer._channel.consume.return_value = consume_generator()
+		# Callback that always fails
+		failing_callback = Mock(side_effect=Exception("Processing failed"))
+		mock_consumer._publish_to_dlx_with_retry_cycle = MagicMock()
 
-        # Mock the DLX publishing method
-        mock_consumer._publish_to_dlx = MagicMock()
+		mock_consumer.start_consumer(
+			queue_name="test_queue",
+			callback=failing_callback,
+			auto_ack=False,
+			auto_declare=True,
+			exchange_name="test_exchange",
+			exchange_type="direct",
+			routing_key="test_key",
+			payload_model=ExpectedPayload,
+			dlx_enable=True,
+			enable_retry_cycles=True,
+			retry_cycle_interval=10,
+			max_retry_time_limit=60
+		)
 
-        mock_consumer.start_consumer(
-            queue_name="test_queue",
-            callback=Mock(),
-            auto_ack=False,
-            auto_declare=True,
-            exchange_name="test_exchange",
-            exchange_type="direct",
-            routing_key="test_key",
-            payload_model=ExpectedPayload,
-            dlx_enable=True,
-            enable_retry_cycles=True,  # Enable retry cycles
-            retry_cycle_interval=10,
-            max_retry_time_limit=60
-        )
+		# Callback should be called once (no immediate retries)
+		assert failing_callback.call_count == 1
 
-        # Should call the DLX retry cycle method instead of basic_nack
-        mock_consumer._publish_to_dlx.assert_called()
+		# Should send to DLX with retry cycle
+		mock_consumer._publish_to_dlx_with_retry_cycle.assert_called_once()
 
-    def test_callback_failure_triggers_retry(self, mock_consumer):
-        """Test that callback failures trigger the retry mechanism"""
-        mock_method_frame = MagicMock()
-        mock_method_frame.delivery_tag = 456
-        mock_properties = MagicMock()
-        mock_properties.message_id = 'callback_test'
-        valid_body = b'{"id": 123, "name": "Test", "active": true}'
+	def test_callback_failure_with_retry_cycles_disabled(self, mock_consumer):
+		"""
+		Test callback failure with retry_cycles disabled.
+		Should nack to DLX without retry cycle logic
+		"""
+		mock_method_frame = MagicMock()
+		mock_method_frame.delivery_tag = 999
+		mock_method_frame.routing_key = "test_key"
 
-        def consume_generator():
-            for _ in range(3):
-                yield (mock_method_frame, mock_properties, valid_body)
+		valid_body = b'{"id": 123, "name": "Test", "active": true}'
 
-        mock_consumer._channel.consume.return_value = consume_generator()
+		props = MagicMock()
+		props.message_id = 'callback_no_cycle'
+		props.app_id = 'test_app'
+		props.headers = None
 
-        # Mock callback that raises exception
-        failing_callback = Mock(side_effect=Exception("Callback failed"))
+		mock_consumer._channel.consume.return_value = [
+			(mock_method_frame, props, valid_body)
+		]
 
-        mock_consumer.start_consumer(
-            queue_name="test_queue",
-            callback=failing_callback,
-            auto_ack=False,
-            auto_declare=True,
-            exchange_name="test_exchange",
-            exchange_type="direct",
-            routing_key="test_key",
-            payload_model=ExpectedPayload,
-            immediate_retry_delay=1
-        )
+		failing_callback = Mock(side_effect=Exception("Processing failed"))
 
-        # Callback should be called multiple times due to retries
-        assert failing_callback.call_count >= 2
-        
-        # Should have nack calls with requeue
-        nack_calls = mock_consumer._channel.basic_nack.call_args_list
-        assert len(nack_calls) > 0
-        assert nack_calls[0][1]['delivery_tag'] == 456
+		mock_consumer.start_consumer(
+			queue_name="test_queue",
+			callback=failing_callback,
+			auto_ack=False,
+			auto_declare=True,
+			exchange_name="test_exchange",
+			exchange_type="direct",
+			routing_key="test_key",
+			payload_model=ExpectedPayload,
+			dlx_enable=True,
+			enable_retry_cycles=False  # Disabled
+		)
 
-    def test_successful_processing_acks_message(self, mock_consumer):
-        """Test that successful processing acknowledges the message"""
-        mock_method_frame = MagicMock()
-        mock_method_frame.delivery_tag = 789
-        mock_properties = MagicMock()
-        mock_properties.message_id = 'success_test'
-        mock_properties.app_id = 'test_app'
-        valid_body = b'{"id": 123, "name": "Test", "active": true}'
+		# Should nack with requeue=False (goes to DLX)
+		nack_calls = mock_consumer._channel.basic_nack.call_args_list
+		assert len(nack_calls) == 1
+		assert nack_calls[0][1]['delivery_tag'] == 999
+		assert nack_calls[0][1]['requeue'] == False
 
-        mock_consumer._channel.consume.return_value = [
-            (mock_method_frame, mock_properties, valid_body)
-        ]
+	def test_successful_processing_acks_message(self, mock_consumer):
+		"""Test that successful processing acks immediately without retries"""
+		mock_method_frame = MagicMock()
+		mock_method_frame.delivery_tag = 111
+		
+		valid_body = b'{"id": 456, "name": "Success", "active": false}'
 
-        successful_callback = Mock()  # No exception
+		props = MagicMock()
+		props.message_id = 'success_msg'
+		props.app_id = 'test_app'
+		props.headers = None
 
-        mock_consumer.start_consumer(
-            queue_name="test_queue",
-            callback=successful_callback,
-            auto_ack=False,
-            auto_declare=True,
-            exchange_name="test_exchange",
-            exchange_type="direct",
-            routing_key="test_key",
-            payload_model=ExpectedPayload
-        )
+		mock_consumer._channel.consume.return_value = [
+			(mock_method_frame, props, valid_body)
+		]
 
-        # Should acknowledge the message
-        mock_consumer._channel.basic_ack.assert_called_with(delivery_tag=789)
-        
-        # Should not have any nack calls
-        mock_consumer._channel.basic_nack.assert_not_called()
+		successful_callback = Mock()  # No exception
+
+		mock_consumer.start_consumer(
+			queue_name="test_queue",
+			callback=successful_callback,
+			auto_ack=False,
+			auto_declare=True,
+			exchange_name="test_exchange",
+			exchange_type="direct",
+			routing_key="test_key",
+			payload_model=ExpectedPayload
+		)
+
+		# Should ack immediately
+		mock_consumer._channel.basic_ack.assert_called_once_with(delivery_tag=111)
+
+		# Should NOT nack or send to DLX
+		mock_consumer._channel.basic_nack.assert_not_called()
+
+	def test_no_dlx_drops_message(self, mock_consumer):
+		"""Test that without DLX, failed messages are dropped"""
+		mock_method_frame = MagicMock()
+		mock_method_frame.delivery_tag = 222
+
+		invalid_body = b'{"id": "bad", "name": "Test", "active": true}'
+
+		props = MagicMock()
+		props.message_id = 'no_dlx'
+		props.app_id = 'test_app'
+		props.headers = None
+
+		mock_consumer._channel.consume.return_value = [
+			(mock_method_frame, props, invalid_body)
+		]
+
+		mock_consumer.start_consumer(
+			queue_name="test_queue",
+			callback=Mock(),
+			auto_ack=False,
+			auto_declare=True,
+			exchange_name="test_exchange",
+			exchange_type="direct",
+			routing_key="test_key",
+			payload_model=ExpectedPayload,
+			dlx_enable=False  # No DLX
+		)
+
+		# Should nack with requeue=False (message dropped)
+		nack_calls = mock_consumer._channel.basic_nack.call_args_list
+		assert len(nack_calls) == 1
+		assert nack_calls[0][1]['requeue'] == False
 
 
-class TestAsyncRetryCycles:
-    """Test async consumer retry cycle functionality"""
+class TestAsyncDLXRetryCycleOnly:
+	"""Test async consumer with DLX retry cycles (no immediate retries)"""
 
-    @pytest.fixture
-    def mock_async_consumer(self):
-        """Create a mock async consumer"""
-        consumer = MrsalAsyncAMQP(
-            host="localhost",
-            port=5672,
-            credentials=("user", "password"),
-            virtual_host="testboi",
-            ssl=False,
-            verbose=False,
-            prefetch_count=1,
-            heartbeat=60,
-            dlx_enable=True,
-            max_retries=2,
-            use_quorum_queues=True
-        )
-        
-        # Mock connection and channel
-        consumer._connection = AsyncMock()
-        consumer._channel = AsyncMock()
-        consumer.auto_declare_ok = True
-        
-        # Mock setup methods
-        consumer.setup_async_connection = AsyncMock()
-        consumer._async_setup_exchange_and_queue = AsyncMock()
-        
-        return consumer
+	@pytest.fixture
+	def mock_async_consumer(self):
+		consumer = MrsalAsyncAMQP(
+			host="localhost",
+			port=5672,
+			credentials=("user", "password"),
+			virtual_host="testboi",
+			ssl=False,
+			verbose=False,
+			prefetch_count=1,
+			heartbeat=60,
+			dlx_enable=True,
+			use_quorum_queues=True
+		)
 
-    @pytest.mark.asyncio
-    async def test_async_start_consumer_has_retry_cycle_params(self, mock_async_consumer):
-        """Test that async start_consumer accepts retry cycle parameters."""
-        # Mock minimal setup
-        mock_queue = AsyncMock()
-        mock_async_consumer._async_setup_exchange_and_queue.return_value = mock_queue
-        
-        # FIX: Create proper async iterator mock
-        async_iterator = AsyncIteratorMock([])  # Empty iterator to avoid infinite loop
-        
-        # Mock the iterator method to return our async iterator (not a coroutine)
-        mock_queue.iterator = Mock(return_value=async_iterator)
+		consumer._connection = AsyncMock()
+		consumer._channel = AsyncMock()
+		consumer.auto_declare_ok = True
+		consumer.setup_async_connection = AsyncMock()
+		consumer._async_setup_exchange_and_queue = AsyncMock()
 
-        # Should not raise error with retry cycle parameters
-        await mock_async_consumer.start_consumer(
-            queue_name="test_queue",
-            exchange_name="test_exchange",
-            exchange_type="direct",
-            routing_key="test_key",
-            enable_retry_cycles=True,
-            retry_cycle_interval=15,
-            max_retry_time_limit=90,
-            immediate_retry_delay=5
-        )
+		return consumer
 
-    @pytest.mark.asyncio
-    @patch('mrsal.amqp.subclass.asyncio.sleep')
-    async def test_async_immediate_retry_delay(self, mock_async_sleep, mock_async_consumer):
-        """Test that immediate retry delay is applied in async consumer."""
-        # Mock message that will fail processing
-        mock_message = MagicMock()
-        mock_message.delivery_tag = 123
-        mock_message.app_id = 'test_app'
-        mock_message.headers = None
-        mock_message.body = b'{"id": "wrong_type", "name": "Test", "active": true}'
-        mock_message.reject = AsyncMock()
+	@pytest.mark.asyncio
+	async def test_async_validation_failure_sends_to_dlx(self, mock_async_consumer):
+		"""Test async validation failure sends to DLX immediately"""
+		invalid_body = b'{"id": "wrong", "name": "Test", "active": true}'
 
-        mock_properties = MagicMock()
-        mock_properties.headers = None
+		mock_msg = MagicMock()
+		mock_msg.delivery_tag = 123
+		mock_msg.app_id = 'async_app'
+		mock_msg.headers = None
+		mock_msg.body = invalid_body
+		mock_msg.reject = AsyncMock()
+		mock_msg.ack = AsyncMock()
 
-        # Mock queue iterator to return message multiple times (simulating redelivery)
-        mock_queue = AsyncMock()
-        mock_async_consumer._async_setup_exchange_and_queue.return_value = mock_queue
-        
-        # FIX: Create proper async iterator with multiple redeliveries
-        async_iterator = AsyncIteratorMock([mock_message] * 3)  # 3 redeliveries
-        mock_queue.iterator = Mock(return_value=async_iterator)
+		mock_properties = MagicMock()
+		mock_properties.headers = None
 
-        await mock_async_consumer.start_consumer(
-            queue_name="test_queue",
-            callback=AsyncMock(side_effect=Exception("Processing failed")),
-            auto_ack=False,
-            auto_declare=True,
-            exchange_name="test_exchange",
-            exchange_type="direct",
-            routing_key="test_key",
-            immediate_retry_delay=2  # 2 seconds delay
-        )
+		mock_queue = AsyncMock()
+		mock_async_consumer._async_setup_exchange_and_queue.return_value = mock_queue
 
-        # Verify asyncio.sleep was called with the delay
-        mock_async_sleep.assert_called_with(2)
+		async_iterator = AsyncIteratorMock([mock_msg])
+		mock_queue.iterator = Mock(return_value=async_iterator)
 
-    @pytest.mark.asyncio
-    async def test_async_validation_failure_with_cycles_disabled(self, mock_async_consumer):
-        """Test async consumer with validation failure and retry cycles disabled"""
-        # Mock message with invalid payload
-        mock_message = MagicMock()
-        mock_message.delivery_tag = 123
-        mock_message.app_id = 'test_app'
-        mock_message.headers = None
-        mock_message.body = b'{"id": "wrong_type", "name": "Test", "active": true}'
-        mock_message.reject = AsyncMock()
-        mock_message.ack = AsyncMock()
+		mock_async_consumer._publish_to_dlx = AsyncMock()
 
-        mock_properties = MagicMock()
-        mock_properties.headers = None
+		await mock_async_consumer.start_consumer(
+			queue_name="test_queue",
+			callback=AsyncMock(),
+			auto_ack=False,
+			auto_declare=True,
+			exchange_name="test_exchange",
+			exchange_type="direct",
+			routing_key="test_key",
+			payload_model=ExpectedPayload,
+			enable_retry_cycles=True,
+			retry_cycle_interval=10,
+			max_retry_time_limit=60
+		)
 
-        mock_queue = AsyncMock()
-        mock_async_consumer._async_setup_exchange_and_queue.return_value = mock_queue
-        
-        # Simulate multiple redeliveries
-        async_iterator = AsyncIteratorMock([mock_message] * 3)
-        mock_queue.iterator = Mock(return_value=async_iterator)
+		# Should NOT reject (handled by DLX publish)
+		mock_msg.reject.assert_not_called()
 
-        await mock_async_consumer.start_consumer(
-            queue_name="test_queue",
-            callback=AsyncMock(),
-            auto_ack=False,
-            auto_declare=True,
-            exchange_name="test_exchange",
-            exchange_type="direct",
-            routing_key="test_key",
-            payload_model=ExpectedPayload,
-            dlx_enable=True,
-            enable_retry_cycles=False
-        )
+		# Should call DLX
+		mock_async_consumer._publish_to_dlx.assert_called_once()
 
-        # Should have called reject with requeue=False eventually
-        mock_message.reject.assert_called()
+	@pytest.mark.asyncio
+	async def test_async_successful_processing(self, mock_async_consumer):
+		"""Test async successful message processing"""
+		valid_body = b'{"id": 789, "name": "AsyncSuccess", "active": true}'
 
-    @pytest.mark.asyncio
-    async def test_async_successful_processing(self, mock_async_consumer):
-        """Test async consumer successful message processing"""
-        # Mock message with valid payload
-        mock_message = MagicMock()
-        mock_message.delivery_tag = 456
-        mock_message.app_id = 'test_app'
-        mock_message.headers = None
-        mock_message.body = b'{"id": 123, "name": "Test", "active": true}'
-        mock_message.ack = AsyncMock()
-        mock_message.reject = AsyncMock()
+		mock_msg = MagicMock()
+		mock_msg.delivery_tag = 456
+		mock_msg.app_id = 'async_app'
+		mock_msg.headers = None
+		mock_msg.body = valid_body
+		mock_msg.ack = AsyncMock()
+		mock_msg.reject = AsyncMock()
 
-        mock_properties = MagicMock()
-        mock_properties.headers = None
+		mock_properties = MagicMock()
+		mock_properties.headers = None
 
-        mock_queue = AsyncMock()
-        mock_async_consumer._async_setup_exchange_and_queue.return_value = mock_queue
-        
-        # Single successful message
-        async_iterator = AsyncIteratorMock([mock_message])
-        mock_queue.iterator = Mock(return_value=async_iterator)
+		mock_queue = AsyncMock()
+		mock_async_consumer._async_setup_exchange_and_queue.return_value = mock_queue
 
-        successful_callback = AsyncMock()
+		async_iterator = AsyncIteratorMock([mock_msg])
+		mock_queue.iterator = Mock(return_value=async_iterator)
 
-        await mock_async_consumer.start_consumer(
-            queue_name="test_queue",
-            callback=successful_callback,
-            auto_ack=False,
-            auto_declare=True,
-            exchange_name="test_exchange",
-            exchange_type="direct",
-            routing_key="test_key",
-            payload_model=ExpectedPayload
-        )
+		successful_callback = AsyncMock()
 
-        # Should acknowledge the message
-        mock_message.ack.assert_called()
-        
-        # Should not reject
-        mock_message.reject.assert_not_called()
+		await mock_async_consumer.start_consumer(
+			queue_name="test_queue",
+			callback=successful_callback,
+			auto_ack=False,
+			auto_declare=True,
+			exchange_name="test_exchange",
+			exchange_type="direct",
+			routing_key="test_key",
+			payload_model=ExpectedPayload
+		)
 
-    @pytest.mark.asyncio
-    async def test_async_callback_failure_retry_cycles(self, mock_async_consumer):
-        """Test async consumer callback failure with retry cycles enabled"""
-        mock_message = MagicMock()
-        mock_message.delivery_tag = 789
-        mock_message.app_id = 'test_app'
-        mock_message.headers = None
-        mock_message.body = b'{"id": 123, "name": "Test", "active": true}'
-        mock_message.ack = AsyncMock()
-        mock_message.reject = AsyncMock()
+		# Should ack
+		mock_msg.ack.assert_called_once()
 
-        mock_properties = MagicMock()
-        mock_properties.headers = None
-
-        mock_queue = AsyncMock()
-        mock_async_consumer._async_setup_exchange_and_queue.return_value = mock_queue
-        
-        # Multiple message deliveries for retry testing
-        async_iterator = AsyncIteratorMock([mock_message] * 3)
-        mock_queue.iterator = Mock(return_value=async_iterator)
-
-        # Mock the DLX publishing method
-        mock_async_consumer._publish_to_dlx = AsyncMock()
-
-        failing_callback = AsyncMock(side_effect=Exception("Async callback failed"))
-
-        await mock_async_consumer.start_consumer(
-            queue_name="test_queue",
-            callback=failing_callback,
-            auto_ack=False,
-            auto_declare=True,
-            exchange_name="test_exchange",
-            exchange_type="direct",
-            routing_key="test_key",
-            payload_model=ExpectedPayload,
-            dlx_enable=True,
-            enable_retry_cycles=True,
-            retry_cycle_interval=5,
-            max_retry_time_limit=30
-        )
-
-        # Callback should be called multiple times
-        assert failing_callback.call_count >= 2
+		# Should NOT reject
+		mock_msg.reject.assert_not_called()
 
 
 class TestDLXRetryHeaders:
-    """Test DLX retry cycle header management"""
+	"""Test DLX retry cycle header management"""
 
-    @pytest.fixture
-    def mock_consumer(self):
-        consumer = MrsalBlockingAMQP(
-            host="localhost",
-            port=5672,
-            credentials=("user", "password"),
-            virtual_host="testboi",
-            dlx_enable=True,
-            max_retries=2
-        )
-        consumer._connection = MagicMock()
-        consumer._channel = MagicMock()
-        return consumer
+	@pytest.fixture
+	def mock_consumer(self):
+		consumer = MrsalBlockingAMQP(
+			host="localhost",
+			port=5672,
+			credentials=("user", "password"),
+			virtual_host="testboi",
+			dlx_enable=True
+		)
+		consumer._connection = MagicMock()
+		consumer._channel = MagicMock()
+		return consumer
 
-    def test_retry_cycle_info_extraction(self, mock_consumer):
-        """Test extraction of retry cycle information from headers"""
-        # Mock properties with retry headers
-        mock_properties = MagicMock()
-        mock_properties.headers = {
-            'x-cycle-count': 2,
-            'x-first-failure': '2024-01-01T10:00:00Z',
-            'x-total-elapsed': 120000  # 2 minutes in ms
-        }
+	def test_retry_cycle_info_extraction(self, mock_consumer):
+		"""Test extraction of retry cycle information from headers"""
+		mock_properties = MagicMock()
+		mock_properties.headers = {
+			'x-cycle-count': 2,
+			'x-first-failure': '2024-01-01T10:00:00Z',
+			'x-total-elapsed': 120000
+		}
 
-        retry_info = mock_consumer._get_retry_cycle_info(mock_properties)
-        
-        assert retry_info['cycle_count'] == 2
-        assert retry_info['first_failure'] == '2024-01-01T10:00:00Z'
-        assert retry_info['total_elapsed'] == 120000
+		retry_info = mock_consumer._get_retry_cycle_info(mock_properties)
 
-    def test_retry_cycle_info_defaults(self, mock_consumer):
-        """Test default values when no retry headers present"""
-        mock_properties = MagicMock()
-        mock_properties.headers = None
+		assert retry_info['cycle_count'] == 2
+		assert retry_info['first_failure'] == '2024-01-01T10:00:00Z'
+		assert retry_info['total_elapsed'] == 120000
 
-        retry_info = mock_consumer._get_retry_cycle_info(mock_properties)
-        
-        assert retry_info['cycle_count'] == 0
-        assert retry_info['first_failure'] is None
-        assert retry_info['total_elapsed'] == 0
+	def test_should_continue_retry_cycles_time_limit(self, mock_consumer):
+		"""Test retry cycle time limit checking"""
+		# Within time limit
+		retry_info = {'total_elapsed': 30000}
+		should_continue = mock_consumer._should_continue_retry_cycles(
+			retry_info, enable_retry_cycles=True, max_retry_time_limit=1
+		)
+		assert should_continue is True
 
-    def test_should_continue_retry_cycles_time_limit(self, mock_consumer):
-        """Test retry cycle time limit checking"""
-        # Within time limit
-        retry_info = {'total_elapsed': 30000}  # 30 seconds
-        should_continue = mock_consumer._should_continue_retry_cycles(
-            retry_info, enable_retry_cycles=True, max_retry_time_limit=1  # 1 minute
-        )
-        assert should_continue is True
-
-        # Exceeded time limit
-        retry_info = {'total_elapsed': 120000}  # 2 minutes
-        should_continue = mock_consumer._should_continue_retry_cycles(
-            retry_info, enable_retry_cycles=True, max_retry_time_limit=1  # 1 minute
-        )
-        assert should_continue is False
-
-    def test_should_continue_retry_cycles_disabled(self, mock_consumer):
-        """Test retry cycle disabled"""
-        retry_info = {'total_elapsed': 0}
-        should_continue = mock_consumer._should_continue_retry_cycles(
-            retry_info, enable_retry_cycles=False, max_retry_time_limit=60
-        )
-        assert should_continue is False
-
-    def test_create_retry_cycle_headers(self, mock_consumer):
-        """Test creation of retry cycle headers"""
-        original_headers = {'custom-header': 'value'}
-        
-        headers = mock_consumer._create_retry_cycle_headers(
-            original_headers=original_headers,
-            cycle_count=1,
-            first_failure='2024-01-01T10:00:00Z',
-            processing_error='Test error',
-            should_cycle=True,
-            original_exchange='test_exchange',
-            original_routing_key='test_key'
-        )
-
-        assert headers['x-cycle-count'] == 2  # cycle_count + 1
-        assert headers['x-first-failure'] == '2024-01-01T10:00:00Z'
-        assert headers['x-processing-error'] == 'Test error'
-        assert headers['x-retry-exhausted'] is False
-        assert headers['x-dead-letter-exchange'] == 'test_exchange'
-        assert headers['x-dead-letter-routing-key'] == 'test_key'
-        assert headers['custom-header'] == 'value'  # Original header preserved
+		# Exceeded time limit
+		retry_info = {'total_elapsed': 120000}
+		should_continue = mock_consumer._should_continue_retry_cycles(
+			retry_info, enable_retry_cycles=True, max_retry_time_limit=1
+		)
+		assert should_continue is False
