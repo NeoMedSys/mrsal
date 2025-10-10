@@ -11,7 +11,6 @@ Mrsal is a **production-ready** message broker abstraction on top of [RabbitMQ](
 
 **What makes Mrsal production-ready:**
 
-- **Intelligent Retry Logic**: Immediate retries + time-delayed retry cycles prevent message loss  
 - **Dead Letter Exchange**: Automatic DLX setup with configurable retry cycles  
 - **High Availability**: Quorum queues for data safety across cluster nodes  
 - **Performance Tuning**: Queue limits, overflow behavior, lazy queues, prefetch control  
