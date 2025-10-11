@@ -273,7 +273,7 @@ class Mrsal:
 
                     await self._async_declare_queue_binding(
                             exchange=dlx_exchange_obj,
-                            queue=dlx_queue_name,
+                            queue=dlx_queue,
                             routing_key=dlx_routing,
                             arguments=None
                             )
