@@ -108,7 +108,7 @@ class Mrsal:
                 except MrsalSetupError as e:
                     log.warning(f"DLX {dlx_name} might already exist or failed to create: {e}")
 
-                dlx_queue_name = f"{dlx_name}.queue"
+                dlx_queue_name = f"{queue_name}.dlx"
                 try:
                     self._declare_queue(
                             queue=dlx_queue_name,
@@ -125,7 +125,7 @@ class Mrsal:
                             arguments=None
                             )
                     if self.verbose:
-                        log.info("DLX queue {dlx_queue_name} declared and bound successfully")
+                        log.info(f"DLX queue {dlx_queue_name} declared and bound successfully")
                 except MrsalSetupError as e:
                     log.warning(f"DLX queue {dlx_queue_name} setup failed")
 
@@ -258,7 +258,7 @@ class Mrsal:
                 except MrsalSetupError as e:
                     log.warning(f"DLX {dlx_name} might already exist or failed to create: {e}")
 
-                dlx_queue_name = f"{dlx_name}.queue"
+                dlx_queue_name = f"{queue_name}.dlx"
                 try:
                     dlx_queue = await self._async_declare_queue(
                             queue_name=dlx_queue_name,
@@ -278,7 +278,7 @@ class Mrsal:
                             arguments=None
                             )
                     if self.verbose:
-                        log.info("DLX queue {dlx_queue_name} declared and bound successfully")
+                        log.info(f"DLX queue {dlx_queue_name} declared and bound successfully")
                 except MrsalSetupError as e:
                     log.warning(f"DLX queue {dlx_queue_name} setup failed")
 
