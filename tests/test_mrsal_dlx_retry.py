@@ -49,6 +49,8 @@ class TestDLXRetryCycleOnly:
 
 		consumer._connection = MagicMock()
 		consumer._channel = MagicMock()
+		consumer._consumer_channel = consumer._channel
+		consumer._connection.channel.return_value = consumer._channel
 		consumer.auto_declare_ok = True
 		consumer.setup_blocking_connection = MagicMock()
 		consumer._setup_exchange_and_queue = MagicMock()
@@ -261,6 +263,98 @@ class TestDLXRetryCycleOnly:
 		assert nack_calls[0][1]['requeue'] == False
 
 
+class TestDLXUsesConsumerChannel:
+	"""Test that DLX publish and ack/nack operations use _consumer_channel, not _channel."""
+
+	@pytest.fixture
+	def mock_consumer(self):
+		consumer = MrsalBlockingAMQP(
+			host="localhost",
+			port=5672,
+			credentials=("user", "password"),
+			virtual_host="testboi",
+			ssl=False,
+			prefetch_count=1,
+			heartbeat=60,
+			dlx_enable=True,
+			blocked_connection_timeout=60
+		)
+
+		consumer._connection = MagicMock()
+		consumer._channel = MagicMock(name='main_channel')
+		consumer._consumer_channel = MagicMock(name='consumer_channel')
+		return consumer
+
+	def test_publish_to_dlx_uses_consumer_channel(self, mock_consumer):
+		"""_publish_to_dlx must publish via _consumer_channel, not _channel."""
+		mock_consumer._publish_to_dlx(
+			dlx_exchange="test.dlx",
+			routing_key="test_key",
+			body=b'{"data": "failed"}',
+			properties={'headers': {'x-cycle-count': 1}, 'delivery_mode': 2}
+		)
+
+		mock_consumer._consumer_channel.basic_publish.assert_called_once()
+		mock_consumer._channel.basic_publish.assert_not_called()
+
+	def test_publish_to_dlx_with_retry_cycle_acks_on_consumer_channel(self, mock_consumer):
+		"""_publish_to_dlx_with_retry_cycle must ack on _consumer_channel after DLX publish."""
+		mock_method_frame = MagicMock()
+		mock_method_frame.delivery_tag = 42
+
+		mock_properties = MagicMock()
+		mock_properties.headers = None
+		mock_properties.content_type = 'application/json'
+
+		mock_consumer._publish_to_dlx_with_retry_cycle(
+			method_frame=mock_method_frame,
+			properties=mock_properties,
+			body=b'{"data": "failed"}',
+			processing_error="test error",
+			original_exchange="test_exchange",
+			original_routing_key="test_key",
+			enable_retry_cycles=True,
+			retry_cycle_interval=10,
+			max_retry_time_limit=60,
+			dlx_exchange_name=None
+		)
+
+		# Ack goes through _consumer_channel
+		mock_consumer._consumer_channel.basic_ack.assert_called_once_with(delivery_tag=42)
+		mock_consumer._channel.basic_ack.assert_not_called()
+
+	def test_publish_to_dlx_with_retry_cycle_nacks_on_failure(self, mock_consumer):
+		"""On DLX publish failure, nack must go through _consumer_channel."""
+		mock_method_frame = MagicMock()
+		mock_method_frame.delivery_tag = 99
+
+		mock_properties = MagicMock()
+		mock_properties.headers = None
+		mock_properties.content_type = 'application/json'
+
+		# Make the DLX publish fail
+		mock_consumer._consumer_channel.basic_publish.side_effect = Exception("broker down")
+
+		mock_consumer._publish_to_dlx_with_retry_cycle(
+			method_frame=mock_method_frame,
+			properties=mock_properties,
+			body=b'{"data": "failed"}',
+			processing_error="test error",
+			original_exchange="test_exchange",
+			original_routing_key="test_key",
+			enable_retry_cycles=True,
+			retry_cycle_interval=10,
+			max_retry_time_limit=60,
+			dlx_exchange_name=None
+		)
+
+		# Nack with requeue goes through _consumer_channel
+		mock_consumer._consumer_channel.basic_nack.assert_called_once_with(
+			delivery_tag=99, requeue=True
+		)
+		mock_consumer._channel.basic_nack.assert_not_called()
+
+
 class TestAsyncDLXRetryCycleOnly:
 	"""Test async consumer with DLX retry cycles (no immediate retries)"""
 
@@ -387,6 +481,8 @@ class TestDLXRetryHeaders:
 		)
 		consumer._connection = MagicMock()
 		consumer._channel = MagicMock()
+		consumer._consumer_channel = consumer._channel
+		consumer._connection.channel.return_value = consumer._channel
 		return consumer
 
 	def test_retry_cycle_info_extraction(self, mock_consumer):

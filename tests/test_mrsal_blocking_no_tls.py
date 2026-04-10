@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import Mock, patch, MagicMock, call
+from unittest.mock import Mock, patch, MagicMock, call, ANY
 from pika.exceptions import AMQPConnectionError, UnroutableError
 from pydantic.dataclasses import dataclass
 from tenacity import RetryError
@@ -48,7 +48,11 @@ def mock_amqp_connection():
 def amqp_consumer(mock_amqp_connection):
     mock_connection, mock_channel, _ = mock_amqp_connection
     consumer = MrsalBlockingAMQP(**SETUP_ARGS)
+    consumer._connection = mock_connection
     consumer._channel = mock_channel  # Inject the mocked channel into the consumer
+    consumer._consumer_channel = mock_channel
+    mock_connection.is_open = False
+    mock_connection.channel.return_value = mock_channel
     return consumer
 
 
@@ -189,7 +193,8 @@ def test_publish_message(amqp_consumer):
         queue_name='test_q',
         exchange_type='direct',
         routing_key=routing_key,
-        passive=True
+        passive=True,
+        channel=ANY
     )
 
     amqp_consumer._channel.basic_publish.assert_called_once_with(
@@ -257,3 +262,206 @@ def test_retry_on_unroutable_error(amqp_consumer):
         properties=None
     )
     amqp_consumer._channel.basic_publish.assert_has_calls([expected_call] * 3)
+
+
+def test_publish_from_inside_consumer_callback(mock_amqp_connection):
+    """Regression: publishing from inside a consumer callback must not kill the consumer.
+
+    Before the fix, publish_message() called setup_blocking_connection() which replaced
+    self._connection and self._channel, destroying the channel the consumer loop was
+    iterating on. The consumer's next iteration would crash with StreamLostError.
+    """
+    mock_connection, mock_channel, _ = mock_amqp_connection
+
+    # Create separate mock channels for consumer vs publisher so we can verify isolation
+    consumer_channel = MagicMock(name='consumer_channel')
+    publisher_channel = MagicMock(name='publisher_channel')
+    mock_connection.channel.side_effect = [consumer_channel, publisher_channel]
+    mock_connection.is_open = False  # force _ensure_connection to call setup_blocking_connection
+
+    consumer = MrsalBlockingAMQP(**SETUP_ARGS)
+    consumer._connection = mock_connection
+    consumer._setup_exchange_and_queue = Mock()
+
+    # Simulate two messages in the consume loop
+    msg1_frame = MagicMock()
+    msg1_frame.delivery_tag = 1
+    msg1_props = MagicMock()
+    msg1_props.headers = None
+    msg2_frame = MagicMock()
+    msg2_frame.delivery_tag = 2
+    msg2_props = MagicMock()
+    msg2_props.headers = None
+    body = b'{"data": "test"}'
+
+    consumer_channel.consume.return_value = [
+        (msg1_frame, msg1_props, body),
+        (msg2_frame, msg2_props, body),
+    ]
+
+    callback_calls = []
+
+    def callback(method_frame, properties, body):
+        callback_calls.append(method_frame.delivery_tag)
+        # Publish from inside the callback — this is the pattern that used to crash
+        consumer.publish_message(
+            exchange_name='downstream',
+            routing_key='downstream',
+            message=b'result',
+            exchange_type='direct',
+            queue_name='downstream',
+            auto_declare=False
+        )
+
+    consumer.start_consumer(
+        queue_name='test_q',
+        exchange_name='test_x',
+        exchange_type='direct',
+        routing_key='test_route',
+        callback=callback,
+        auto_declare=False,
+        auto_ack=True,
+    )
+
+    # Both messages were processed — consumer survived the mid-callback publish
+    assert callback_calls == [1, 2]
+
+    # Publisher used its own channel, not the consumer channel
+    publisher_channel.basic_publish.assert_called()
+    consumer_channel.basic_publish.assert_not_called()
+
+
+def test_ephemeral_channel_closed_after_publish(mock_amqp_connection):
+    """The ephemeral channel created by publish_message must be closed in finally."""
+    mock_connection, mock_channel, _ = mock_amqp_connection
+    mock_connection.is_open = True
+    mock_connection.channel.return_value = mock_channel
+
+    consumer = MrsalBlockingAMQP(**SETUP_ARGS)
+    consumer._connection = mock_connection
+    consumer._setup_exchange_and_queue = Mock()
+
+    consumer.publish_message(
+        exchange_name='test_x',
+        routing_key='test_route',
+        message=b'msg',
+        exchange_type='direct',
+        queue_name='test_q',
+        auto_declare=False
+    )
+
+    mock_channel.close.assert_called_once()
+
+
+def test_ephemeral_channel_closed_on_publish_error(mock_amqp_connection):
+    """The ephemeral channel must be closed even when basic_publish raises."""
+    mock_connection, mock_channel, _ = mock_amqp_connection
+    mock_connection.is_open = True
+    mock_connection.channel.return_value = mock_channel
+
+    consumer = MrsalBlockingAMQP(**SETUP_ARGS)
+    consumer._connection = mock_connection
+    consumer._setup_exchange_and_queue = Mock()
+    mock_channel.basic_publish.side_effect = Exception("unexpected")
+
+    consumer.publish_message(
+        exchange_name='test_x',
+        routing_key='test_route',
+        message=b'msg',
+        exchange_type='direct',
+        queue_name='test_q',
+        auto_declare=False
+    )
+
+    # Channel closed despite the error (caught by except Exception in publish_message)
+    mock_channel.close.assert_called_once()
+
+
+def test_declare_methods_use_passed_channel():
+    """Superclass declare methods must use the channel parameter when provided."""
+    from mrsal.superclass import Mrsal
+
+    consumer = MrsalBlockingAMQP(**SETUP_ARGS)
+    consumer._channel = MagicMock(name='default_channel')
+    explicit_channel = MagicMock(name='explicit_channel')
+
+    # _declare_exchange should use explicit_channel, not self._channel
+    consumer._declare_exchange(
+        exchange='test_x',
+        exchange_type='direct',
+        arguments=None,
+        durable=True,
+        passive=False,
+        internal=False,
+        auto_delete=False,
+        channel=explicit_channel
+    )
+    explicit_channel.exchange_declare.assert_called_once()
+    consumer._channel.exchange_declare.assert_not_called()
+
+    # _declare_queue should use explicit_channel
+    consumer._declare_queue(
+        queue='test_q',
+        arguments=None,
+        durable=True,
+        exclusive=False,
+        auto_delete=False,
+        passive=False,
+        channel=explicit_channel
+    )
+    explicit_channel.queue_declare.assert_called_once()
+    consumer._channel.queue_declare.assert_not_called()
+
+    # _declare_queue_binding should use explicit_channel
+    consumer._declare_queue_binding(
+        exchange='test_x',
+        queue='test_q',
+        routing_key='test_route',
+        arguments=None,
+        channel=explicit_channel
+    )
+    explicit_channel.queue_bind.assert_called_once()
+    consumer._channel.queue_bind.assert_not_called()
+
+
+def test_declare_methods_fallback_to_self_channel():
+    """Superclass declare methods must fall back to self._channel when channel=None."""
+    consumer = MrsalBlockingAMQP(**SETUP_ARGS)
+    consumer._channel = MagicMock(name='default_channel')
+
+    consumer._declare_exchange(
+        exchange='test_x',
+        exchange_type='direct',
+        arguments=None,
+        durable=True,
+        passive=False,
+        internal=False,
+        auto_delete=False
+    )
+    consumer._channel.exchange_declare.assert_called_once()
+
+
+def test_connection_reuse_across_publishes(mock_amqp_connection):
+    """Publishing N times should reuse one connection, not open N connections."""
+    mock_connection, mock_channel, mock_setup = mock_amqp_connection
+
+    consumer = MrsalBlockingAMQP(**SETUP_ARGS)
+    consumer._connection = mock_connection
+    consumer._connection.is_open = True  # connection is alive
+    consumer._setup_exchange_and_queue = Mock()
+    mock_connection.channel.return_value = mock_channel
+
+    for _ in range(10):
+        consumer.publish_message(
+            exchange_name='test_x',
+            routing_key='test_route',
+            message=b'msg',
+            exchange_type='direct',
+            queue_name='test_q',
+            auto_declare=False
+        )
+
+    # setup_blocking_connection should NOT have been called — connection was already open
+    mock_setup.assert_not_called()
+    # basic_publish was called 10 times
+    assert mock_channel.basic_publish.call_count == 10

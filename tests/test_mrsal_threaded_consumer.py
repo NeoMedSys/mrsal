@@ -30,12 +30,14 @@ def mock_consumer():
     # Mock critical Pika objects
     consumer._connection = MagicMock()
     consumer._channel = MagicMock()
+    consumer._consumer_channel = consumer._channel
+    consumer._connection.channel.return_value = consumer._channel
     consumer.auto_declare_ok = True
-    
+
     # Mock setup methods to prevent actual network calls
     consumer.setup_blocking_connection = MagicMock()
     consumer._setup_exchange_and_queue = MagicMock()
-    
+
     return consumer
 
 # --- Tests ---
@@ -145,8 +147,8 @@ def test_worker_logic_acks_threadsafe(mock_consumer):
         # Verify ACK was scheduled safely
         # We expect _schedule_threadsafe to be called with (basic_ack, True, delivery_tag=99)
         mock_schedule.assert_called_with(
-            mock_consumer._channel.basic_ack, 
-            True, 
+            mock_consumer._consumer_channel.basic_ack,
+            True,
             delivery_tag=99
         )
 
@@ -169,7 +171,7 @@ def test_worker_logic_acks_blocking(mock_consumer):
         
         # Verify schedule was called with threaded=False
         mock_schedule.assert_called_with(
-            mock_consumer._channel.basic_ack, 
-            False, 
+            mock_consumer._consumer_channel.basic_ack,
+            False,
             delivery_tag=99
         )
