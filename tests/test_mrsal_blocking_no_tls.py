@@ -173,8 +173,8 @@ def test_requeue_on_validation_failure(amqp_consumer):
             payload_model=ExpectedPayload
         )
 
-        # Assert that basic_nack was called with requeue=True
-        mock_nack.assert_called_once_with(delivery_tag=123, requeue=True)
+        # Assert that basic_nack was called with requeue=False (prevents infinite redelivery loops)
+        mock_nack.assert_called_once_with(delivery_tag=123, requeue=False)
 
 
 def test_publish_message(amqp_consumer):
@@ -370,16 +370,17 @@ def test_ephemeral_channel_closed_on_publish_error(mock_amqp_connection):
     consumer._setup_exchange_and_queue = Mock()
     mock_channel.basic_publish.side_effect = Exception("unexpected")
 
-    consumer.publish_message(
-        exchange_name='test_x',
-        routing_key='test_route',
-        message=b'msg',
-        exchange_type='direct',
-        queue_name='test_q',
-        auto_declare=False
-    )
+    with pytest.raises(Exception, match="unexpected"):
+        consumer.publish_message(
+            exchange_name='test_x',
+            routing_key='test_route',
+            message=b'msg',
+            exchange_type='direct',
+            queue_name='test_q',
+            auto_declare=False
+        )
 
-    # Channel closed despite the error (caught by except Exception in publish_message)
+    # Channel closed despite the error
     mock_channel.close.assert_called_once()
 
 

@@ -1,5 +1,5 @@
 # MRSAL AMQP
-[![Release](https://img.shields.io/badge/release-3.4.0-blue.svg)](https://pypi.org/project/mrsal/) 
+[![Release](https://img.shields.io/badge/release-3.5.0-blue.svg)](https://pypi.org/project/mrsal/) 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%7C3.11%7C3.12-blue.svg)](https://www.python.org/downloads/)
 [![Mrsal Workflow](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml/badge.svg?branch=main)](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml)
 [![Coverage](https://neomedsys.github.io/mrsal/reports/badges/coverage-badge.svg)](https://neomedsys.github.io/mrsal/reports/coverage/htmlcov/)
@@ -18,6 +18,8 @@ Mrsal is a **production-ready** message broker abstraction on top of [RabbitMQ](
 - **Full Observability**: Comprehensive logging and retry tracking  
 - **Type Safety**: Pydantic integration for payload validation  
 - **Async & Sync**: Both blocking and async implementations  
+- **Threaded Consumers**: Bounded thread pool for long-running callbacks  
+- **Resource Safety**: Context manager support for clean connection lifecycle  
 
 The goal is to make Mrsal **trivial to re-use** across all services in your distributed system and to make advanced message queuing protocols **easy and safe**. No more big chunks of repetitive code across your services or bespoke solutions to handle dead letters.
 
@@ -77,6 +79,8 @@ mrsal = MrsalBlockingAMQP(
 )
 
 # boom you are staged for connection. This instantiation stages for connection only
+# When done, call mrsal.close() to clean up — or use a context manager:
+# with MrsalBlockingAMQP(...) as mrsal:
 ```
 
 #### 2.1 Publish
@@ -95,14 +99,22 @@ prop = pika.BasicProperties(
 
 message_body = {'zoomer_message': 'Get it yia bish'}
 
-# Publish the message to the exchange to be routed to queue
-mrsal.publish_message(exchange_name='zoomer_x',
-                        exchange_type='direct',
-                        queue_name='zoomer_q',
-                        routing_key='zoomer_key',
-                        message=message_body,
-                        prop=prop,
-                        auto_declare=True)
+# For publishers, use a context manager so the connection is cleaned up after sending
+with MrsalBlockingAMQP(
+    host=RABBITMQ_DOMAIN,
+    port=int(RABBITMQ_PORT),
+    credentials=(RABBITMQ_USER, RABBITMQ_PASSWORD),
+    virtual_host=RABBITMQ_VHOST,
+    ssl=False
+) as mrsal:
+    mrsal.publish_message(exchange_name='zoomer_x',
+                            exchange_type='direct',
+                            queue_name='zoomer_q',
+                            routing_key='zoomer_key',
+                            message=message_body,
+                            prop=prop,
+                            auto_declare=True)
+# Connection is automatically closed here
 ```
 
 #### 2.2 Consume
@@ -159,6 +171,8 @@ mrsal = MrsalAsyncAMQP(
 )
 
 # boom you are staged for async connection.
+# When done, call await mrsal.close() to clean up — or use an async context manager:
+# async with MrsalAsyncAMQP(...) as mrsal:
 ```
 
 #### 3.1 Consume
@@ -308,7 +322,24 @@ mrsal.start_consumer(
 - Automatic leader election and failover  
 - Works great in Kubernetes and bare metal deployments
 
-#### 4.4 Production-Ready Example
+#### 4.4 Threaded Consumer
+
+For long-running callbacks that would otherwise block the heartbeat, use `threaded=True`. Messages are processed in a bounded thread pool instead of the main thread:
+
+```python
+mrsal.start_consumer(
+    queue_name='heavy_queue',
+    exchange_name='heavy_exchange',
+    exchange_type='direct',
+    routing_key='heavy_key',
+    callback=slow_callback,
+    auto_ack=False,
+    threaded=True,              # Process messages in a thread pool
+    max_workers=10,             # Pool size (defaults to prefetch_count)
+)
+```
+
+#### 4.5 Production-Ready Example
 
 ```python
 from mrsal.amqp.subclass import MrsalBlockingAMQP

@@ -58,6 +58,7 @@ class Mrsal:
     lazy_queue: bool = False  # Keep messages in RAM for speed
     _connection: Any = field(init=False, default=None)
     _channel: Any = field(init=False, default=None)
+    auto_declare_ok: bool = field(init=False, default=False)
 
     def __post_init__(self) -> None:
         if self.ssl:
@@ -363,7 +364,7 @@ class Mrsal:
                 log.info(f"Exchange {exchange_name} and Queue {queue_name} set up successfully.")
             else:
                 log.info(f"Exchange {exchange_name} and Queue {queue_name} set up successfully.")
-            if dlx_enable:
+            if dlx_enable and not passive:
                 log.info(f"You have a dead letter exhange {dlx_name} for fault tolerance -- use it well young grasshopper!")
             return queue
         except MrsalSetupError as e:
@@ -435,7 +436,7 @@ class Mrsal:
                                 arguments={arguments}
                                 """
         if self.verbose:
-            print(f"Declaring exchange with: {exchange_declare_info}")
+            log.info(f"Declaring exchange with: {exchange_declare_info}")
 
         try:
             exchange_obj = await self._channel.declare_exchange(
@@ -617,7 +618,7 @@ class Mrsal:
         if isinstance(payload, dict):
             model(**payload)
         else:
-            raise TypeError("Fool, we aint supporting this type yet {type(payload)}.. Bytes or str -- get it straight")
+            raise TypeError(f"Fool, we aint supporting this type yet {type(payload)}.. Bytes or str -- get it straight")
 
     def _get_retry_count(self, properties) -> int:
         """Extract retry count from message headers."""
@@ -663,7 +664,7 @@ class Mrsal:
             try:
                 first_time = datetime.fromisoformat(first_failure.replace('Z', ''))
                 elapsed_ms = int((datetime.now(timezone.utc) - first_time).total_seconds() * 1000)
-            except:
+            except (ValueError, TypeError):
                 elapsed_ms = 0
         else:
             first_failure = now

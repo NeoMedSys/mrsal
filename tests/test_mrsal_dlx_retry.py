@@ -348,9 +348,9 @@ class TestDLXUsesConsumerChannel:
 			dlx_exchange_name=None
 		)
 
-		# Nack with requeue goes through _consumer_channel
+		# Nack without requeue goes through _consumer_channel (requeue=False prevents infinite loops)
 		mock_consumer._consumer_channel.basic_nack.assert_called_once_with(
-			delivery_tag=99, requeue=True
+			delivery_tag=99, requeue=False
 		)
 		mock_consumer._channel.basic_nack.assert_not_called()
 
@@ -389,6 +389,7 @@ class TestAsyncDLXRetryCycleOnly:
 		mock_msg = MagicMock()
 		mock_msg.delivery_tag = 123
 		mock_msg.app_id = 'async_app'
+		mock_msg.message_id = 'msg_123'
 		mock_msg.headers = None
 		mock_msg.body = invalid_body
 		mock_msg.reject = AsyncMock()
@@ -433,6 +434,7 @@ class TestAsyncDLXRetryCycleOnly:
 		mock_msg = MagicMock()
 		mock_msg.delivery_tag = 456
 		mock_msg.app_id = 'async_app'
+		mock_msg.message_id = 'msg_456'
 		mock_msg.headers = None
 		mock_msg.body = valid_body
 		mock_msg.ack = AsyncMock()
