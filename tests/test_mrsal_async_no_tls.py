@@ -164,3 +164,15 @@ async def test_requeue_on_invalid_message(amqp_consumer):
 
     mock_callback.assert_not_called()
     mock_message.nack.assert_called_once_with(requeue=True)
+
+
+@pytest.mark.asyncio
+async def test_setup_async_connection_reraises_unexpected_exception():
+    """Unexpected exceptions from setup_async_connection must propagate, not be swallowed."""
+    consumer = MrsalAsyncAMQP(**SETUP_ARGS)
+
+    with patch('mrsal.amqp.subclass.connect_robust',
+               new_callable=AsyncMock,
+               side_effect=RuntimeError("disk on fire")):
+        with pytest.raises(RuntimeError, match="disk on fire"):
+            await consumer.setup_async_connection()
