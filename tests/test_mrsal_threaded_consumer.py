@@ -74,7 +74,7 @@ def test_threaded_flag_uses_thread_pool(mock_consumer):
 			mock_consumer._process_single_message,
 			mock_method, mock_props, mock_body, ANY
 		)
-		mock_pool_instance.shutdown.assert_called_once_with(wait=True)
+		mock_pool_instance.shutdown.assert_called_once_with(wait=True, cancel_futures=True)
 
 def test_blocking_mode_does_not_use_thread_pool(mock_consumer):
 	"""Test that threaded=False (default) does not create a ThreadPoolExecutor."""
