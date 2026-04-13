@@ -11,7 +11,7 @@ from pika.connection import SSLOptions
 from aio_pika import ExchangeType as AioExchangeType, Queue as AioQueue, Exchange as AioExchange
 from pydantic.dataclasses import dataclass
 
-from pydantic.deprecated.tools import json
+import json
 
 # internal
 from mrsal import config
@@ -42,7 +42,7 @@ class Mrsal:
 
     host: str
     port: int
-    credentials: tuple[str, str]
+    credentials: tuple[str, str] = field(repr=False)
     virtual_host: str
     ssl: bool = False
     verbose: bool = False
@@ -58,6 +58,7 @@ class Mrsal:
     lazy_queue: bool = False  # Keep messages in RAM for speed
     _connection: Any = field(init=False, default=None)
     _channel: Any = field(init=False, default=None)
+    auto_declare_ok: bool = field(init=False, default=False)
 
     def __post_init__(self) -> None:
         if self.ssl:
@@ -88,6 +89,7 @@ class Mrsal:
                                  channel=None
                                  ) -> None:
 
+        self.auto_declare_ok = False
         if queue_args is None:
             queue_args = {}
         if not passive:
@@ -208,9 +210,9 @@ class Mrsal:
                 self._declare_queue_binding(**declare_queue_binding_dict, channel=channel)
             self.auto_declare_ok = True
             if not passive:
-                log.info(f"Exchange {exchange_name} and Queue {queue_name} set up successfully.")
+                log.info(f"Exchange {exchange_name} and Queue {queue_name} declared successfully.")
             else:
-                log.info(f"Exchange {exchange_name} and Queue {queue_name} set up successfully.")
+                log.info(f"Exchange {exchange_name} and Queue {queue_name} verified to exist.")
         except MrsalSetupError as e:
             log.error(f'Splæt! I failed the declaration setup with {e}', exc_info=True)
             self.auto_declare_ok = False
@@ -238,6 +240,7 @@ class Mrsal:
         if not self._connection:
             raise MrsalAbortedSetup("Oh my Oh my! Connection not found when trying to run the setup!")
 
+        self.auto_declare_ok = False
         if queue_args is None:
             queue_args = {}
 
@@ -360,10 +363,10 @@ class Mrsal:
                 await self._async_declare_queue_binding(queue=queue, exchange=exchange, **async_declare_queue_binding_dict)
             self.auto_declare_ok = True
             if not passive:
-                log.info(f"Exchange {exchange_name} and Queue {queue_name} set up successfully.")
+                log.info(f"Exchange {exchange_name} and Queue {queue_name} declared successfully.")
             else:
-                log.info(f"Exchange {exchange_name} and Queue {queue_name} set up successfully.")
-            if dlx_enable:
+                log.info(f"Exchange {exchange_name} and Queue {queue_name} verified to exist.")
+            if dlx_enable and not passive:
                 log.info(f"You have a dead letter exhange {dlx_name} for fault tolerance -- use it well young grasshopper!")
             return queue
         except MrsalSetupError as e:
@@ -435,7 +438,7 @@ class Mrsal:
                                 arguments={arguments}
                                 """
         if self.verbose:
-            print(f"Declaring exchange with: {exchange_declare_info}")
+            log.info(f"Declaring exchange with: {exchange_declare_info}")
 
         try:
             exchange_obj = await self._channel.declare_exchange(
@@ -617,7 +620,7 @@ class Mrsal:
         if isinstance(payload, dict):
             model(**payload)
         else:
-            raise TypeError("Fool, we aint supporting this type yet {type(payload)}.. Bytes or str -- get it straight")
+            raise TypeError(f"Fool, we aint supporting this type yet {type(payload)}.. Bytes or str -- get it straight")
 
     def _get_retry_count(self, properties) -> int:
         """Extract retry count from message headers."""
@@ -625,8 +628,8 @@ class Mrsal:
             return properties.headers.get('x-retry-count', 0)
         return 0
 
-    def _has_dlx_configured(self, queue_name: str) -> bool:
-        """Check if the queue has a dead letter exchange configured."""
+    def _has_dlx_configured(self) -> bool:
+        """Check if dead letter exchange is enabled."""
         return self.dlx_enable
 
     def _get_retry_cycle_info(self, properties) -> dict:
@@ -663,7 +666,7 @@ class Mrsal:
             try:
                 first_time = datetime.fromisoformat(first_failure.replace('Z', ''))
                 elapsed_ms = int((datetime.now(timezone.utc) - first_time).total_seconds() * 1000)
-            except:
+            except (ValueError, TypeError):
                 elapsed_ms = 0
         else:
             first_failure = now
@@ -687,93 +690,74 @@ class Mrsal:
 
         return headers
 
-    def _handle_dlx_with_retry_cycle_sync(
-            self, method_frame, properties, body, processing_error: str,
-            original_exchange: str, original_routing_key: str,
-            enable_retry_cycles: bool, retry_cycle_interval: int,
-            max_retry_time_limit: int, dlx_exchange_name: str | None):
-        """Base method for DLX handling with retry cycles."""
-        # Get retry info
+    def _build_dlx_retry_properties(self, properties, processing_error: str,
+                                    original_exchange: str, original_routing_key: str,
+                                    enable_retry_cycles: bool, retry_cycle_interval: int,
+                                    max_retry_time_limit: int, dlx_exchange_name: str | None) -> tuple[str, str, dict, dict]:
+        """Build DLX properties and headers for retry cycle publishing.
+
+        Returns (dlx_name, dlx_routing, dlx_properties, retry_info).
+        """
         retry_info = self._get_retry_cycle_info(properties)
         should_cycle = self._should_continue_retry_cycles(retry_info, enable_retry_cycles, max_retry_time_limit)
 
-        # Get DLX info
         dlx_name = dlx_exchange_name or f"{original_exchange}.dlx"
         dlx_routing = original_routing_key
 
-        # Create enhanced headers
         original_headers = getattr(properties, 'headers', {}) or {}
         enhanced_headers = self._create_retry_cycle_headers(
             original_headers, retry_info['cycle_count'], retry_info['first_failure'],
             processing_error, should_cycle, original_exchange, original_routing_key
         )
 
-        # Create properties for DLX message
         dlx_properties = {
             'headers': enhanced_headers,
-            'delivery_mode': 2,  # Persistent
+            'delivery_mode': 2,
             'content_type': getattr(properties, 'content_type', 'application/json')
         }
 
-        # Set TTL if cycling
         if should_cycle:
             ttl_ms = retry_cycle_interval * 60 * 1000
             dlx_properties['expiration'] = str(ttl_ms)
 
-        # Call subclass-specific publish method
-        self._publish_to_dlx(dlx_name, dlx_routing, body, dlx_properties)
+        return dlx_name, dlx_routing, dlx_properties, retry_info
 
-        # Log result
+    def _log_dlx_result(self, retry_info: dict, retry_cycle_interval: int, should_cycle: bool) -> None:
+        """Log the result of a DLX retry cycle publish."""
         if should_cycle:
             log.info(f"Message sent to DLX for retry cycle {retry_info['cycle_count'] + 1} "
                     f"(next retry in {retry_cycle_interval}m)")
         else:
             log.error(f"Message permanently failed after {retry_info['cycle_count']} cycles "
                      f"- staying in DLX for manual replay")
+
+    def _handle_dlx_with_retry_cycle_sync(
+            self, method_frame, properties, body, processing_error: str,
+            original_exchange: str, original_routing_key: str,
+            enable_retry_cycles: bool, retry_cycle_interval: int,
+            max_retry_time_limit: int, dlx_exchange_name: str | None):
+        """Base method for DLX handling with retry cycles (sync)."""
+        dlx_name, dlx_routing, dlx_properties, retry_info = self._build_dlx_retry_properties(
+            properties, processing_error, original_exchange, original_routing_key,
+            enable_retry_cycles, retry_cycle_interval, max_retry_time_limit, dlx_exchange_name
+        )
+        self._publish_to_dlx(dlx_name, dlx_routing, body, dlx_properties)
+        should_cycle = self._should_continue_retry_cycles(retry_info, enable_retry_cycles, max_retry_time_limit)
+        self._log_dlx_result(retry_info, retry_cycle_interval, should_cycle)
 
     async def _handle_dlx_with_retry_cycle_async(
             self, message, properties, processing_error: str,
             original_exchange: str, original_routing_key: str,
             enable_retry_cycles: bool, retry_cycle_interval: int,
             max_retry_time_limit: int, dlx_exchange_name: str | None):
-        """Base method for DLX handling with retry cycles."""
-        # Get retry info
-        retry_info = self._get_retry_cycle_info(properties)
-        should_cycle = self._should_continue_retry_cycles(retry_info, enable_retry_cycles, max_retry_time_limit)
-
-        # Get DLX info
-        dlx_name = dlx_exchange_name or f"{original_exchange}.dlx"
-        dlx_routing = original_routing_key
-
-        # Create enhanced headers
-        original_headers = getattr(properties, 'headers', {}) or {}
-        enhanced_headers = self._create_retry_cycle_headers(
-            original_headers, retry_info['cycle_count'], retry_info['first_failure'],
-            processing_error, should_cycle, original_exchange, original_routing_key
+        """Base method for DLX handling with retry cycles (async)."""
+        dlx_name, dlx_routing, dlx_properties, retry_info = self._build_dlx_retry_properties(
+            properties, processing_error, original_exchange, original_routing_key,
+            enable_retry_cycles, retry_cycle_interval, max_retry_time_limit, dlx_exchange_name
         )
-
-        # Create properties for DLX message
-        dlx_properties = {
-            'headers': enhanced_headers,
-            'delivery_mode': 2,  # Persistent
-            'content_type': getattr(properties, 'content_type', 'application/json')
-        }
-
-        # Set TTL if cycling
-        if should_cycle:
-            ttl_ms = retry_cycle_interval * 60 * 1000
-            dlx_properties['expiration'] = str(ttl_ms)
-
-        # Call subclass-specific publish method
         await self._publish_to_dlx(dlx_name, dlx_routing, message.body, dlx_properties)
-
-        # Log result
-        if should_cycle:
-            log.info(f"Message sent to DLX for retry cycle {retry_info['cycle_count'] + 1} "
-                    f"(next retry in {retry_cycle_interval}m)")
-        else:
-            log.error(f"Message permanently failed after {retry_info['cycle_count']} cycles "
-                     f"- staying in DLX for manual replay")
+        should_cycle = self._should_continue_retry_cycles(retry_info, enable_retry_cycles, max_retry_time_limit)
+        self._log_dlx_result(retry_info, retry_cycle_interval, should_cycle)
 
     def _publish_to_dlx(self, dlx_exchange: str, routing_key: str, body: bytes, properties: dict):
         """Abstract method - implemented by subclasses."""

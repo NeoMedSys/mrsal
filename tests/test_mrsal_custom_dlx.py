@@ -189,6 +189,7 @@ class TestDLXExchangeNameConfiguration:
 		mock_message = MagicMock()
 		mock_message.delivery_tag = 123
 		mock_message.app_id = 'test_app'
+		mock_message.message_id = 'msg_123'
 		mock_message.headers = None
 		mock_message.body = b'{"id": "wrong_type", "name": "Test", "active": true}'
 		mock_message.ack = AsyncMock()
@@ -237,6 +238,7 @@ class TestDLXExchangeNameConfiguration:
 		mock_message = MagicMock()
 		mock_message.delivery_tag = 123
 		mock_message.app_id = 'test_app'
+		mock_message.message_id = 'msg_123'
 		mock_message.headers = None
 		mock_message.body = b'{"id": "wrong_type", "name": "Test", "active": true}'
 		mock_message.ack = AsyncMock()

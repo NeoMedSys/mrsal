@@ -3,7 +3,7 @@ from mrsal.basemodels import MrsalProtocol
 import pika
 import json
 import logging
-import threading
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from mrsal.exceptions import MrsalAbortedSetup, MrsalNoAsyncioLoopError
 from logging import WARNING
@@ -37,9 +37,32 @@ class MrsalBlockingAMQP(Mrsal):
     blocked_connection_timeout: int = 60  # sec
     _consumer_channel = None
 
+    def close(self) -> None:
+        """Close consumer channel and connection cleanly."""
+        if self._consumer_channel is not None and self._consumer_channel.is_open:
+            self._consumer_channel.close()
+        self._consumer_channel = None
+
+        if self._connection is not None and self._connection.is_open:
+            self._connection.close()
+        self._connection = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
     def _ensure_connection(self) -> None:
         """Idempotent: only connects if not already connected."""
         if self._connection is None or not self._connection.is_open:
+            # Close stale connection to avoid leaking TCP sockets
+            if self._connection is not None:
+                try:
+                    self._connection.close()
+                except Exception:
+                    pass
             self.setup_blocking_connection()
 
     def setup_blocking_connection(self) -> None:
@@ -77,11 +100,6 @@ class MrsalBlockingAMQP(Mrsal):
                 )
             )
 
-            self._channel = self._connection.channel()
-            # Note: prefetch is set to 1 here as an example only.
-            # In production you will want to test with different prefetch values to find which one provides the best performance and usability for your solution.
-            # use a high number of prefecth if you think the pods with Mrsal installed can handle it. A prefetch 4 will mean up to 4 async runs before ack is required
-            self._channel.basic_qos(prefetch_count=self.prefetch_count)
             log.info(f"Boom! Connection established with RabbitMQ on {connection_info}")
         except (AMQPConnectionError, ChannelClosedByBroker, ConnectionClosedByBroker, StreamLostError) as e:
             log.error(f"I tried to connect with the RabbitMQ server but failed with: {e}")
@@ -99,6 +117,13 @@ class MrsalBlockingAMQP(Mrsal):
             self._connection.add_callback_threadsafe(cb)
         else:
             func(*args, **kwargs)
+
+    @staticmethod
+    def _handle_worker_exception(future) -> None:
+        """Callback for ThreadPoolExecutor futures to surface worker exceptions."""
+        exc = future.exception()
+        if exc is not None:
+            log.error(f"Worker thread raised an unhandled exception: {exc}", exc_info=exc)
 
     def _process_single_message(self, method_frame, properties, body, runtime_config: dict) -> None:
         """
@@ -137,7 +162,7 @@ class MrsalBlockingAMQP(Mrsal):
                 else:
                     callback(method_frame, properties, body)
             except Exception as e:
-                log.error(f"Oh lordy lord, payload validation failed for your specific model requirements: {e}")
+                log.error(f"Callback processing failed for message {msg_id}: {e}")
                 should_process = False
 
         if not should_process and not auto_ack:
@@ -154,7 +179,8 @@ class MrsalBlockingAMQP(Mrsal):
                 self._schedule_threadsafe(self._consumer_channel.basic_nack, threaded, delivery_tag=delivery_tag, requeue=False)
             else:
                 log.warning(f"No dead letter exchange declared for {runtime_config['queue_name']}, proceeding to drop the message -- reflect on your life choices! byebye")
-                log.info(f"Dropped message content: {body}")
+                if self.verbose:
+                    log.info(f"Dropped message content: {body}")
                 self._schedule_threadsafe(self._consumer_channel.basic_nack, threaded, delivery_tag=delivery_tag, requeue=False)
 
         elif not auto_ack and should_process:
@@ -195,7 +221,8 @@ class MrsalBlockingAMQP(Mrsal):
             queue_overflow: str | None = None,
             single_active_consumer: bool | None = None,
             lazy_queue: bool | None = None,
-            threaded: bool = False
+            threaded: bool = False,
+            max_workers: int | None = None
        ) -> None:
         """
         Start the consumer using blocking setup.
@@ -223,7 +250,11 @@ class MrsalBlockingAMQP(Mrsal):
         :param str queue_overflow: "drop-head" or "reject-publish"
         :param bool single_active_consumer: Only one consumer processes at a time
         :param bool lazy_queue: Store messages on disk to save memory
+        :param int max_workers: Maximum number of threads in the pool when threaded=True. Defaults to prefetch_count.
         """
+        if threaded:
+            max_workers = max_workers or self.prefetch_count
+
         self._ensure_connection()
         self._consumer_channel = self._connection.channel()
         self._consumer_channel.basic_qos(prefetch_count=self.prefetch_count)
@@ -272,6 +303,7 @@ class MrsalBlockingAMQP(Mrsal):
                 Straight out of the swamps -- consumer boi listening with config:
                      auto_ack: {auto_ack}
                      threaded: {threaded}
+                     max_workers: {max_workers}
                      DLX: {dlx_enable}
                      retry cycles: {enable_retry_cycles}
                      retry interval: {retry_cycle_interval}
@@ -279,19 +311,17 @@ class MrsalBlockingAMQP(Mrsal):
                      DLX name: {dlx_exchange_name}
                  """)
 
+        executor = ThreadPoolExecutor(max_workers=max_workers) if threaded else None
+
         try:
             for method_frame, properties, body in self._consumer_channel.consume(
                             queue=queue_name, auto_ack=auto_ack, inactivity_timeout=inactivity_timeout):
-                
+
                 if method_frame:
                     if threaded:
                         log.info("Threaded processes started to ensure heartbeat during long processes -- sauber!")
-                        t = threading.Thread(
-                            target=self._process_single_message, 
-                            args=(method_frame, properties, body, runtime_config), 
-                            daemon=True
-                        )
-                        t.start()
+                        future = executor.submit(self._process_single_message, method_frame, properties, body, runtime_config)
+                        future.add_done_callback(self._handle_worker_exception)
                     else:
                         self._process_single_message(method_frame, properties, body, runtime_config)
         except (AMQPConnectionError, ConnectionClosedByBroker, StreamLostError) as e:
@@ -299,11 +329,19 @@ class MrsalBlockingAMQP(Mrsal):
             raise
         except Exception as e:
             log.error(f'Oh lordy lord! I failed consuming ze messaj with: {e}')
+            raise
+        finally:
+            if executor is not None:
+                executor.shutdown(wait=True, cancel_futures=True)
 
     @retry(
         retry=retry_if_exception_type((
             NackError,
-            UnroutableError
+            UnroutableError,
+            AMQPConnectionError,
+            ChannelClosedByBroker,
+            ConnectionClosedByBroker,
+            StreamLostError
             )),
         stop=stop_after_attempt(3),
         wait=wait_fixed(2),
@@ -357,7 +395,7 @@ class MrsalBlockingAMQP(Mrsal):
                 # Publish the message by serializing it in json dump
                 # NOTE! we are not dumping a json anymore here! This allows for more flexibility
                 ch.basic_publish(exchange=exchange_name, routing_key=routing_key, body=message, properties=prop)
-                log.info(f"The message ({message!r}) is published to the exchange {exchange_name} with the routing key {routing_key}")
+                log.info(f"Message published to exchange {exchange_name} with routing key {routing_key}")
 
             except UnroutableError as e:
                 log.error(f"Producer could not publish message:{message!r} to the exchange {exchange_name} with a routing key {routing_key}: {e}", exc_info=True)
@@ -367,6 +405,7 @@ class MrsalBlockingAMQP(Mrsal):
                 raise
             except Exception as e:
                 log.error(f"Unexpected error while publishing message: {e}")
+                raise
         finally:
             try:
                 ch.close()
@@ -376,7 +415,11 @@ class MrsalBlockingAMQP(Mrsal):
     @retry(
         retry=retry_if_exception_type((
             NackError,
-            UnroutableError
+            UnroutableError,
+            AMQPConnectionError,
+            ChannelClosedByBroker,
+            ConnectionClosedByBroker,
+            StreamLostError
             )),
         stop=stop_after_attempt(3),
         wait=wait_fixed(2),
@@ -433,7 +476,7 @@ class MrsalBlockingAMQP(Mrsal):
                             body=protocol.message,
                             properties=prop
                             )
-                    log.info(f"The message for inbound app {inbound_app_id} with message -- ({protocol.message!r}) is published to the exchange {protocol.exchange_name} with the routing key {protocol.routing_key}. Oh baby baby")
+                    log.info(f"Message for inbound app {inbound_app_id} published to exchange {protocol.exchange_name} with routing key {protocol.routing_key}")
 
                 except UnroutableError as e:
                     log.error(f"Producer could not publish message:{protocol.message!r} to the exchange {protocol.exchange_name} with a routing key {protocol.routing_key}: {e}", exc_info=True)
@@ -443,6 +486,7 @@ class MrsalBlockingAMQP(Mrsal):
                     raise
                 except Exception as e:
                     log.error(f"Unexpected error while publishing message: {e}")
+                    raise
         finally:
             try:
                 ch.close()
@@ -455,7 +499,13 @@ class MrsalBlockingAMQP(Mrsal):
             original_exchange: str, original_routing_key: str,
             enable_retry_cycles: bool, retry_cycle_interval: int,
             max_retry_time_limit: int, dlx_exchange_name: str | None):
-        """Publish message to DLX with retry cycle headers."""
+        """Publish message to DLX with retry cycle headers.
+
+        NOTE: This operation provides at-least-once delivery semantics.
+        The DLX publish and original message ACK are not atomic — if the
+        process crashes between the two, the message may be redelivered
+        and published to DLX again. Consumers must be idempotent.
+        """
         try:
             # Use common logic from superclass
             self._handle_dlx_with_retry_cycle_sync(
@@ -475,8 +525,10 @@ class MrsalBlockingAMQP(Mrsal):
             self._consumer_channel.basic_ack(delivery_tag=method_frame.delivery_tag)
 
         except Exception as e:
-            log.error(f"Failed to send message to DLX: {e}")
-            self._consumer_channel.basic_nack(delivery_tag=method_frame.delivery_tag, requeue=True)
+            msg_id = properties.message_id if hasattr(properties, 'message_id') else 'unknown'
+            app_id = properties.app_id if hasattr(properties, 'app_id') else 'unknown'
+            log.error(f"Failed to send message to DLX: {e} | message_id={msg_id} app_id={app_id} delivery_tag={method_frame.delivery_tag} exchange={original_exchange} routing_key={original_routing_key}")
+            self._consumer_channel.basic_nack(delivery_tag=method_frame.delivery_tag, requeue=False)
 
     def _publish_to_dlx(self, dlx_exchange: str, routing_key: str, body: bytes, properties: dict):
         """Blocking implementation of DLX publishing."""
@@ -498,6 +550,24 @@ class MrsalBlockingAMQP(Mrsal):
 
 class MrsalAsyncAMQP(Mrsal):
     """Handles asynchronous connection with RabbitMQ using aio-pika."""
+
+    async def close(self) -> None:
+        """Close channel and connection cleanly."""
+        if self._channel is not None and not self._channel.is_closed:
+            await self._channel.close()
+        self._channel = None
+
+        if self._connection is not None and not self._connection.is_closed:
+            await self._connection.close()
+        self._connection = None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+        return False
+
     async def setup_async_connection(self):
         """Setup an asynchronous connection to RabbitMQ using aio-pika."""
         log.info(f"Establishing async connection to RabbitMQ on {self.host}:{self.port}")
@@ -512,8 +582,6 @@ class MrsalAsyncAMQP(Mrsal):
                 ssl_context=self.get_ssl_context(),
                 heartbeat=self.heartbeat
             )
-            self._channel = await self._connection.channel()
-            await self._channel.set_qos(prefetch_count=self.prefetch_count)
             log.info("Async connection established successfully.")
         except (AMQPConnectionError, StreamLostError, ChannelClosedByBroker, ConnectionClosedByBroker) as e:
             log.error(f"Error establishing async connection: {e}", exc_info=True)
@@ -591,8 +659,12 @@ class MrsalAsyncAMQP(Mrsal):
                     )
 
             if not self.auto_declare_ok:
+                if self._channel and not self._channel.is_closed:
+                    await self._channel.close()
+                self._channel = None
                 if self._connection:
                     await self._connection.close()
+                self._connection = None
                 raise MrsalAbortedSetup('Auto declaration failed during setup.')
 
         # Log consumer configuration
@@ -607,7 +679,6 @@ class MrsalAsyncAMQP(Mrsal):
 
         log.info(f"Straight out of the swamps -- consumer boi listening with config: {consumer_config}")
 
-        # async with queue.iterator() as queue_iter:
         async for message in queue.iterator():
             if message is None:
                 continue
@@ -615,7 +686,7 @@ class MrsalAsyncAMQP(Mrsal):
             # Extract message metadata
             delivery_tag = message.delivery_tag
             app_id = message.app_id if hasattr(message, 'app_id') else 'NoAppID'
-            msg_id = message.app_id if hasattr(message, 'message_id') else 'NoMsgID'
+            msg_id = message.message_id if hasattr(message, 'message_id') else 'NoMsgID'
 
             # add this so it is in line with Pikas awkawrdly old ways
             properties = config.AioPikaAttributes(app_id=app_id, message_id=msg_id)
@@ -630,10 +701,6 @@ class MrsalAsyncAMQP(Mrsal):
                             - Delivery Tag: {message.delivery_tag}
                             - Auto Ack: {auto_ack}
                             """)
-
-            if auto_ack:
-                await message.ack()
-                log.info(f'I successfully received a message from: {app_id} with messageID: {msg_id}')
 
             current_retry = message.headers.get('x-delivery-count', 0) if message.headers else 0
             should_process = True
@@ -655,33 +722,40 @@ class MrsalAsyncAMQP(Mrsal):
                     log.error(f"Splæt! Error processing message with callback: {e}", exc_info=True)
                     should_process = False
 
-            if not should_process and not auto_ack:
-                if dlx_enable and enable_retry_cycles:
-                    # Use retry cycle logic
+            if not should_process:
+                if auto_ack:
+                    await message.ack()
+                    log.warning(f"Message {msg_id} processing failed but auto_ack is enabled -- acking anyway")
+                elif dlx_enable and enable_retry_cycles:
                     await self._async_publish_to_dlx_with_retry_cycle(
                         message, properties, "Callback processing failed",
                         exchange_name, routing_key, enable_retry_cycles,
                         retry_cycle_interval, max_retry_time_limit, dlx_exchange_name
                     )
                 elif dlx_enable:
-                    # Original DLX behavior
                     await message.reject(requeue=False)
                     log.warning(f"Message {msg_id} sent to dead letter exchange after {current_retry} retries")
                 else:
                     await message.reject(requeue=False)
                     log.warning(f"No dead letter exchange for {queue_name} declared, proceeding to drop the message -- Ponder you life choices! byebye")
-                    log.info(f"Dropped message content: {message.body}")
+                    if self.verbose:
+                        log.info(f"Dropped message content: {message.body}")
                 continue
 
-            if not auto_ack:
-                await message.ack()
-                log.info(f'Young grasshopper! Message ({msg_id}) from {app_id} received and properly processed.')
+            await message.ack()
+            log.info(f'Young grasshopper! Message ({msg_id}) from {app_id} received and properly processed.')
 
     async def _async_publish_to_dlx_with_retry_cycle(self, message, properties, processing_error: str,
                                                    original_exchange: str, original_routing_key: str,
                                                    enable_retry_cycles: bool, retry_cycle_interval: int,
                                                   max_retry_time_limit: int, dlx_exchange_name: str | None):
-        """Async publish message to DLX with retry cycle headers."""
+        """Async publish message to DLX with retry cycle headers.
+
+        NOTE: This operation provides at-least-once delivery semantics.
+        The DLX publish and original message ACK are not atomic — if the
+        process crashes between the two, the message may be redelivered
+        and published to DLX again. Consumers must be idempotent.
+        """
         try:
             # Use common logic from superclass
             await self._handle_dlx_with_retry_cycle_async(
@@ -700,8 +774,10 @@ class MrsalAsyncAMQP(Mrsal):
             await message.ack()
             
         except Exception as e:
-            log.error(f"Failed to send message to DLX: {e}")
-            await message.reject(requeue=True)
+            msg_id = properties.message_id if hasattr(properties, 'message_id') else 'unknown'
+            app_id = properties.app_id if hasattr(properties, 'app_id') else 'unknown'
+            log.error(f"Failed to send message to DLX: {e} | message_id={msg_id} app_id={app_id} delivery_tag={message.delivery_tag} exchange={original_exchange} routing_key={original_routing_key}")
+            await message.reject(requeue=False)
 
     async def _publish_to_dlx(self, dlx_exchange: str, routing_key: str, body: bytes, properties: dict):
         """Async implementation of DLX publishing."""
