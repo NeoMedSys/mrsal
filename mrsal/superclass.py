@@ -3,6 +3,7 @@ import os
 import ssl
 import pika
 import logging
+from dataclasses import field
 from datetime import datetime, timezone
 from ssl import SSLContext
 from typing import Any, Type
@@ -48,15 +49,15 @@ class Mrsal:
     prefetch_count: int = 5
     heartbeat: int = 60  # sec
     dlx_enable: bool = True
-    dlx_exchange_name = None
+    dlx_exchange_name: str | None = None
     use_quorum_queues: bool = True
     max_queue_length: int = 10000  # Good default for most use cases
     max_queue_length_bytes: int | None = None  # Optional memory limit
     queue_overflow: str = "drop-head"  # Drop old messages by default
     single_active_consumer: bool = False  # Allow parallel processing
     lazy_queue: bool = False  # Keep messages in RAM for speed
-    _connection = None
-    _channel = None
+    _connection: Any = field(init=False, default=None)
+    _channel: Any = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         if self.ssl:

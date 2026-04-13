@@ -88,6 +88,7 @@ class MrsalBlockingAMQP(Mrsal):
             raise
         except Exception as e:
             log.error(f"Unexpected error caught: {e}")
+            raise
 
     def _schedule_threadsafe(self, func: Callable, threaded: bool, *args, **kwargs) -> None:
         """
@@ -520,6 +521,7 @@ class MrsalAsyncAMQP(Mrsal):
             raise
         except Exception as e:
             log.error(f'Oh my lordy lord! I caugth an unexpected exception while trying to connect: {e}', exc_info=True)
+            raise
 
     @retry(
         retry=retry_if_exception_type((

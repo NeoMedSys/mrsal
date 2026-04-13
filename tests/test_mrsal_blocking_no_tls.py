@@ -465,3 +465,13 @@ def test_connection_reuse_across_publishes(mock_amqp_connection):
     mock_setup.assert_not_called()
     # basic_publish was called 10 times
     assert mock_channel.basic_publish.call_count == 10
+
+
+def test_setup_blocking_connection_reraises_unexpected_exception():
+    """Unexpected exceptions from setup_blocking_connection must propagate, not be swallowed."""
+    consumer = MrsalBlockingAMQP(**SETUP_ARGS)
+
+    with patch('mrsal.amqp.subclass.pika.BlockingConnection',
+               side_effect=RuntimeError("disk on fire")):
+        with pytest.raises(RuntimeError, match="disk on fire"):
+            consumer.setup_blocking_connection()
