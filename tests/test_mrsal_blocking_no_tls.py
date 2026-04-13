@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import Mock, patch, MagicMock, call, ANY
 from pika.exceptions import AMQPConnectionError, UnroutableError
 from pydantic.dataclasses import dataclass
-from tenacity import RetryError
+from tenacity import RetryError, stop_after_attempt
 from mrsal.amqp.subclass import MrsalBlockingAMQP
 
 # Configuration and expected payload definition
@@ -57,22 +57,28 @@ def amqp_consumer(mock_amqp_connection):
 
 
 def test_retry_on_connection_failure_blocking(amqp_consumer, mock_amqp_connection):
-    """Test reconnection retries in blocking consumer mode."""
+    """Test that blocking consumer retries on connection failure with exponential backoff."""
     mock_connection, mock_channel, mock_setup_blocking_connection = mock_amqp_connection
     mock_channel.consume.side_effect = AMQPConnectionError("Connection lost")
 
-    # Attempt to start the consumer, which should trigger the retry
-    with pytest.raises(RetryError):
-        amqp_consumer.start_consumer(
-            queue_name='test_q',
-            exchange_name='test_x',
-            exchange_type='direct',
-            routing_key='test_route',
-            callback=Mock(),
-        )
+    # Temporarily cap retries so the test terminates
+    original_retry = amqp_consumer.start_consumer.retry
+    amqp_consumer.start_consumer.retry.stop = stop_after_attempt(3)
 
-    # Verify that setup_blocking_connection was retried 3 times
-    assert mock_setup_blocking_connection.call_count == 3
+    try:
+        with pytest.raises(RetryError):
+            amqp_consumer.start_consumer(
+                queue_name='test_q',
+                exchange_name='test_x',
+                exchange_type='direct',
+                routing_key='test_route',
+                callback=Mock(),
+            )
+
+        # Verify retries happened
+        assert mock_setup_blocking_connection.call_count == 3
+    finally:
+        amqp_consumer.start_consumer.retry.stop = original_retry.stop
 
 
 def test_valid_message_processing(amqp_consumer):

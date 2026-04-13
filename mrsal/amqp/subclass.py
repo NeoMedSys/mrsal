@@ -17,7 +17,7 @@ from pika.exceptions import (
         )
 from aio_pika import connect_robust, Message, Channel as AioChannel
 from typing import Callable, Type
-from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type, before_sleep_log
+from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, retry_if_exception_type, before_sleep_log
 from pydantic import ValidationError
 from pydantic.dataclasses import dataclass
 
@@ -168,8 +168,7 @@ class MrsalBlockingAMQP(Mrsal):
             ConnectionClosedByBroker,
             StreamLostError,
             )),
-        stop=stop_after_attempt(3),
-        wait=wait_fixed(2),
+        wait=wait_exponential(multiplier=1, min=2, max=60),
         before_sleep=before_sleep_log(log, WARNING)
            )
     def start_consumer(
@@ -530,8 +529,7 @@ class MrsalAsyncAMQP(Mrsal):
             ConnectionClosedByBroker,
             StreamLostError,
             )),
-        stop=stop_after_attempt(3),
-        wait=wait_fixed(2),
+        wait=wait_exponential(multiplier=1, min=2, max=60),
         before_sleep=before_sleep_log(log, WARNING)
            )
     async def start_consumer(
