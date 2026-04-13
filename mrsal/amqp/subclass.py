@@ -35,7 +35,12 @@ class MrsalBlockingAMQP(Mrsal):
             the connection will be torn down during connection tuning.
     """
     blocked_connection_timeout: int = 60  # sec
+    _consumer_channel = None
 
+    def _ensure_connection(self) -> None:
+        """Idempotent: only connects if not already connected."""
+        if self._connection is None or not self._connection.is_open:
+            self.setup_blocking_connection()
 
     def setup_blocking_connection(self) -> None:
         """We can use setup_blocking_connection for establishing a connection to RabbitMQ server specifying connection parameters.
@@ -145,15 +150,15 @@ class MrsalBlockingAMQP(Mrsal):
                 )
             elif dlx_enable:
                 log.warning(f"Message {msg_id} sent to dead letter exchange after {current_retry} retries")
-                self._schedule_threadsafe(self._channel.basic_nack, threaded, delivery_tag=delivery_tag, requeue=False)
+                self._schedule_threadsafe(self._consumer_channel.basic_nack, threaded, delivery_tag=delivery_tag, requeue=False)
             else:
                 log.warning(f"No dead letter exchange declared for {runtime_config['queue_name']}, proceeding to drop the message -- reflect on your life choices! byebye")
                 log.info(f"Dropped message content: {body}")
-                self._schedule_threadsafe(self._channel.basic_nack, threaded, delivery_tag=delivery_tag, requeue=False)
+                self._schedule_threadsafe(self._consumer_channel.basic_nack, threaded, delivery_tag=delivery_tag, requeue=False)
 
         elif not auto_ack and should_process:
             log.info(f'Message ({msg_id}) from {app_id} received and properly processed -- now dance the funky chicken')
-            self._schedule_threadsafe(self._channel.basic_ack, threaded, delivery_tag=delivery_tag)
+            self._schedule_threadsafe(self._consumer_channel.basic_ack, threaded, delivery_tag=delivery_tag)
 
     @retry(
         retry=retry_if_exception_type((
@@ -219,7 +224,9 @@ class MrsalBlockingAMQP(Mrsal):
         :param bool single_active_consumer: Only one consumer processes at a time
         :param bool lazy_queue: Store messages on disk to save memory
         """
-        self.setup_blocking_connection()
+        self._ensure_connection()
+        self._consumer_channel = self._connection.channel()
+        self._consumer_channel.basic_qos(prefetch_count=self.prefetch_count)
 
         if auto_declare:
             if None in (exchange_name, queue_name, exchange_type, routing_key):
@@ -238,7 +245,8 @@ class MrsalBlockingAMQP(Mrsal):
                     max_queue_length_bytes=max_queue_length_bytes,
                     queue_overflow=queue_overflow,
                     single_active_consumer=single_active_consumer,
-                    lazy_queue=lazy_queue
+                    lazy_queue=lazy_queue,
+                    channel=self._consumer_channel
             )
             
             if not self.auto_declare_ok:
@@ -272,7 +280,7 @@ class MrsalBlockingAMQP(Mrsal):
                  """)
 
         try:
-            for method_frame, properties, body in self._channel.consume(
+            for method_frame, properties, body in self._consumer_channel.consume(
                             queue=queue_name, auto_ack=auto_ack, inactivity_timeout=inactivity_timeout):
                 
                 if method_frame:
@@ -329,33 +337,41 @@ class MrsalBlockingAMQP(Mrsal):
         if not isinstance(message, (str, bytes)):
             raise MrsalAbortedSetup(f'Your message body needs to be string or bytes or serialized dict')
         # connect and use only blocking
-        self.setup_blocking_connection()
+        self._ensure_connection()
+        ch = self._connection.channel()
 
-        if auto_declare:
-            if None in (exchange_name, queue_name, exchange_type, routing_key):
-                raise TypeError('Make sure that you are passing in all the necessary args for auto_declare')
-
-            self._setup_exchange_and_queue(
-                exchange_name=exchange_name,
-                queue_name=queue_name,
-                exchange_type=exchange_type,
-                routing_key=routing_key,
-                passive=passive
-                )
         try:
-            # Publish the message by serializing it in json dump
-            # NOTE! we are not dumping a json anymore here! This allows for more flexibility
-            self._channel.basic_publish(exchange=exchange_name, routing_key=routing_key, body=message, properties=prop)
-            log.info(f"The message ({message!r}) is published to the exchange {exchange_name} with the routing key {routing_key}")
+            if auto_declare:
+                if None in (exchange_name, queue_name, exchange_type, routing_key):
+                    raise TypeError('Make sure that you are passing in all the necessary args for auto_declare')
 
-        except UnroutableError as e:
-            log.error(f"Producer could not publish message:{message!r} to the exchange {exchange_name} with a routing key {routing_key}: {e}", exc_info=True)
-            raise
-        except NackError as e:
-            log.error(f"Message NACKed by broker: {e}")
-            raise
-        except Exception as e:
-            log.error(f"Unexpected error while publishing message: {e}")
+                self._setup_exchange_and_queue(
+                    exchange_name=exchange_name,
+                    queue_name=queue_name,
+                    exchange_type=exchange_type,
+                    routing_key=routing_key,
+                    passive=passive,
+                    channel=ch
+                    )
+            try:
+                # Publish the message by serializing it in json dump
+                # NOTE! we are not dumping a json anymore here! This allows for more flexibility
+                ch.basic_publish(exchange=exchange_name, routing_key=routing_key, body=message, properties=prop)
+                log.info(f"The message ({message!r}) is published to the exchange {exchange_name} with the routing key {routing_key}")
+
+            except UnroutableError as e:
+                log.error(f"Producer could not publish message:{message!r} to the exchange {exchange_name} with a routing key {routing_key}: {e}", exc_info=True)
+                raise
+            except NackError as e:
+                log.error(f"Message NACKed by broker: {e}")
+                raise
+            except Exception as e:
+                log.error(f"Unexpected error while publishing message: {e}")
+        finally:
+            try:
+                ch.close()
+            except Exception:
+                pass
 
     @retry(
         retry=retry_if_exception_type((
@@ -389,41 +405,49 @@ class MrsalBlockingAMQP(Mrsal):
         :raises NackError: raised when a message published in publisher-acknowledgements mode is Nack'ed by the broker. See `BlockingChannel.confirm_delivery`.
         """
 
-        for inbound_app_id, mrsal_protocol in mrsal_protocol_collection.items():
-            protocol = MrsalProtocol(**mrsal_protocol)
+        self._ensure_connection()
+        ch = self._connection.channel()
 
-            if not isinstance(protocol.message, (str, bytes)):
-                raise MrsalAbortedSetup(f'Your message body needs to be string or bytes or serialized dict')
+        try:
+            for inbound_app_id, mrsal_protocol in mrsal_protocol_collection.items():
+                protocol = MrsalProtocol(**mrsal_protocol)
 
-            # connect and use only blocking
-            self.setup_blocking_connection()
-            if auto_declare:
-                self._setup_exchange_and_queue(
-                    exchange_name=protocol.exchange_name,
-                    queue_name=protocol.queue_name,
-                    exchange_type=protocol.exchange_type,
-                    routing_key=protocol.routing_key,
-                    passive=passive
-                    )
-            try:
-                # Publish the message by serializing it in json dump
-                # NOTE! we are not dumping a json anymore here! This allows for more flexibility
-                self._channel.basic_publish(
-                        exchange=protocol.exchange_name,
+                if not isinstance(protocol.message, (str, bytes)):
+                    raise MrsalAbortedSetup(f'Your message body needs to be string or bytes or serialized dict')
+
+                if auto_declare:
+                    self._setup_exchange_and_queue(
+                        exchange_name=protocol.exchange_name,
+                        queue_name=protocol.queue_name,
+                        exchange_type=protocol.exchange_type,
                         routing_key=protocol.routing_key,
-                        body=protocol.message,
-                        properties=prop
+                        passive=passive,
+                        channel=ch
                         )
-                log.info(f"The message for inbound app {inbound_app_id} with message -- ({protocol.message!r}) is published to the exchange {protocol.exchange_name} with the routing key {protocol.routing_key}. Oh baby baby")
+                try:
+                    # Publish the message by serializing it in json dump
+                    # NOTE! we are not dumping a json anymore here! This allows for more flexibility
+                    ch.basic_publish(
+                            exchange=protocol.exchange_name,
+                            routing_key=protocol.routing_key,
+                            body=protocol.message,
+                            properties=prop
+                            )
+                    log.info(f"The message for inbound app {inbound_app_id} with message -- ({protocol.message!r}) is published to the exchange {protocol.exchange_name} with the routing key {protocol.routing_key}. Oh baby baby")
 
-            except UnroutableError as e:
-                log.error(f"Producer could not publish message:{protocol.message!r} to the exchange {protocol.exchange_name} with a routing key {protocol.routing_key}: {e}", exc_info=True)
-                raise
-            except NackError as e:
-                log.error(f"Message NACKed by broker: {e}")
-                raise
-            except Exception as e:
-                log.error(f"Unexpected error while publishing message: {e}")
+                except UnroutableError as e:
+                    log.error(f"Producer could not publish message:{protocol.message!r} to the exchange {protocol.exchange_name} with a routing key {protocol.routing_key}: {e}", exc_info=True)
+                    raise
+                except NackError as e:
+                    log.error(f"Message NACKed by broker: {e}")
+                    raise
+                except Exception as e:
+                    log.error(f"Unexpected error while publishing message: {e}")
+        finally:
+            try:
+                ch.close()
+            except Exception:
+                pass
 
     def _publish_to_dlx_with_retry_cycle(
             self,
@@ -448,11 +472,11 @@ class MrsalBlockingAMQP(Mrsal):
             )
             
             # Acknowledge original message
-            self._channel.basic_ack(delivery_tag=method_frame.delivery_tag)
-            
+            self._consumer_channel.basic_ack(delivery_tag=method_frame.delivery_tag)
+
         except Exception as e:
             log.error(f"Failed to send message to DLX: {e}")
-            self._channel.basic_nack(delivery_tag=method_frame.delivery_tag, requeue=True)
+            self._consumer_channel.basic_nack(delivery_tag=method_frame.delivery_tag, requeue=True)
 
     def _publish_to_dlx(self, dlx_exchange: str, routing_key: str, body: bytes, properties: dict):
         """Blocking implementation of DLX publishing."""
@@ -464,7 +488,7 @@ class MrsalBlockingAMQP(Mrsal):
             expiration=properties.get('expiration')
         )
 
-        self._channel.basic_publish(
+        self._consumer_channel.basic_publish(
             exchange=dlx_exchange,
             routing_key=routing_key,
             body=body,

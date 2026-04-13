@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, ANY
 from mrsal.amqp.subclass import MrsalBlockingAMQP
 from pika.exceptions import ChannelClosedByBroker
 
@@ -33,12 +33,15 @@ class TestPassiveDeclarationAndQueueSettings:
         # Mock connection and channel
         consumer._connection = MagicMock()
         consumer._channel = MagicMock()
+        consumer._consumer_channel = consumer._channel
+        consumer._connection.is_open = False
+        consumer._connection.channel.return_value = consumer._channel
         consumer.auto_declare_ok = True
-        
+
         # Mock setup methods
         consumer.setup_blocking_connection = MagicMock()
         consumer._setup_exchange_and_queue = MagicMock()
-        
+
         return consumer
 
     def test_passive_declaration_default_for_publisher(self, mock_consumer):
@@ -59,7 +62,8 @@ class TestPassiveDeclarationAndQueueSettings:
             queue_name="test_queue",
             exchange_type="direct",
             routing_key="test_key",
-            passive=True  # Should be True by default for publishers
+            passive=True,  # Should be True by default for publishers
+            channel=ANY
         )
 
     def test_passive_declaration_can_be_overridden(self, mock_consumer):
@@ -80,7 +84,8 @@ class TestPassiveDeclarationAndQueueSettings:
             queue_name="test_queue",
             exchange_type="direct",
             routing_key="test_key",
-            passive=False
+            passive=False,
+            channel=ANY
         )
 
     def test_consumer_passive_declaration_default(self, mock_consumer):
@@ -111,7 +116,8 @@ class TestPassiveDeclarationAndQueueSettings:
             max_queue_length_bytes=None,
             queue_overflow=None,
             single_active_consumer=None,
-            lazy_queue=None
+            lazy_queue=None,
+            channel=ANY
         )
 
 
@@ -149,7 +155,8 @@ class TestPassiveDeclarationAndQueueSettings:
         mock_consumer._setup_exchange_and_queue.assert_called_with(
             exchange_name="test_exch",
             queue_name="test_queue",
-            exchange_type="direct", 
+            exchange_type="direct",
             routing_key="test_key",
-            passive=True
+            passive=True,
+            channel=ANY
         )

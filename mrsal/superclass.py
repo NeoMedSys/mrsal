@@ -83,7 +83,8 @@ class Mrsal:
                                  max_queue_length_bytes: int | None = None,
                                  queue_overflow: str | None = None,
                                  single_active_consumer: bool | None = None,
-                                 lazy_queue: bool | None = None
+                                 lazy_queue: bool | None = None,
+                                 channel=None
                                  ) -> None:
 
         if queue_args is None:
@@ -100,7 +101,8 @@ class Mrsal:
                         durable=exch_durable,
                         passive=passive,
                         internal=internal,
-                        auto_delete=auto_delete
+                        auto_delete=auto_delete,
+                        channel=channel
                     )
                     if self.verbose:
                         log.info(f"Dead letter exchange {dlx_name} declared successfully")
@@ -116,13 +118,15 @@ class Mrsal:
                             durable=exch_durable,
                             passive=False,
                             exclusive=False,
-                            auto_delete=False
+                            auto_delete=False,
+                            channel=channel
                             )
                     self._declare_queue_binding(
                             exchange=dlx_name,
                             queue=dlx_queue_name,
                             routing_key=dlx_routing,
-                            arguments=None
+                            arguments=None,
+                            channel=channel
                             )
                     if self.verbose:
                         log.info(f"DLX queue {dlx_queue_name} declared and bound successfully")
@@ -197,10 +201,10 @@ class Mrsal:
 
                 }
         try:
-            self._declare_exchange(**declare_exhange_dict)
-            self._declare_queue(**declare_queue_dict)
+            self._declare_exchange(**declare_exhange_dict, channel=channel)
+            self._declare_queue(**declare_queue_dict, channel=channel)
             if not passive:
-                self._declare_queue_binding(**declare_queue_binding_dict)
+                self._declare_queue_binding(**declare_queue_binding_dict, channel=channel)
             self.auto_declare_ok = True
             if not passive:
                 log.info(f"Exchange {exchange_name} and Queue {queue_name} set up successfully.")
@@ -370,7 +374,8 @@ class Mrsal:
                              exchange: str, exchange_type: str,
                              arguments: dict[str, str] | None,
                              durable: bool, passive: bool,
-                             internal: bool, auto_delete: bool
+                             internal: bool, auto_delete: bool,
+                             channel=None
                             ) -> None:
         """This method creates an exchange if it does not already exist, and if the exchange exists, verifies that it is of the correct and expected class.
 
@@ -397,8 +402,9 @@ class Mrsal:
                                 """
         if self.verbose:
             log.info(f"Declaring exchange with: {exchange_declare_info}")
+        ch = channel or self._channel
         try:
-            self._channel.exchange_declare(
+            ch.exchange_declare(
                 exchange=exchange, exchange_type=exchange_type,
                 arguments=arguments, durable=durable,
                 passive=passive, internal=internal,
@@ -446,7 +452,8 @@ class Mrsal:
     def _declare_queue(self,
                     queue: str, arguments: dict[str, str] | None,
                     durable: bool, exclusive: bool,
-                    auto_delete: bool, passive: bool
+                    auto_delete: bool, passive: bool,
+                    channel=None
                     ) -> None:
         """Declare queue, create if needed. This method creates or checks a queue.
         When creating a new queue the client can specify various properties that control the durability of the queue and its contents,
@@ -474,8 +481,9 @@ class Mrsal:
         if self.verbose:
             log.info(f"Declaring queue with: {queue_declare_info}")
 
+        ch = channel or self._channel
         try:
-            self._channel.queue_declare(queue=queue, arguments=arguments, durable=durable, exclusive=exclusive, auto_delete=auto_delete, passive=passive)
+            ch.queue_declare(queue=queue, arguments=arguments, durable=durable, exclusive=exclusive, auto_delete=auto_delete, passive=passive)
         except Exception as e:
             raise MrsalSetupError(f'Oooopise! I failed declaring the queue with : {e}')
         if self.verbose:
@@ -515,7 +523,8 @@ class Mrsal:
     def _declare_queue_binding(self,
                             exchange: str, queue: str,
                             routing_key: str | None,
-                            arguments: dict[str, str] | None
+                            arguments: dict[str, str] | None,
+                            channel=None
                             ) -> None:
         """Bind queue to exchange.
 
@@ -530,8 +539,9 @@ class Mrsal:
         if self.verbose:
             log.info(f"Binding queue to exchange: queue={queue}, exchange={exchange}, routing_key={routing_key}")
 
+        ch = channel or self._channel
         try:
-            self._channel.queue_bind(exchange=exchange, queue=queue, routing_key=routing_key, arguments=arguments)
+            ch.queue_bind(exchange=exchange, queue=queue, routing_key=routing_key, arguments=arguments)
             if self.verbose:
                 log.info(f"The queue is bound to exchange successfully: queue={queue}, exchange={exchange}, routing_key={routing_key}")
         except Exception as e:

@@ -52,6 +52,8 @@ class TestDLXExchangeNameConfiguration:
 		# Mock connection and channel
 		consumer._connection = MagicMock()
 		consumer._channel = MagicMock()
+		consumer._consumer_channel = consumer._channel
+		consumer._connection.channel.return_value = consumer._channel
 		consumer.auto_declare_ok = True
 
 		# Mock setup methods
