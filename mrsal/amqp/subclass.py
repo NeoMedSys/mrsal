@@ -16,7 +16,7 @@ from pika.exceptions import (
         UnroutableError
         )
 from aio_pika import connect_robust, Message, Channel as AioChannel
-from typing import Callable, Type
+from typing import Callable, Sequence, Type
 from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, retry_if_exception_type, before_sleep_log
 from pydantic import ValidationError
 from pydantic.dataclasses import dataclass
@@ -201,7 +201,7 @@ class MrsalBlockingAMQP(Mrsal):
             self,
             queue_name: str,
             callback: Callable | None = None,
-            callback_args: dict[str, str | int | float | bool] | None = None,
+            callback_args: Sequence[str | int | float | bool] | None = None,
             auto_ack: bool = True,
             inactivity_timeout: int | None = None,
             auto_declare: bool = True,
@@ -228,7 +228,7 @@ class MrsalBlockingAMQP(Mrsal):
         Start the consumer using blocking setup.
         :param str queue_name: The queue to consume from
         :param Callable callback: The callback function to process messages
-        :param dict callback_args: Optional arguments to pass to the callback
+        :param Sequence callback_args: Optional positional arguments to pass to the callback
         :param bool auto_ack: If True, messages are automatically acknowledged
         :param int inactivity_timeout: Timeout for inactivity in the consumer loop
         :param bool auto_declare: If True, will declare exchange/queue before consuming
@@ -568,6 +568,26 @@ class MrsalAsyncAMQP(Mrsal):
         await self.close()
         return False
 
+    async def _ensure_async_connection(self) -> None:
+        """Idempotent: only connects if not already connected. Closes stale connections."""
+        if self._connection is None or self._connection.is_closed:
+            if self._connection is not None:
+                try:
+                    await self._connection.close()
+                except Exception:
+                    pass
+            await self.setup_async_connection()
+
+    async def _ensure_consumer_channel(self) -> None:
+        """Close any prior open channel before opening a new one (prevents leak on tenacity retry)."""
+        if self._channel is not None and not self._channel.is_closed:
+            try:
+                await self._channel.close()
+            except Exception:
+                pass
+        self._channel = await self._connection.channel()
+        await self._channel.set_qos(prefetch_count=self.prefetch_count)
+
     async def setup_async_connection(self):
         """Setup an asynchronous connection to RabbitMQ using aio-pika."""
         log.info(f"Establishing async connection to RabbitMQ on {self.host}:{self.port}")
@@ -604,7 +624,7 @@ class MrsalAsyncAMQP(Mrsal):
             self,
             queue_name: str,
             callback: Callable | None = None,
-            callback_args: dict[str, str | int | float | bool] | None = None,
+            callback_args: Sequence[str | int | float | bool] | None = None,
             auto_ack: bool = False,
             auto_declare: bool = True,
             exchange_name: str | None = None,
@@ -625,18 +645,28 @@ class MrsalAsyncAMQP(Mrsal):
             lazy_queue: bool | None = None,
     
             ):
-        """Start the async consumer with the provided setup."""
-        # Check if there's a connection; if not, create one
+        """Start the async consumer.
+
+        :param str queue_name: The queue to consume from
+        :param Callable callback: Async callable invoked as ``callback(*callback_args, message, properties, body)``
+        :param Sequence callback_args: Optional positional arguments prepended to the callback invocation
+        :param bool auto_ack: If True, the broker acks at delivery (``no_ack=True``). On callback/validation
+            failure DLX is skipped; the failure is logged only. If False (default), the consumer acks on
+            success and routes failures through DLX/retry as configured.
+        :param bool auto_declare: If True, declare exchange/queue before consuming
+        :param str exchange_name: Exchange name for auto_declare
+        :param str exchange_type: Exchange type for auto_declare
+        :param str routing_key: Routing key for auto_declare
+        :param Type payload_model: Pydantic model for payload validation
+        :param bool dlx_enable: Whether to route failed messages to a dead-letter exchange
+        :param bool enable_retry_cycles: Whether to apply retry cycle headers when publishing to DLX
+        """
         try:
             asyncio.get_running_loop()
         except RuntimeError:
             raise MrsalNoAsyncioLoopError(f'Young grasshopper! You forget to add asyncio.run(mrsal.start_consumer(...))')
-        if not self._connection:
-            await self.setup_async_connection()
-
-
-        self._channel: AioChannel = await self._connection.channel()
-        await self._channel.set_qos(prefetch_count=self.prefetch_count)
+        await self._ensure_async_connection()
+        await self._ensure_consumer_channel()
 
         if auto_declare:
             if None in (exchange_name, queue_name, exchange_type, routing_key):
@@ -659,12 +689,7 @@ class MrsalAsyncAMQP(Mrsal):
                     )
 
             if not self.auto_declare_ok:
-                if self._channel and not self._channel.is_closed:
-                    await self._channel.close()
-                self._channel = None
-                if self._connection:
-                    await self._connection.close()
-                self._connection = None
+                await self.close()
                 raise MrsalAbortedSetup('Auto declaration failed during setup.')
 
         # Log consumer configuration
@@ -679,18 +704,13 @@ class MrsalAsyncAMQP(Mrsal):
 
         log.info(f"Straight out of the swamps -- consumer boi listening with config: {consumer_config}")
 
-        async for message in queue.iterator():
+        async for message in queue.iterator(no_ack=auto_ack):
             if message is None:
                 continue
 
-            # Extract message metadata
-            delivery_tag = message.delivery_tag
-            app_id = message.app_id if hasattr(message, 'app_id') else 'NoAppID'
-            msg_id = message.message_id if hasattr(message, 'message_id') else 'NoMsgID'
-
-            # add this so it is in line with Pikas awkawrdly old ways
-            properties = config.AioPikaAttributes(app_id=app_id, message_id=msg_id)
-            properties.headers = message.headers
+            app_id = message.app_id or 'NoAppID'
+            msg_id = message.message_id or 'NoMsgID'
+            properties = config.AioPikaAttributes.from_message(message)
 
             if self.verbose:
                 log.info(f"""
@@ -722,11 +742,16 @@ class MrsalAsyncAMQP(Mrsal):
                     log.error(f"Splæt! Error processing message with callback: {e}", exc_info=True)
                     should_process = False
 
+            # With auto_ack=True the broker already acked at delivery; no client-side
+            # ack/reject is valid. Failures are logged only — DLX is not attempted
+            # because the caller opted out of broker-side accountability.
+            if auto_ack:
+                if not should_process:
+                    log.warning(f"Message {msg_id} processing failed; auto_ack=True so DLX is skipped")
+                continue
+
             if not should_process:
-                if auto_ack:
-                    await message.ack()
-                    log.warning(f"Message {msg_id} processing failed but auto_ack is enabled -- acking anyway")
-                elif dlx_enable and enable_retry_cycles:
+                if dlx_enable and enable_retry_cycles:
                     await self._async_publish_to_dlx_with_retry_cycle(
                         message, properties, "Callback processing failed",
                         exchange_name, routing_key, enable_retry_cycles,

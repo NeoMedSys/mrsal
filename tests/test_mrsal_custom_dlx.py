@@ -81,7 +81,9 @@ class TestDLXExchangeNameConfiguration:
 
 		# Mock connection and channel
 		consumer._connection = AsyncMock()
+		consumer._connection.is_closed = False
 		consumer._channel = AsyncMock()
+		consumer._channel.is_closed = False
 		consumer.auto_declare_ok = True
 
 		# Mock setup methods

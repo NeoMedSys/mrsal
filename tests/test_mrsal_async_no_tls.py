@@ -28,7 +28,9 @@ class ExpectedPayload:
 def mock_amqp_connection():
     with patch('aio_pika.connect_robust', new_callable=AsyncMock) as mock_connect_robust:
         mock_channel = AsyncMock()
+        mock_channel.is_closed = False
         mock_connection = AsyncMock()
+        mock_connection.is_closed = False
         mock_connection.channel.return_value = mock_channel
 
         mock_connect_robust.return_value = mock_connection
@@ -58,7 +60,7 @@ async def test_valid_message_processing(amqp_consumer):
     mock_message.configure_mock(app_id="test_app", message_id="12345")
 
     mock_queue = AsyncMock()
-    async def message_generator():
+    async def message_generator(**kwargs):
         yield mock_message
 
     mock_queue.iterator = message_generator
@@ -95,7 +97,7 @@ async def test_invalid_payload_validation(amqp_consumer):
     mock_message.configure_mock(app_id="test_app", message_id="12345")
 
     mock_queue = AsyncMock()
-    async def message_generator():
+    async def message_generator(**kwargs):
         yield mock_message
 
     mock_queue.iterator = message_generator
@@ -135,7 +137,7 @@ async def test_requeue_on_invalid_message(amqp_consumer):
     mock_message.configure_mock(app_id="test_app", message_id="12345")
 
     mock_queue = AsyncMock()
-    async def message_generator():
+    async def message_generator(**kwargs):
         yield mock_message
 
     mock_queue.iterator = message_generator
