@@ -36,15 +36,32 @@ class MrsalBlockingAMQP(Mrsal):
     """
     blocked_connection_timeout: int = 60  # sec
     _consumer_channel = None
+    _dlx_publish_channel = None
 
     def close(self) -> None:
-        """Close consumer channel and connection cleanly."""
+        """Close channels and connection cleanly.
+
+        Each close is wrapped: a failure on one handle must not leak the next.
+        """
+        if self._dlx_publish_channel is not None and self._dlx_publish_channel.is_open:
+            try:
+                self._dlx_publish_channel.close()
+            except Exception:
+                log.debug("DLX publish channel close raised; ignoring.", exc_info=True)
+        self._dlx_publish_channel = None
+
         if self._consumer_channel is not None and self._consumer_channel.is_open:
-            self._consumer_channel.close()
+            try:
+                self._consumer_channel.close()
+            except Exception:
+                log.debug("Consumer channel close raised; ignoring.", exc_info=True)
         self._consumer_channel = None
 
         if self._connection is not None and self._connection.is_open:
-            self._connection.close()
+            try:
+                self._connection.close()
+            except Exception:
+                log.debug("Connection close raised; ignoring.", exc_info=True)
         self._connection = None
 
     def __enter__(self):
@@ -64,6 +81,32 @@ class MrsalBlockingAMQP(Mrsal):
                 except Exception:
                     pass
             self.setup_blocking_connection()
+
+    def _ensure_dlx_publish_channel(self) -> None:
+        """Lazily open a dedicated channel with publisher confirms for DLX writes.
+
+        Why: ``confirm_delivery()`` makes ``basic_publish`` raise on broker
+        rejection or unroutable destination (``NackError`` / ``UnroutableError``)
+        instead of returning silently. Without it a dropped DLX publish would
+        succeed-on-the-wire and the caller would ack the original message,
+        causing silent message loss.
+
+        Kept separate from the consumer channel so confirms semantics don't
+        affect the consume path. Not safe for concurrent callers; the consume
+        loop serializes DLX publishes today.
+        """
+        self._ensure_connection()
+        if self._dlx_publish_channel is not None and self._dlx_publish_channel.is_open:
+            return
+        if self._dlx_publish_channel is not None:
+            try:
+                self._dlx_publish_channel.close()
+            except Exception:
+                log.debug("Stale DLX publish channel close raised; ignoring.", exc_info=True)
+            self._dlx_publish_channel = None
+        channel = self._connection.channel()
+        channel.confirm_delivery()
+        self._dlx_publish_channel = channel
 
     def setup_blocking_connection(self) -> None:
         """We can use setup_blocking_connection for establishing a connection to RabbitMQ server specifying connection parameters.
@@ -501,10 +544,11 @@ class MrsalBlockingAMQP(Mrsal):
             max_retry_time_limit: int, dlx_exchange_name: str | None):
         """Publish message to DLX with retry cycle headers.
 
-        NOTE: This operation provides at-least-once delivery semantics.
-        The DLX publish and original message ACK are not atomic — if the
-        process crashes between the two, the message may be redelivered
-        and published to DLX again. Consumers must be idempotent.
+        At-least-once delivery for DLX: the publish uses ``confirm_delivery()``
+        on a dedicated channel, so broker rejection or connection loss raises
+        and the original message is nacked (not acked). If the process crashes
+        between the confirmed DLX publish and the original ack, the message
+        will be redelivered and re-published to DLX. Consumers must be idempotent.
         """
         try:
             # Use common logic from superclass
@@ -531,8 +575,14 @@ class MrsalBlockingAMQP(Mrsal):
             self._consumer_channel.basic_nack(delivery_tag=method_frame.delivery_tag, requeue=False)
 
     def _publish_to_dlx(self, dlx_exchange: str, routing_key: str, body: bytes, properties: dict):
-        """Blocking implementation of DLX publishing."""
-        # Convert properties dict to pika.BasicProperties
+        """Blocking implementation of DLX publishing.
+
+        Publishes via a dedicated channel with ``confirm_delivery()`` enabled,
+        so broker rejection or unroutable destination raises
+        (``pika.exceptions.NackError`` / ``UnroutableError``) instead of
+        silently dropping the message. The caller is responsible for nacking
+        the original message on failure.
+        """
         pika_properties = pika.BasicProperties(
             headers=properties.get('headers'),
             delivery_mode=properties.get('delivery_mode', 2),
@@ -540,7 +590,8 @@ class MrsalBlockingAMQP(Mrsal):
             expiration=properties.get('expiration')
         )
 
-        self._consumer_channel.basic_publish(
+        self._ensure_dlx_publish_channel()
+        self._dlx_publish_channel.basic_publish(
             exchange=dlx_exchange,
             routing_key=routing_key,
             body=body,
@@ -551,14 +602,32 @@ class MrsalBlockingAMQP(Mrsal):
 class MrsalAsyncAMQP(Mrsal):
     """Handles asynchronous connection with RabbitMQ using aio-pika."""
 
+    _dlx_publish_channel = None
+
     async def close(self) -> None:
-        """Close channel and connection cleanly."""
+        """Close channels and connection cleanly.
+
+        Each close is wrapped: a failure on one handle must not leak the next.
+        """
+        if self._dlx_publish_channel is not None and not self._dlx_publish_channel.is_closed:
+            try:
+                await self._dlx_publish_channel.close()
+            except Exception:
+                log.debug("DLX publish channel close raised; ignoring.", exc_info=True)
+        self._dlx_publish_channel = None
+
         if self._channel is not None and not self._channel.is_closed:
-            await self._channel.close()
+            try:
+                await self._channel.close()
+            except Exception:
+                log.debug("Consumer channel close raised; ignoring.", exc_info=True)
         self._channel = None
 
         if self._connection is not None and not self._connection.is_closed:
-            await self._connection.close()
+            try:
+                await self._connection.close()
+            except Exception:
+                log.debug("Connection close raised; ignoring.", exc_info=True)
         self._connection = None
 
     async def __aenter__(self):
@@ -580,7 +649,10 @@ class MrsalAsyncAMQP(Mrsal):
             await self.setup_async_connection()
 
     async def _ensure_consumer_channel(self) -> None:
-        """Close any prior open channel before opening a new one (prevents leak on tenacity retry)."""
+        """Close any prior open channel before opening a new one (prevents leak on tenacity retry).
+
+        Not safe for concurrent callers; start_consumer is the only call site.
+        """
         if self._channel is not None and not self._channel.is_closed:
             try:
                 await self._channel.close()
@@ -594,6 +666,30 @@ class MrsalAsyncAMQP(Mrsal):
             await channel.close()
             raise
         self._channel = channel
+
+    async def _ensure_dlx_publish_channel(self) -> None:
+        """Lazily open a dedicated channel with publisher confirms for DLX writes.
+
+        Why: publisher confirms make ``exchange.publish(...)`` await a broker
+        ack and raise (e.g. ``aio_pika.exceptions.DeliveryError``) on negative
+        ack or connection loss. Without confirms a dropped DLX publish would
+        return successfully and the caller would ack the original message,
+        causing silent message loss.
+
+        Kept separate from the consumer channel so confirms semantics don't
+        affect the consume path. Not safe for concurrent callers; the consume
+        loop serializes DLX publishes today.
+        """
+        await self._ensure_async_connection()
+        if self._dlx_publish_channel is not None and not self._dlx_publish_channel.is_closed:
+            return
+        if self._dlx_publish_channel is not None:
+            try:
+                await self._dlx_publish_channel.close()
+            except Exception:
+                log.debug("Stale DLX publish channel close raised; ignoring.", exc_info=True)
+            self._dlx_publish_channel = None
+        self._dlx_publish_channel = await self._connection.channel(publisher_confirms=True)
 
     async def setup_async_connection(self):
         """Setup an asynchronous connection to RabbitMQ using aio-pika."""
@@ -787,10 +883,11 @@ class MrsalAsyncAMQP(Mrsal):
                                                   max_retry_time_limit: int, dlx_exchange_name: str | None):
         """Async publish message to DLX with retry cycle headers.
 
-        NOTE: This operation provides at-least-once delivery semantics.
-        The DLX publish and original message ACK are not atomic — if the
-        process crashes between the two, the message may be redelivered
-        and published to DLX again. Consumers must be idempotent.
+        At-least-once delivery for DLX: the publish uses publisher confirms on
+        a dedicated channel, so broker rejection or connection loss raises and
+        the original message is rejected (not acked). If the process crashes
+        between the confirmed DLX publish and the original ack, the message
+        will be redelivered and re-published to DLX. Consumers must be idempotent.
         """
         try:
             # Use common logic from superclass
@@ -816,20 +913,24 @@ class MrsalAsyncAMQP(Mrsal):
             await message.reject(requeue=False)
 
     async def _publish_to_dlx(self, dlx_exchange: str, routing_key: str, body: bytes, properties: dict):
-        """Async implementation of DLX publishing."""
-        
-        # Create aio-pika message
+        """Async implementation of DLX publishing.
+
+        Publishes via a dedicated channel with publisher confirms enabled, so
+        broker rejection or connection loss raises (typically
+        ``aio_pika.exceptions.DeliveryError``) instead of silently dropping
+        the message. The caller is responsible for rejecting the original
+        message on failure.
+        """
         message = Message(
             body,
             headers=properties.get('headers'),
             content_type=properties.get('content_type', 'application/json'),
             delivery_mode=properties.get('delivery_mode', 2)
         )
-        
-        # Set expiration if provided
+
         if 'expiration' in properties:
             message.expiration = int(properties['expiration'])
-            
-        # Get exchange and publish
-        exchange = await self._channel.get_exchange(dlx_exchange)
+
+        await self._ensure_dlx_publish_channel()
+        exchange = await self._dlx_publish_channel.get_exchange(dlx_exchange)
         await exchange.publish(message, routing_key=routing_key)
