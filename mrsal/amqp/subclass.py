@@ -576,6 +576,7 @@ class MrsalAsyncAMQP(Mrsal):
                     await self._connection.close()
                 except Exception:
                     log.debug("Stale connection close raised; ignoring.", exc_info=True)
+                self._connection = None
             await self.setup_async_connection()
 
     async def _ensure_consumer_channel(self) -> None:
@@ -585,6 +586,7 @@ class MrsalAsyncAMQP(Mrsal):
                 await self._channel.close()
             except Exception:
                 log.debug("Stale channel close raised; ignoring.", exc_info=True)
+            self._channel = None
         channel = await self._connection.channel()
         try:
             await channel.set_qos(prefetch_count=self.prefetch_count)
