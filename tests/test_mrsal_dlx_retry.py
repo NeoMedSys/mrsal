@@ -374,7 +374,9 @@ class TestAsyncDLXRetryCycleOnly:
 		)
 
 		consumer._connection = AsyncMock()
+		consumer._connection.is_closed = False
 		consumer._channel = AsyncMock()
+		consumer._channel.is_closed = False
 		consumer.auto_declare_ok = True
 		consumer.setup_async_connection = AsyncMock()
 		consumer._async_setup_exchange_and_queue = AsyncMock()
