@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import Mock, MagicMock, AsyncMock, patch
 from pydantic.dataclasses import dataclass
+from aio_pika.exceptions import DeliveryError
 
 from mrsal.amqp.subclass import MrsalBlockingAMQP, MrsalAsyncAMQP
 
@@ -285,8 +286,9 @@ class TestDLXUsesConsumerChannel:
 		consumer._consumer_channel = MagicMock(name='consumer_channel')
 		return consumer
 
-	def test_publish_to_dlx_uses_consumer_channel(self, mock_consumer):
-		"""_publish_to_dlx must publish via _consumer_channel, not _channel."""
+	def test_publish_to_dlx_uses_dedicated_channel_with_confirms(self, mock_consumer):
+		"""_publish_to_dlx must publish via a dedicated channel with confirm_delivery() enabled,
+		not via _consumer_channel — confirms surface broker rejection as an exception."""
 		mock_consumer._publish_to_dlx(
 			dlx_exchange="test.dlx",
 			routing_key="test_key",
@@ -294,7 +296,14 @@ class TestDLXUsesConsumerChannel:
 			properties={'headers': {'x-cycle-count': 1}, 'delivery_mode': 2}
 		)
 
-		mock_consumer._consumer_channel.basic_publish.assert_called_once()
+		# A dedicated channel was opened and confirm_delivery() called on it
+		mock_consumer._connection.channel.assert_called_once_with()
+		dlx_channel = mock_consumer._connection.channel.return_value
+		dlx_channel.confirm_delivery.assert_called_once()
+
+		# Publish went via the dedicated DLX channel
+		dlx_channel.basic_publish.assert_called_once()
+		mock_consumer._consumer_channel.basic_publish.assert_not_called()
 		mock_consumer._channel.basic_publish.assert_not_called()
 
 	def test_publish_to_dlx_with_retry_cycle_acks_on_consumer_channel(self, mock_consumer):
@@ -332,8 +341,10 @@ class TestDLXUsesConsumerChannel:
 		mock_properties.headers = None
 		mock_properties.content_type = 'application/json'
 
-		# Make the DLX publish fail
-		mock_consumer._consumer_channel.basic_publish.side_effect = Exception("broker down")
+		# Make the DLX publish fail on the dedicated DLX channel (publisher-confirm NACK)
+		dlx_channel = MagicMock(name='dlx_publish_channel')
+		dlx_channel.basic_publish.side_effect = Exception("broker down")
+		mock_consumer._connection.channel.return_value = dlx_channel
 
 		mock_consumer._publish_to_dlx_with_retry_cycle(
 			method_frame=mock_method_frame,
@@ -469,6 +480,74 @@ class TestAsyncDLXRetryCycleOnly:
 
 		# Should NOT reject
 		mock_msg.reject.assert_not_called()
+
+	@pytest.mark.asyncio
+	async def test_async_dlx_publish_failure_rejects_original_message(self, mock_async_consumer):
+		"""Broker rejects DLX publish (publisher-confirm NACK / connection loss)
+		=> original message must be rejected, not acked."""
+		invalid_body = b'{"id": "wrong", "name": "Test", "active": true}'
+
+		mock_msg = MagicMock()
+		mock_msg.delivery_tag = 999
+		mock_msg.app_id = 'async_app'
+		mock_msg.message_id = 'msg_999'
+		mock_msg.headers = None
+		mock_msg.body = invalid_body
+		mock_msg.routing_key = 'test_key'
+		mock_msg.ack = AsyncMock()
+		mock_msg.reject = AsyncMock()
+
+		mock_queue = AsyncMock()
+		mock_async_consumer._async_setup_exchange_and_queue.return_value = mock_queue
+
+		async_iterator = AsyncIteratorMock([mock_msg])
+		mock_queue.iterator = Mock(return_value=async_iterator)
+
+		# Simulate broker rejecting the DLX publish (publisher-confirm NACK).
+		mock_async_consumer._publish_to_dlx = AsyncMock(
+			side_effect=DeliveryError(None, None)
+		)
+
+		await mock_async_consumer.start_consumer(
+			queue_name="test_queue",
+			callback=AsyncMock(),
+			auto_ack=False,
+			auto_declare=True,
+			exchange_name="test_exchange",
+			exchange_type="direct",
+			routing_key="test_key",
+			payload_model=ExpectedPayload,
+			enable_retry_cycles=True,
+			retry_cycle_interval=10,
+			max_retry_time_limit=60
+		)
+
+		mock_msg.ack.assert_not_called()
+		mock_msg.reject.assert_called_once_with(requeue=False)
+
+	@pytest.mark.asyncio
+	async def test_async_dlx_publish_channel_opens_with_publisher_confirms(self, mock_async_consumer):
+		"""_publish_to_dlx must open a dedicated channel with publisher_confirms=True
+		so broker rejections raise instead of silently dropping the message."""
+		dlx_channel = AsyncMock()
+		dlx_channel.is_closed = False
+		dlx_exchange = AsyncMock()
+		dlx_channel.get_exchange = AsyncMock(return_value=dlx_exchange)
+
+		mock_async_consumer._connection.channel = AsyncMock(return_value=dlx_channel)
+		mock_async_consumer._dlx_publish_channel = None
+
+		await mock_async_consumer._publish_to_dlx(
+			dlx_exchange="dlx",
+			routing_key="rk",
+			body=b"{}",
+			properties={}
+		)
+
+		mock_async_consumer._connection.channel.assert_called_once_with(publisher_confirms=True)
+		dlx_channel.get_exchange.assert_awaited_once_with("dlx")
+		dlx_exchange.publish.assert_awaited_once()
+		assert mock_async_consumer._dlx_publish_channel is dlx_channel
 
 
 class TestDLXRetryHeaders:
