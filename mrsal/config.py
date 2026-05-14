@@ -1,7 +1,10 @@
 import os
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from aio_pika import IncomingMessage
 
 
 class ValidateTLS(BaseModel):
@@ -21,11 +24,9 @@ class AioPikaAttributes(BaseModel):
     Populated from aio_pika.IncomingMessage so callbacks receive the same
     field surface across blocking and async consumers.
     """
-    model_config = {"arbitrary_types_allowed": True}
-
     message_id: str | None = None
     app_id: str | None = None
-    headers: dict | None = None
+    headers: dict[str, Any] | None = None
     correlation_id: str | None = None
     reply_to: str | None = None
     content_type: str | None = None
@@ -38,7 +39,7 @@ class AioPikaAttributes(BaseModel):
     user_id: str | None = None
 
     @classmethod
-    def from_message(cls, message: Any) -> "AioPikaAttributes":
+    def from_message(cls, message: "IncomingMessage") -> "AioPikaAttributes":
         """Build from an aio_pika.IncomingMessage.
 
         Uses model_construct to skip re-validation — the source object is

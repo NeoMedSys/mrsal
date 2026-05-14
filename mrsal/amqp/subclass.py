@@ -575,7 +575,7 @@ class MrsalAsyncAMQP(Mrsal):
                 try:
                     await self._connection.close()
                 except Exception:
-                    pass
+                    log.debug("Stale connection close raised; ignoring.", exc_info=True)
             await self.setup_async_connection()
 
     async def _ensure_consumer_channel(self) -> None:
@@ -584,9 +584,14 @@ class MrsalAsyncAMQP(Mrsal):
             try:
                 await self._channel.close()
             except Exception:
-                pass
-        self._channel = await self._connection.channel()
-        await self._channel.set_qos(prefetch_count=self.prefetch_count)
+                log.debug("Stale channel close raised; ignoring.", exc_info=True)
+        channel = await self._connection.channel()
+        try:
+            await channel.set_qos(prefetch_count=self.prefetch_count)
+        except Exception:
+            await channel.close()
+            raise
+        self._channel = channel
 
     async def setup_async_connection(self):
         """Setup an asynchronous connection to RabbitMQ using aio-pika."""
@@ -708,8 +713,8 @@ class MrsalAsyncAMQP(Mrsal):
             if message is None:
                 continue
 
-            app_id = message.app_id or 'NoAppID'
-            msg_id = message.message_id or 'NoMsgID'
+            app_id = 'NoAppID' if message.app_id is None else message.app_id
+            msg_id = 'NoMsgID' if message.message_id is None else message.message_id
             properties = config.AioPikaAttributes.from_message(message)
 
             if self.verbose:
@@ -724,6 +729,7 @@ class MrsalAsyncAMQP(Mrsal):
 
             current_retry = message.headers.get('x-delivery-count', 0) if message.headers else 0
             should_process = True
+            failure_reason: str | None = None
 
             if payload_model:
                 try:
@@ -731,6 +737,7 @@ class MrsalAsyncAMQP(Mrsal):
                 except (ValidationError, json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
                     log.error(f"Payload validation failed: {e}", exc_info=True)
                     should_process = False
+                    failure_reason = f"payload validation: {e!r}"
 
             if callback and should_process:
                 try:
@@ -741,13 +748,15 @@ class MrsalAsyncAMQP(Mrsal):
                 except Exception as e:
                     log.error(f"Splæt! Error processing message with callback: {e}", exc_info=True)
                     should_process = False
+                    failure_reason = f"callback: {e!r}"
 
-            # With auto_ack=True the broker already acked at delivery; no client-side
-            # ack/reject is valid. Failures are logged only — DLX is not attempted
-            # because the caller opted out of broker-side accountability.
+            # auto_ack=True: broker already acked; skip DLX (caller opted out of accountability)
             if auto_ack:
                 if not should_process:
-                    log.warning(f"Message {msg_id} processing failed; auto_ack=True so DLX is skipped")
+                    log.warning(
+                        f"Message {msg_id} dropped (auto_ack=True): {failure_reason} | "
+                        f"app_id={app_id} routing_key={message.routing_key}"
+                    )
                 continue
 
             if not should_process:
