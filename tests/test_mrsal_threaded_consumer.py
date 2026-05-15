@@ -133,8 +133,10 @@ def test_worker_logic_acks_threadsafe(mock_consumer):
 		'auto_ack': False,
 		'threaded': True,
 		'callback': MagicMock(),
+		'callback_args': None,
+		'payload_model': None,
 		'dlx_enable': False,
-		'enable_retry_cycles': False
+		'enable_retry_cycles': False,
 	}
 
 	# Spy on _schedule_threadsafe to ensure it's called
@@ -159,7 +161,10 @@ def test_worker_logic_acks_blocking(mock_consumer):
 		'auto_ack': False,
 		'threaded': False,
 		'callback': MagicMock(),
-		'dlx_enable': False
+		'callback_args': None,
+		'payload_model': None,
+		'dlx_enable': False,
+		'enable_retry_cycles': False,
 	}
 
 	with patch.object(mock_consumer, '_schedule_threadsafe') as mock_schedule:

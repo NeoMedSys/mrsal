@@ -90,6 +90,45 @@ async def test_valid_message_processing(amqp_consumer):
 
 
 @pytest.mark.asyncio
+async def test_callback_receives_validated_instance(amqp_consumer):
+    """Regression for 3.6.0: when payload_model is set, the callback's body
+    argument is the validated model instance, not raw bytes.
+    """
+    consumer = amqp_consumer
+    valid_body = b'{"id": 1, "name": "Test", "active": true}'
+
+    mock_message = AsyncMock(body=valid_body, ack=AsyncMock(), reject=AsyncMock())
+    mock_message.configure_mock(app_id="test_app", message_id="12345", headers=None, redelivered=False)
+
+    mock_queue = AsyncMock()
+    async def message_generator(**kwargs):
+        yield mock_message
+
+    mock_queue.iterator = message_generator
+    consumer._channel.declare_queue.return_value = mock_queue
+
+    received = {}
+
+    async def callback(message, properties, body):
+        received['body'] = body
+
+    await consumer.start_consumer(
+        queue_name='test_q',
+        callback=callback,
+        routing_key='test_route',
+        exchange_name='test_x',
+        exchange_type='direct',
+        payload_model=ExpectedPayload,
+        auto_ack=True,
+    )
+
+    assert isinstance(received['body'], ExpectedPayload)
+    assert received['body'].id == 1
+    assert received['body'].name == 'Test'
+    assert received['body'].active is True
+
+
+@pytest.mark.asyncio
 async def test_invalid_payload_validation(amqp_consumer):
     """Test invalid payload handling in async consumer."""
     invalid_payload = b'{"id": "wrong_type", "name": 123, "active": "maybe"}'

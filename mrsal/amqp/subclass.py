@@ -173,13 +173,13 @@ class MrsalBlockingAMQP(Mrsal):
         Worker method to process a single message. 
         Accepts a config dict to avoid an explosion of arguments.
         """
-        auto_ack = runtime_config.get('auto_ack')
-        threaded = runtime_config.get('threaded')
-        callback = runtime_config.get('callback')
-        callback_args = runtime_config.get('callback_args')
-        payload_model = runtime_config.get('payload_model')
-        dlx_enable = runtime_config.get('dlx_enable')
-        enable_retry_cycles = runtime_config.get('enable_retry_cycles')
+        auto_ack = runtime_config['auto_ack']
+        threaded = runtime_config['threaded']
+        callback = runtime_config['callback']
+        callback_args = runtime_config['callback_args']
+        payload_model = runtime_config['payload_model']
+        dlx_enable = runtime_config['dlx_enable']
+        enable_retry_cycles = runtime_config['enable_retry_cycles']
         
         app_id = properties.app_id if hasattr(properties, 'app_id') else 'no AppID'
         msg_id = properties.message_id if hasattr(properties, 'message_id') else 'no MsgID'
@@ -191,31 +191,37 @@ class MrsalBlockingAMQP(Mrsal):
             log.info(f"Processing message {msg_id} from {app_id} (Retry: {current_retry})")
 
         should_process = True
+        failure_reason: str | None = None
+        # When payload_model is set, the validated instance replaces body in the callback.
+        callback_body = body
         if payload_model:
             try:
-                self.validate_payload(body, payload_model)
+                callback_body = self.validate_payload(payload=body, model=payload_model)
             except (ValidationError, json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
                 log.error(f"Payload validation failed for {msg_id}: {e}")
                 should_process = False
+                failure_reason = f"payload validation: {e!r}"
 
         if callback and should_process:
             try:
                 if callback_args:
-                    callback(*callback_args, method_frame, properties, body)
+                    callback(*callback_args, method_frame, properties, callback_body)
                 else:
-                    callback(method_frame, properties, body)
+                    callback(method_frame, properties, callback_body)
             except Exception as e:
                 log.error(f"Callback processing failed for message {msg_id}: {e}")
                 should_process = False
+                failure_reason = f"callback: {e!r}"
 
         if not should_process and not auto_ack:
             if dlx_enable and enable_retry_cycles:
                 self._schedule_threadsafe(
                     self._publish_to_dlx_with_retry_cycle, threaded,
-                    method_frame, properties, body, "Callback failed",
-                    runtime_config['exchange_name'], runtime_config['routing_key'], 
-                    enable_retry_cycles, runtime_config['retry_cycle_interval'], 
-                    runtime_config['max_retry_time_limit'], runtime_config['dlx_exchange_name']
+                    method_frame, properties, body, failure_reason or "Callback failed",
+                    runtime_config['exchange_name'], runtime_config['routing_key'],
+                    enable_retry_cycles, runtime_config['retry_cycle_interval'],
+                    runtime_config['max_retry_time_limit'], runtime_config['dlx_exchange_name'],
+                    runtime_config['dlx_routing_key'],
                 )
             elif dlx_enable:
                 log.warning(f"Message {msg_id} sent to dead letter exchange after {current_retry} retries")
@@ -270,7 +276,8 @@ class MrsalBlockingAMQP(Mrsal):
         """
         Start the consumer using blocking setup.
         :param str queue_name: The queue to consume from
-        :param Callable callback: The callback function to process messages
+        :param Callable callback: Invoked as ``callback(*callback_args, method_frame, properties, body)``.
+            When ``payload_model`` is set, ``body`` is the validated model instance, not raw bytes.
         :param Sequence callback_args: Optional positional arguments to pass to the callback
         :param bool auto_ack: If True, messages are automatically acknowledged
         :param int inactivity_timeout: Timeout for inactivity in the consumer loop
@@ -279,7 +286,9 @@ class MrsalBlockingAMQP(Mrsal):
         :param str exchange_name: Exchange name for auto_declare
         :param str exchange_type: Exchange type for auto_declare
         :param str routing_key: Routing key for auto_declare
-        :param Type payload_model: Pydantic model for payload validation
+        :param Type payload_model: Pydantic model for payload validation. When set, validation
+            failures route to DLX before ``callback`` runs, and the callback receives the
+            validated model instance in place of the raw body.
         :param bool dlx_enable: Enable dead letter exchange
         :param str dlx_exchange_name: Custom DLX exchange name
         :param str dlx_routing_key: Custom DLX routing key
@@ -339,6 +348,7 @@ class MrsalBlockingAMQP(Mrsal):
             'exchange_name': exchange_name,
             'routing_key': routing_key,
             'dlx_exchange_name': dlx_exchange_name,
+            'dlx_routing_key': dlx_routing_key,
             'queue_name': queue_name,
         }
 
@@ -420,6 +430,9 @@ class MrsalBlockingAMQP(Mrsal):
         # connect and use only blocking
         self._ensure_connection()
         ch = self._connection.channel()
+        # Required for the NackError/UnroutableError retry on this method to actually fire;
+        # without confirms, basic_publish is fire-and-forget.
+        ch.confirm_delivery()
 
         try:
             if auto_declare:
@@ -493,6 +506,9 @@ class MrsalBlockingAMQP(Mrsal):
 
         self._ensure_connection()
         ch = self._connection.channel()
+        # Required for the NackError/UnroutableError retry on this method to actually fire;
+        # without confirms, basic_publish is fire-and-forget.
+        ch.confirm_delivery()
 
         try:
             for inbound_app_id, mrsal_protocol in mrsal_protocol_collection.items():
@@ -541,7 +557,8 @@ class MrsalBlockingAMQP(Mrsal):
             method_frame, properties, body, processing_error: str,
             original_exchange: str, original_routing_key: str,
             enable_retry_cycles: bool, retry_cycle_interval: int,
-            max_retry_time_limit: int, dlx_exchange_name: str | None):
+            max_retry_time_limit: int, dlx_exchange_name: str | None,
+            dlx_routing_key: str | None = None):
         """Publish message to DLX with retry cycle headers.
 
         At-least-once delivery for DLX: the publish uses ``confirm_delivery()``
@@ -562,7 +579,8 @@ class MrsalBlockingAMQP(Mrsal):
                 enable_retry_cycles=enable_retry_cycles,
                 retry_cycle_interval=retry_cycle_interval,
                 max_retry_time_limit=max_retry_time_limit,
-                dlx_exchange_name=dlx_exchange_name
+                dlx_exchange_name=dlx_exchange_name,
+                dlx_routing_key=dlx_routing_key,
             )
             
             # Acknowledge original message
@@ -751,7 +769,8 @@ class MrsalAsyncAMQP(Mrsal):
         """Start the async consumer.
 
         :param str queue_name: The queue to consume from
-        :param Callable callback: Async callable invoked as ``callback(*callback_args, message, properties, body)``
+        :param Callable callback: Async callable invoked as ``callback(*callback_args, message, properties, body)``.
+            When ``payload_model`` is set, ``body`` is the validated model instance, not ``message.body``.
         :param Sequence callback_args: Optional positional arguments prepended to the callback invocation
         :param bool auto_ack: If True, the broker acks at delivery (``no_ack=True``). On callback/validation
             failure DLX is skipped; the failure is logged only. If False (default), the consumer acks on
@@ -760,7 +779,9 @@ class MrsalAsyncAMQP(Mrsal):
         :param str exchange_name: Exchange name for auto_declare
         :param str exchange_type: Exchange type for auto_declare
         :param str routing_key: Routing key for auto_declare
-        :param Type payload_model: Pydantic model for payload validation
+        :param Type payload_model: Pydantic model for payload validation. When set, validation
+            failures route to DLX before ``callback`` runs, and the callback receives the
+            validated model instance in place of ``message.body``.
         :param bool dlx_enable: Whether to route failed messages to a dead-letter exchange
         :param bool enable_retry_cycles: Whether to apply retry cycle headers when publishing to DLX
         """
@@ -828,10 +849,12 @@ class MrsalAsyncAMQP(Mrsal):
             current_retry = message.headers.get('x-delivery-count', 0) if message.headers else 0
             should_process = True
             failure_reason: str | None = None
+            # When payload_model is set, the validated instance replaces message.body in the callback.
+            callback_body = message.body
 
             if payload_model:
                 try:
-                    self.validate_payload(message.body, payload_model)
+                    callback_body = self.validate_payload(payload=message.body, model=payload_model)
                 except (ValidationError, json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
                     log.error(f"Payload validation failed: {e}", exc_info=True)
                     should_process = False
@@ -840,9 +863,9 @@ class MrsalAsyncAMQP(Mrsal):
             if callback and should_process:
                 try:
                     if callback_args:
-                        await callback(*callback_args, message, properties, message.body)
+                        await callback(*callback_args, message, properties, callback_body)
                     else:
-                        await callback(message, properties, message.body)
+                        await callback(message, properties, callback_body)
                 except Exception as e:
                     log.error(f"Splæt! Error processing message with callback: {e}", exc_info=True)
                     should_process = False
@@ -860,9 +883,10 @@ class MrsalAsyncAMQP(Mrsal):
             if not should_process:
                 if dlx_enable and enable_retry_cycles:
                     await self._async_publish_to_dlx_with_retry_cycle(
-                        message, properties, "Callback processing failed",
+                        message, properties, failure_reason or "Callback processing failed",
                         exchange_name, routing_key, enable_retry_cycles,
-                        retry_cycle_interval, max_retry_time_limit, dlx_exchange_name
+                        retry_cycle_interval, max_retry_time_limit, dlx_exchange_name,
+                        dlx_routing_key,
                     )
                 elif dlx_enable:
                     await message.reject(requeue=False)
@@ -880,7 +904,8 @@ class MrsalAsyncAMQP(Mrsal):
     async def _async_publish_to_dlx_with_retry_cycle(self, message, properties, processing_error: str,
                                                    original_exchange: str, original_routing_key: str,
                                                    enable_retry_cycles: bool, retry_cycle_interval: int,
-                                                  max_retry_time_limit: int, dlx_exchange_name: str | None):
+                                                  max_retry_time_limit: int, dlx_exchange_name: str | None,
+                                                  dlx_routing_key: str | None = None):
         """Async publish message to DLX with retry cycle headers.
 
         At-least-once delivery for DLX: the publish uses publisher confirms on
@@ -900,7 +925,8 @@ class MrsalAsyncAMQP(Mrsal):
                 enable_retry_cycles=enable_retry_cycles,
                 retry_cycle_interval=retry_cycle_interval,
                 max_retry_time_limit=max_retry_time_limit,
-                dlx_exchange_name=dlx_exchange_name
+                dlx_exchange_name=dlx_exchange_name,
+                dlx_routing_key=dlx_routing_key,
             )
             
             # Acknowledge original message

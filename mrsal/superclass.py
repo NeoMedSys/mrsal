@@ -6,7 +6,9 @@ import logging
 from dataclasses import field
 from datetime import datetime, timezone
 from ssl import SSLContext
-from typing import Any, Type
+from typing import Any, Type, TypeVar
+
+T = TypeVar("T")
 from pika.connection import SSLOptions
 from aio_pika import ExchangeType as AioExchangeType, Queue as AioQueue, Exchange as AioExchange
 from pydantic.dataclasses import dataclass
@@ -601,12 +603,12 @@ class Mrsal:
         else:
             return None
 
-    def validate_payload(self, payload: Any, model: Type) -> None:
+    def validate_payload(self, payload: Any, model: Type[T]) -> T:
         """
         Parses and validates the incoming message payload using the provided dataclass model.
         :param payload: The message payload which could be of any type (str, bytes, dict, etc.).
         :param model: The pydantic dataclass model class to validate against.
-        :return: An instance of the model if validation is successful, otherwise None.
+        :return: An instance of ``model`` on success. Raises on validation failure.
         """
         # If payload is bytes, decode it to a string
         if isinstance(payload, bytes):
@@ -618,19 +620,9 @@ class Mrsal:
 
         # Validate the payload against the provided model
         if isinstance(payload, dict):
-            model(**payload)
+            return model(**payload)
         else:
             raise TypeError(f"Fool, we aint supporting this type yet {type(payload)}.. Bytes or str -- get it straight")
-
-    def _get_retry_count(self, properties) -> int:
-        """Extract retry count from message headers."""
-        if hasattr(properties, 'headers') and properties.headers:
-            return properties.headers.get('x-retry-count', 0)
-        return 0
-
-    def _has_dlx_configured(self) -> bool:
-        """Check if dead letter exchange is enabled."""
-        return self.dlx_enable
 
     def _get_retry_cycle_info(self, properties) -> dict:
         """Extract retry cycle information from message headers."""
@@ -693,7 +685,8 @@ class Mrsal:
     def _build_dlx_retry_properties(self, properties, processing_error: str,
                                     original_exchange: str, original_routing_key: str,
                                     enable_retry_cycles: bool, retry_cycle_interval: int,
-                                    max_retry_time_limit: int, dlx_exchange_name: str | None) -> tuple[str, str, dict, dict]:
+                                    max_retry_time_limit: int, dlx_exchange_name: str | None,
+                                    dlx_routing_key: str | None = None) -> tuple[str, str, dict, dict]:
         """Build DLX properties and headers for retry cycle publishing.
 
         Returns (dlx_name, dlx_routing, dlx_properties, retry_info).
@@ -702,7 +695,8 @@ class Mrsal:
         should_cycle = self._should_continue_retry_cycles(retry_info, enable_retry_cycles, max_retry_time_limit)
 
         dlx_name = dlx_exchange_name or f"{original_exchange}.dlx"
-        dlx_routing = original_routing_key
+        # Honor explicit dlx_routing_key (also used at bind time); fall back to original routing key.
+        dlx_routing = dlx_routing_key or original_routing_key
 
         original_headers = getattr(properties, 'headers', {}) or {}
         enhanced_headers = self._create_retry_cycle_headers(
@@ -735,11 +729,19 @@ class Mrsal:
             self, method_frame, properties, body, processing_error: str,
             original_exchange: str, original_routing_key: str,
             enable_retry_cycles: bool, retry_cycle_interval: int,
-            max_retry_time_limit: int, dlx_exchange_name: str | None):
+            max_retry_time_limit: int, dlx_exchange_name: str | None,
+            dlx_routing_key: str | None = None):
         """Base method for DLX handling with retry cycles (sync)."""
         dlx_name, dlx_routing, dlx_properties, retry_info = self._build_dlx_retry_properties(
-            properties, processing_error, original_exchange, original_routing_key,
-            enable_retry_cycles, retry_cycle_interval, max_retry_time_limit, dlx_exchange_name
+            properties=properties,
+            processing_error=processing_error,
+            original_exchange=original_exchange,
+            original_routing_key=original_routing_key,
+            enable_retry_cycles=enable_retry_cycles,
+            retry_cycle_interval=retry_cycle_interval,
+            max_retry_time_limit=max_retry_time_limit,
+            dlx_exchange_name=dlx_exchange_name,
+            dlx_routing_key=dlx_routing_key,
         )
         self._publish_to_dlx(dlx_name, dlx_routing, body, dlx_properties)
         should_cycle = self._should_continue_retry_cycles(retry_info, enable_retry_cycles, max_retry_time_limit)
@@ -749,11 +751,19 @@ class Mrsal:
             self, message, properties, processing_error: str,
             original_exchange: str, original_routing_key: str,
             enable_retry_cycles: bool, retry_cycle_interval: int,
-            max_retry_time_limit: int, dlx_exchange_name: str | None):
+            max_retry_time_limit: int, dlx_exchange_name: str | None,
+            dlx_routing_key: str | None = None):
         """Base method for DLX handling with retry cycles (async)."""
         dlx_name, dlx_routing, dlx_properties, retry_info = self._build_dlx_retry_properties(
-            properties, processing_error, original_exchange, original_routing_key,
-            enable_retry_cycles, retry_cycle_interval, max_retry_time_limit, dlx_exchange_name
+            properties=properties,
+            processing_error=processing_error,
+            original_exchange=original_exchange,
+            original_routing_key=original_routing_key,
+            enable_retry_cycles=enable_retry_cycles,
+            retry_cycle_interval=retry_cycle_interval,
+            max_retry_time_limit=max_retry_time_limit,
+            dlx_exchange_name=dlx_exchange_name,
+            dlx_routing_key=dlx_routing_key,
         )
         await self._publish_to_dlx(dlx_name, dlx_routing, message.body, dlx_properties)
         should_cycle = self._should_continue_retry_cycles(retry_info, enable_retry_cycles, max_retry_time_limit)
