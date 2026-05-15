@@ -1,8 +1,30 @@
 # MRSAL AMQP
-[![Release](https://img.shields.io/badge/release-3.5.2-blue.svg)](https://pypi.org/project/mrsal/) 
+[![Release](https://img.shields.io/badge/release-3.6.0-blue.svg)](https://pypi.org/project/mrsal/) 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%7C3.11%7C3.12-blue.svg)](https://www.python.org/downloads/)
 [![Mrsal Workflow](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml/badge.svg?branch=main)](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml)
 [![Coverage](https://neomedsys.github.io/mrsal/reports/badges/coverage-badge.svg)](https://neomedsys.github.io/mrsal/reports/coverage/htmlcov/)
+
+## Breaking changes in 3.6.0
+
+- `validate_payload` now **returns** the validated model instance (it previously
+  returned `None`). When `payload_model` is passed to `start_consumer`, the
+  callback receives the **validated model instance** as its body argument
+  instead of the raw `bytes`. Callbacks that called `json.loads(body)` /
+  `Model(**json.loads(body))` internally must drop that step and treat the
+  third argument as an instance of `payload_model`. See the example in §4.5.
+- Publishers (`publish_message`, `publish_messages`) and DLX republishes now
+  always enable publisher confirms, so `NackError` / `UnroutableError` are
+  raised (and retried) instead of silently dropped. DLX republishes also
+  honor an explicit `dlx_routing_key` instead of falling back to the original
+  routing key — fixing silent loss when the DLX bind used a different key.
+- Internal-only: `_process_single_message` now reads its `runtime_config`
+  dict with `[]` instead of `.get()`. Callers that build their own
+  `runtime_config` (e.g. in tests) must include all keys produced by
+  `start_consumer`: `callback`, `callback_args`, `auto_ack`, `payload_model`,
+  `threaded`, `dlx_enable`, `enable_retry_cycles`, `retry_cycle_interval`,
+  `max_retry_time_limit`, `exchange_name`, `routing_key`, `dlx_exchange_name`,
+  `dlx_routing_key`, `queue_name`. Missing keys now raise `KeyError` instead
+  of silently being `None`.
 
 ## Intro
 Mrsal is a **production-ready** message broker abstraction on top of [RabbitMQ](https://www.rabbitmq.com/), [aio-pika](https://aio-pika.readthedocs.io/en/latest/) and [Pika](https://pika.readthedocs.io/en/stable/index.html). 
@@ -344,28 +366,21 @@ mrsal.start_consumer(
 ```python
 from mrsal.amqp.subclass import MrsalBlockingAMQP
 from pydantic import BaseModel
-import json
 
 class OrderMessage(BaseModel):
     order_id: str
     customer_id: str
     amount: float
 
-def process_order(method_frame, properties, body):
-    try:
-        order_data = json.loads(body)
-        order = OrderMessage(**order_data)
-        
-        # Process the order
-        print(f"Processing order {order.order_id} for customer {order.customer_id}")
-        
-        # Simulate processing that might fail
-        if order.amount < 0:
-            raise ValueError("Invalid order amount")
-            
-    except Exception as e:
-        print(f"Order processing failed: {e}")
-        raise  # This will trigger retry logic
+def process_order(method_frame, properties, order: OrderMessage):
+    # When ``payload_model`` is set on ``start_consumer``, mrsal validates the
+    # raw bytes against the model and passes the validated instance here as the
+    # third argument. Validation failures are routed to DLX before the callback
+    # runs, so this function only sees well-formed payloads.
+    print(f"Processing order {order.order_id} for customer {order.customer_id}")
+
+    if order.amount < 0:
+        raise ValueError("Invalid order amount")  # triggers retry/DLX
 
 # Production-ready setup with full retry cycles
 mrsal = MrsalBlockingAMQP(

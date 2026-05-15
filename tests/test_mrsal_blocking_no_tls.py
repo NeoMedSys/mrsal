@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import Mock, patch, MagicMock, call, ANY
-from pika.exceptions import AMQPConnectionError, UnroutableError
+from pika.exceptions import AMQPConnectionError, NackError, UnroutableError
 from pydantic.dataclasses import dataclass
 from tenacity import RetryError, stop_after_attempt
 from mrsal.amqp.subclass import MrsalBlockingAMQP
@@ -101,8 +101,15 @@ def test_valid_message_processing(amqp_consumer):
         payload_model=ExpectedPayload
     )
 
-    # Assert the callback was called once with the correct data
-    mock_callback.assert_called_once_with(mock_method_frame, mock_properties, valid_body)
+    # When payload_model is set the callback receives the validated instance, not raw bytes.
+    mock_callback.assert_called_once()
+    args, _ = mock_callback.call_args
+    assert args[0] is mock_method_frame
+    assert args[1] is mock_properties
+    assert isinstance(args[2], ExpectedPayload)
+    assert args[2].id == 1
+    assert args[2].name == 'Test'
+    assert args[2].active is True
 
 
 def test_valid_message_processing_no_autoack(amqp_consumer):
@@ -429,6 +436,133 @@ def test_declare_methods_use_passed_channel():
     )
     explicit_channel.queue_bind.assert_called_once()
     consumer._channel.queue_bind.assert_not_called()
+
+
+def test_publish_enables_confirm_delivery(mock_amqp_connection):
+    """Regression for #77: publish_message must enable publisher confirms.
+
+    Without confirm_delivery() the broker silently drops unroutable / nacked
+    messages and the tenacity retry on NackError/UnroutableError never fires.
+    """
+    mock_connection, mock_channel, _ = mock_amqp_connection
+    mock_connection.is_open = True
+    mock_connection.channel.return_value = mock_channel
+
+    consumer = MrsalBlockingAMQP(**SETUP_ARGS)
+    consumer._connection = mock_connection
+    consumer._setup_exchange_and_queue = Mock()
+
+    consumer.publish_message(
+        exchange_name='test_x',
+        routing_key='test_route',
+        message=b'msg',
+        exchange_type='direct',
+        queue_name='test_q',
+        auto_declare=False,
+    )
+
+    mock_channel.confirm_delivery.assert_called_once()
+
+
+def test_publish_retries_on_nack_error(mock_amqp_connection):
+    """Regression for #77: NackError must propagate so tenacity retries it.
+
+    The retry decorator on publish_message is keyed on NackError; this only
+    fires when confirm_delivery() is enabled. Verify both that the exception
+    propagates as RetryError and that the channel had confirms turned on.
+    """
+    mock_connection, mock_channel, _ = mock_amqp_connection
+    mock_connection.is_open = True
+    mock_connection.channel.return_value = mock_channel
+
+    consumer = MrsalBlockingAMQP(**SETUP_ARGS)
+    consumer._connection = mock_connection
+    consumer._setup_exchange_and_queue = Mock()
+    mock_channel.basic_publish.side_effect = NackError([])
+
+    with pytest.raises(RetryError):
+        consumer.publish_message(
+            exchange_name='test_x',
+            routing_key='test_route',
+            message=b'msg',
+            exchange_type='direct',
+            queue_name='test_q',
+            auto_declare=False,
+        )
+
+    assert mock_channel.basic_publish.call_count == 3
+    assert mock_channel.confirm_delivery.call_count == 3
+
+
+def test_publish_messages_enables_confirm_delivery(mock_amqp_connection):
+    """Regression for #77: publish_messages must also enable publisher confirms."""
+    mock_connection, mock_channel, _ = mock_amqp_connection
+    mock_connection.is_open = True
+    mock_connection.channel.return_value = mock_channel
+
+    consumer = MrsalBlockingAMQP(**SETUP_ARGS)
+    consumer._connection = mock_connection
+    consumer._setup_exchange_and_queue = Mock()
+
+    consumer.publish_messages(
+        mrsal_protocol_collection={
+            'app1': {
+                'message': b'{"data": "x"}',
+                'routing_key': 'rk',
+                'queue_name': 'q',
+                'exchange_type': 'direct',
+                'exchange_name': 'x',
+            }
+        },
+        auto_declare=False,
+    )
+
+    mock_channel.confirm_delivery.assert_called_once()
+
+
+def test_dlx_republish_honors_explicit_dlx_routing_key(amqp_consumer):
+    """Regression for #77: DLX republish must use dlx_routing_key when provided.
+
+    Previously the DLX publish path used original_routing_key, but the DLX bind
+    used dlx_routing_key. If they differed (e.g. orders_route vs orders_dlx),
+    DLX messages were unroutable and silently dropped.
+    """
+    valid_body = b'{"id": 1, "name": "Test", "active": true}'
+    mock_method_frame = MagicMock()
+    mock_method_frame.delivery_tag = 7
+    mock_properties = MagicMock()
+    mock_properties.headers = None
+    mock_properties.content_type = 'application/json'
+
+    amqp_consumer._channel.consume.return_value = [(mock_method_frame, mock_properties, valid_body)]
+
+    dlx_publish_channel = MagicMock(name='dlx_publish_channel')
+    dlx_publish_channel.is_open = True
+    amqp_consumer._dlx_publish_channel = dlx_publish_channel
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("callback boom")
+
+    amqp_consumer.start_consumer(
+        queue_name='test_q',
+        exchange_name='test_x',
+        exchange_type='direct',
+        routing_key='orders_route',
+        callback=boom,
+        auto_ack=False,
+        auto_declare=False,
+        dlx_enable=True,
+        dlx_exchange_name='test_x.dlx',
+        dlx_routing_key='orders_dlx',
+        enable_retry_cycles=True,
+        max_retry_time_limit=60,
+    )
+
+    dlx_publish_channel.basic_publish.assert_called_once()
+    _, kwargs = dlx_publish_channel.basic_publish.call_args
+    assert kwargs['exchange'] == 'test_x.dlx'
+    assert kwargs['routing_key'] == 'orders_dlx'
+    assert kwargs['body'] == valid_body
 
 
 def test_declare_methods_fallback_to_self_channel():
