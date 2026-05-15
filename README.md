@@ -17,6 +17,14 @@
   raised (and retried) instead of silently dropped. DLX republishes also
   honor an explicit `dlx_routing_key` instead of falling back to the original
   routing key — fixing silent loss when the DLX bind used a different key.
+- Internal-only: `_process_single_message` now reads its `runtime_config`
+  dict with `[]` instead of `.get()`. Callers that build their own
+  `runtime_config` (e.g. in tests) must include all keys produced by
+  `start_consumer`: `callback`, `callback_args`, `auto_ack`, `payload_model`,
+  `threaded`, `dlx_enable`, `enable_retry_cycles`, `retry_cycle_interval`,
+  `max_retry_time_limit`, `exchange_name`, `routing_key`, `dlx_exchange_name`,
+  `dlx_routing_key`, `queue_name`. Missing keys now raise `KeyError` instead
+  of silently being `None`.
 
 ## Intro
 Mrsal is a **production-ready** message broker abstraction on top of [RabbitMQ](https://www.rabbitmq.com/), [aio-pika](https://aio-pika.readthedocs.io/en/latest/) and [Pika](https://pika.readthedocs.io/en/stable/index.html). 
