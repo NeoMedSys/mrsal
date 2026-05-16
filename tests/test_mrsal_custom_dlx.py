@@ -14,7 +14,11 @@ class ExpectedPayload:
 
 
 class AsyncIteratorMock:
-	"""Mock async iterator for aio-pika queue.iterator()"""
+	"""Mock async iterator + async context manager for aio-pika queue.iterator().
+
+	After the #74 changes, start_consumer wraps the iterator in ``async with``
+	so this mock has to support both protocols.
+	"""
 	def __init__(self, items):
 		self.items = iter(items)
 
@@ -26,6 +30,15 @@ class AsyncIteratorMock:
 			return next(self.items)
 		except StopIteration:
 			raise StopAsyncIteration
+
+	async def __aenter__(self):
+		return self
+
+	async def __aexit__(self, exc_type, exc, tb):
+		return False
+
+	async def close(self):
+		pass
 
 
 class TestDLXExchangeNameConfiguration:

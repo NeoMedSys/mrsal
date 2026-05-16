@@ -4,7 +4,7 @@
 [![Mrsal Workflow](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml/badge.svg?branch=main)](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml)
 [![Coverage](https://neomedsys.github.io/mrsal/reports/badges/coverage-badge.svg)](https://neomedsys.github.io/mrsal/reports/coverage/htmlcov/)
 
-## Breaking changes in 3.6.0
+## Breaking changes in 3.7.0
 
 - `validate_payload` now **returns** the validated model instance (it previously
   returned `None`). When `payload_model` is passed to `start_consumer`, the
