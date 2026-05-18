@@ -1,44 +1,9 @@
 import pytest
 from unittest.mock import Mock, MagicMock, AsyncMock, patch
-from pydantic.dataclasses import dataclass
 from aio_pika.exceptions import DeliveryError
 
 from mrsal.amqp.subclass import MrsalBlockingAMQP, MrsalAsyncAMQP
-
-
-@dataclass
-class ExpectedPayload:
-	id: int
-	name: str
-	active: bool
-
-
-class AsyncIteratorMock:
-	"""Mock async iterator + async context manager for aio-pika queue.iterator().
-
-	After the #74 changes, start_consumer wraps the iterator in ``async with``
-	so this mock has to support both protocols.
-	"""
-	def __init__(self, items):
-		self.items = iter(items)
-
-	def __aiter__(self):
-		return self
-
-	async def __anext__(self):
-		try:
-			return next(self.items)
-		except StopIteration:
-			raise StopAsyncIteration
-
-	async def __aenter__(self):
-		return self
-
-	async def __aexit__(self, exc_type, exc, tb):
-		return False
-
-	async def close(self):
-		pass
+from tests.conftest import AsyncIteratorMock, ExpectedPayload
 
 
 class TestDLXRetryCycleOnly:

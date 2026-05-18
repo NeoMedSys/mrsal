@@ -4,11 +4,12 @@ from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from mrsal.amqp.subclass import MrsalAsyncAMQP
 from mrsal.config import AioPikaAttributes
-from pydantic.dataclasses import dataclass
 from pydantic import ValidationError
 
+from tests.conftest import ExpectedPayload, make_queue_with_messages
 
-# Configuration and expected payload definition
+
+# Configuration override (this test file uses ssl explicitly).
 SETUP_ARGS = {
     'host': 'localhost',
     'port': 5672,
@@ -18,54 +19,6 @@ SETUP_ARGS = {
     'heartbeat': 60,
     'prefetch_count': 1
 }
-
-@dataclass
-class ExpectedPayload:
-    id: int
-    name: str
-    active: bool
-
-
-class FakeQueueIterator:
-    """Mimics aio_pika.QueueIterator: works as async context manager AND async iterator.
-
-    Mirrors the shape start_consumer now relies on after the #74 changes
-    (``async with queue.iterator() as it: async for message in it:``).
-    """
-    def __init__(self, messages):
-        self._messages = list(messages)
-        self.closed = False
-        self.iterator_call_kwargs = None
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        if self.closed or not self._messages:
-            raise StopAsyncIteration
-        return self._messages.pop(0)
-
-    async def close(self):
-        self.closed = True
-
-
-def make_queue_with_messages(messages):
-    """Build a mock queue whose iterator() returns a FakeQueueIterator over ``messages``."""
-    fake_it = FakeQueueIterator(messages)
-    mock_queue = AsyncMock()
-
-    def iterator_factory(**kwargs):
-        fake_it.iterator_call_kwargs = kwargs
-        return fake_it
-
-    mock_queue.iterator = MagicMock(side_effect=iterator_factory)
-    return mock_queue, fake_it
 
 
 # Fixture to mock the async connection and its methods - SYNC fixture

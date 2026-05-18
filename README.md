@@ -6,6 +6,34 @@
 
 ## Breaking changes in 3.7.0
 
+- **`MrsalAsyncAMQP.start_consumer` now wraps the queue iterator in
+  `async with queue.iterator(...) as it:`** so consumer cancellation is
+  deterministically delivered to the broker on exception or generator GC.
+  Subclasses or tests that monkey-patched `queue.iterator()` to return a
+  bare async generator must update their mocks to also support the async
+  context-manager protocol (`__aenter__` / `__aexit__`). See
+  `tests/conftest.py::AsyncIteratorMock` for the reference shape.
+- **New `async def stop()` lifecycle method.** Once `stop()` has been
+  called on a `MrsalAsyncAMQP` instance, that instance cannot be restarted —
+  the internal stop event remains set so future `start_consumer` calls
+  exit on the first iteration. To restart, construct a new instance. The
+  persistent state is deliberate: it preserves a `stop()` request that
+  arrives during a tenacity retry backoff, which would otherwise be
+  silently dropped.
+- **New `max_concurrent_tasks: int | None` parameter on the async
+  `start_consumer`.** Default `None` preserves prior behaviour (sequential
+  processing). When set to `N > 0`, up to N messages are dispatched as
+  concurrent `asyncio` tasks bounded by a semaphore. Note that
+  `prefetch_count` is broker-side buffering and does **not** parallelize
+  the consumer — combine with `prefetch_count >= max_concurrent_tasks` for
+  steady throughput.
+- **New `drain_timeout: float | None` parameter on the async
+  `start_consumer`.** Bounds how long the consumer waits for in-flight
+  tasks to finish after a graceful stop. On timeout, remaining tasks are
+  cancelled and their messages will be redelivered by the broker.
+
+## Breaking changes in 3.6.0
+
 - `validate_payload` now **returns** the validated model instance (it previously
   returned `None`). When `payload_model` is passed to `start_consumer`, the
   callback receives the **validated model instance** as its body argument

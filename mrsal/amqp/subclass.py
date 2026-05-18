@@ -636,6 +636,13 @@ class MrsalAsyncAMQP(Mrsal):
 
         Any in-flight messages dispatched via ``max_concurrent_tasks`` are
         drained by ``start_consumer`` before it returns.
+
+        Note: once stop() has been called, this consumer instance cannot be
+        restarted -- ``_stop_event`` remains set so future ``start_consumer``
+        calls would exit on the first iteration. To restart, construct a new
+        ``MrsalAsyncAMQP`` instance. The persistent set state is deliberate:
+        it preserves a stop request that arrives during a tenacity retry
+        backoff, which would otherwise be silently dropped.
         """
         if self._stop_event is not None:
             self._stop_event.set()
@@ -1029,6 +1036,10 @@ class MrsalAsyncAMQP(Mrsal):
                             self._handle_message_with_release(message, runtime_config, semaphore)
                         )
                         self._inflight_tasks.add(task)
+                        # add_done_callback invokes the callback with the task as its
+                        # single argument; set.discard takes one argument and removes
+                        # it from the set, so the signatures line up. This keeps the
+                        # in-flight set bounded without an explicit wrapper coroutine.
                         task.add_done_callback(self._inflight_tasks.discard)
         finally:
             self._consumer_iterator = None
