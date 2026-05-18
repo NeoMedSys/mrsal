@@ -16,9 +16,10 @@ from pika.exceptions import (
         UnroutableError
         )
 from aio_pika import connect_robust, Message, Channel as AioChannel
-from typing import Callable, Sequence, Type
+from dataclasses import field
+from typing import Any, Callable, Sequence, Type
 from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, retry_if_exception_type, before_sleep_log
-from pydantic import ValidationError
+from pydantic import ConfigDict, ValidationError
 from pydantic.dataclasses import dataclass
 
 from mrsal.superclass import Mrsal
@@ -35,8 +36,8 @@ class MrsalBlockingAMQP(Mrsal):
             the connection will be torn down during connection tuning.
     """
     blocked_connection_timeout: int = 60  # sec
-    _consumer_channel = None
-    _dlx_publish_channel = None
+    _consumer_channel: Any = field(init=False, default=None)
+    _dlx_publish_channel: Any = field(init=False, default=None)
 
     def close(self) -> None:
         """Close channels and connection cleanly.
@@ -633,15 +634,16 @@ class MrsalBlockingAMQP(Mrsal):
         )
 
 
+@dataclass(config=ConfigDict(arbitrary_types_allowed=True))
 class MrsalAsyncAMQP(Mrsal):
     """Handles asynchronous connection with RabbitMQ using aio-pika."""
 
-    _dlx_publish_channel = None
-    _stop_event: asyncio.Event | None = None
-    # aio_pika.queue.QueueIterator at runtime; left as Any to avoid importing the
-    # internal queue module just for a type hint.
-    _consumer_iterator: object | None = None
-    _inflight_tasks: set[asyncio.Task] | None = None
+    _dlx_publish_channel: Any = field(init=False, default=None)
+    _stop_event: asyncio.Event | None = field(init=False, default=None)
+    # aio_pika.queue.QueueIterator at runtime; typed as object to avoid importing
+    # the internal queue module just for a type hint.
+    _consumer_iterator: object | None = field(init=False, default=None)
+    _inflight_tasks: set[asyncio.Task] | None = field(init=False, default=None)
 
     async def stop(self) -> None:
         """Signal the consumer loop to exit cleanly.
