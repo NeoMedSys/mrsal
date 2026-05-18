@@ -19,7 +19,7 @@ from aio_pika import connect_robust, Message, Channel as AioChannel
 from dataclasses import field
 from typing import Any, Callable, Sequence, Type
 from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, retry_if_exception_type, before_sleep_log
-from pydantic import ValidationError
+from pydantic import ConfigDict, ValidationError
 from pydantic.dataclasses import dataclass
 
 from mrsal.superclass import Mrsal
@@ -634,16 +634,16 @@ class MrsalBlockingAMQP(Mrsal):
         )
 
 
-@dataclass
+@dataclass(config=ConfigDict(arbitrary_types_allowed=True))
 class MrsalAsyncAMQP(Mrsal):
     """Handles asynchronous connection with RabbitMQ using aio-pika."""
 
     _dlx_publish_channel: Any = field(init=False, default=None)
-    _stop_event: Any = field(init=False, default=None)
-    # aio_pika.queue.QueueIterator at runtime; left as Any to avoid importing the
-    # internal queue module just for a type hint.
-    _consumer_iterator: Any = field(init=False, default=None)
-    _inflight_tasks: Any = field(init=False, default=None)
+    _stop_event: asyncio.Event | None = field(init=False, default=None)
+    # aio_pika.queue.QueueIterator at runtime; typed as object to avoid importing
+    # the internal queue module just for a type hint.
+    _consumer_iterator: object | None = field(init=False, default=None)
+    _inflight_tasks: set[asyncio.Task] | None = field(init=False, default=None)
 
     async def stop(self) -> None:
         """Signal the consumer loop to exit cleanly.
