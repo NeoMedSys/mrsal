@@ -93,18 +93,18 @@ class Mrsal:
         Pure helper shared by the sync and async setup paths. No broker side
         effects. ``dlx_name``/``dlx_routing`` must be pre-computed by the
         caller (which also needs them to drive the DLX declare/bind calls).
+
+        Returns a new dict — ``extra`` is *not* mutated.
         """
         args: dict = dict(extra) if extra else {}
 
-        if dlx_enable and dlx_name and dlx_routing:
+        if dlx_enable and dlx_name is not None and dlx_routing is not None:
             args['x-dead-letter-exchange'] = dlx_name
             args['x-dead-letter-routing-key'] = dlx_routing
 
         if use_quorum_queues:
             args['x-queue-type'] = 'quorum'
             args['x-quorum-initial-group-size'] = 3
-            if self.verbose:
-                log.info(f"Queue {queue_name} configured as quorum queue for enhanced reliability")
 
         if max_queue_length and max_queue_length > 0:
             args['x-max-length'] = max_queue_length
@@ -128,9 +128,9 @@ class Mrsal:
 
     def _setup_exchange_and_queue(self,
                                  exchange_name: str, queue_name: str, exchange_type: str,
-                                 routing_key: str, exch_args: dict[str, str] | None = None,
-                                 queue_args: dict[str, str] | None = None,
-                                 bind_args: dict[str, str] | None = None,
+                                 routing_key: str, exch_args: dict[str, Any] | None = None,
+                                 queue_args: dict[str, Any] | None = None,
+                                 bind_args: dict[str, Any] | None = None,
                                  exch_durable: bool = True, queue_durable: bool =True,
                                  passive: bool = False, internal: bool = False,
                                  auto_delete: bool = False, exclusive: bool = False,
@@ -147,6 +147,7 @@ class Mrsal:
         self.auto_declare_ok = False
         dlx_name: str | None = None
         dlx_routing: str | None = None
+        dlx_setup_ok = False
 
         if not passive:
             if dlx_enable:
@@ -187,6 +188,7 @@ class Mrsal:
                             arguments=None,
                             channel=channel
                             )
+                    dlx_setup_ok = True
                     if self.verbose:
                         log.info(f"DLX queue {dlx_queue_name} declared and bound successfully")
                 except MrsalSetupError as e:
@@ -247,7 +249,7 @@ class Mrsal:
                 log.info(f"Exchange {exchange_name} and Queue {queue_name} declared successfully.")
             else:
                 log.info(f"Exchange {exchange_name} and Queue {queue_name} verified to exist.")
-            if dlx_enable and not passive:
+            if dlx_setup_ok:
                 log.info(f"You have a dead letter exhange {dlx_name} for fault tolerance -- use it well young grasshopper!")
         except MrsalSetupError as e:
             log.error(f'Splæt! I failed the declaration setup with {e}', exc_info=True)
@@ -256,9 +258,9 @@ class Mrsal:
     async def _async_setup_exchange_and_queue(self,
                                               exchange_name: str, queue_name: str,
                                               routing_key: str, exchange_type: str,
-                                              exch_args: dict[str, str] | None = None,
-                                              queue_args: dict[str, str] | None = None,
-                                              bind_args: dict[str, str] | None = None,
+                                              exch_args: dict[str, Any] | None = None,
+                                              queue_args: dict[str, Any] | None = None,
+                                              bind_args: dict[str, Any] | None = None,
                                               exch_durable: bool = True, queue_durable: bool = True,
                                               passive: bool = False, internal: bool = False,
                                               auto_delete: bool = False, exclusive: bool = False,
@@ -279,6 +281,7 @@ class Mrsal:
         self.auto_declare_ok = False
         dlx_name: str | None = None
         dlx_routing: str | None = None
+        dlx_setup_ok = False
 
         if not passive:
             if dlx_enable:
@@ -321,6 +324,7 @@ class Mrsal:
                             routing_key=dlx_routing,
                             arguments=None
                             )
+                    dlx_setup_ok = True
                     if self.verbose:
                         log.info(f"DLX queue {dlx_queue_name} declared and bound successfully")
                 except MrsalSetupError as e:
@@ -381,7 +385,7 @@ class Mrsal:
                 log.info(f"Exchange {exchange_name} and Queue {queue_name} declared successfully.")
             else:
                 log.info(f"Exchange {exchange_name} and Queue {queue_name} verified to exist.")
-            if dlx_enable and not passive:
+            if dlx_setup_ok:
                 log.info(f"You have a dead letter exhange {dlx_name} for fault tolerance -- use it well young grasshopper!")
             return queue
         except MrsalSetupError as e:
