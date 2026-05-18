@@ -623,8 +623,13 @@ def test_setup_blocking_connection_reraises_unexpected_exception():
 
 def test_auto_ack_true_with_dlx_enable_true_raises_at_setup(amqp_consumer):
     """auto_ack=True + dlx_enable=True is rejected at setup: once the broker has acked,
-    failed messages cannot be routed to the DLX, so the combination is meaningless."""
-    with pytest.raises(MrsalAbortedSetup, match="auto_ack=True is incompatible with dlx_enable=True"):
+    failed messages cannot be routed to the DLX, so the combination is meaningless.
+
+    Asserts the raise happens before any broker IO, so a future regression that moves
+    the check below ``_ensure_connection`` would fail this test.
+    """
+    with patch.object(amqp_consumer, '_ensure_connection') as ensure_spy, \
+         pytest.raises(MrsalAbortedSetup, match="auto_ack=True is incompatible with dlx_enable=True"):
         amqp_consumer.start_consumer(
             queue_name='test_q',
             callback=Mock(),
@@ -635,11 +640,18 @@ def test_auto_ack_true_with_dlx_enable_true_raises_at_setup(amqp_consumer):
             dlx_enable=True,
         )
 
+    ensure_spy.assert_not_called()
+
 
 def test_auto_ack_true_with_threaded_true_raises_at_setup(amqp_consumer):
     """auto_ack=True + threaded=True is rejected at setup: the executor submit queue is
-    unbounded, so a slow callback grows pending tasks until OOM."""
-    with pytest.raises(MrsalAbortedSetup, match="auto_ack=True is incompatible with threaded=True"):
+    unbounded, so a slow callback grows pending tasks until OOM.
+
+    Asserts the raise happens before any broker IO, so a future regression that moves
+    the check below ``_ensure_connection`` would fail this test.
+    """
+    with patch.object(amqp_consumer, '_ensure_connection') as ensure_spy, \
+         pytest.raises(MrsalAbortedSetup, match="auto_ack=True is incompatible with threaded=True"):
         amqp_consumer.start_consumer(
             queue_name='test_q',
             callback=Mock(),
@@ -650,3 +662,5 @@ def test_auto_ack_true_with_threaded_true_raises_at_setup(amqp_consumer):
             dlx_enable=False,
             threaded=True,
         )
+
+    ensure_spy.assert_not_called()

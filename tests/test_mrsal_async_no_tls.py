@@ -294,10 +294,15 @@ async def test_auto_ack_true_sets_broker_no_ack_and_drops_failures(amqp_consumer
 @pytest.mark.asyncio
 async def test_auto_ack_true_with_dlx_enable_true_raises_at_setup(amqp_consumer):
     """auto_ack=True + dlx_enable=True is rejected at setup: once the broker has acked,
-    failed messages cannot be routed to the DLX, so the combination is meaningless."""
+    failed messages cannot be routed to the DLX, so the combination is meaningless.
+
+    Asserts the raise happens before any broker IO, so a future regression that moves
+    the check below ``_ensure_async_connection`` would fail this test.
+    """
     consumer = amqp_consumer
 
-    with pytest.raises(MrsalAbortedSetup, match="auto_ack=True is incompatible with dlx_enable=True"):
+    with patch.object(consumer, '_ensure_async_connection', AsyncMock()) as ensure_spy, \
+         pytest.raises(MrsalAbortedSetup, match="auto_ack=True is incompatible with dlx_enable=True"):
         await consumer.start_consumer(
             queue_name='test_q',
             callback=AsyncMock(),
@@ -307,6 +312,8 @@ async def test_auto_ack_true_with_dlx_enable_true_raises_at_setup(amqp_consumer)
             auto_ack=True,
             dlx_enable=True,
         )
+
+    ensure_spy.assert_not_called()
 
 
 def test_aio_pika_attributes_from_message_populates_all_fields():

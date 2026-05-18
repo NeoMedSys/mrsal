@@ -927,7 +927,12 @@ class MrsalAsyncAMQP(Mrsal):
             setup when combined with ``dlx_enable=True`` -- once the broker has acked, failed
             messages cannot be routed to the DLX, so the combination is meaningless. To use
             auto_ack, pass ``dlx_enable=False`` explicitly and accept that callback/validation
-            failures are logged and dropped. Default False.
+            failures are logged and dropped. Default False. WARNING: ``no_ack=true`` makes the
+            broker ignore ``prefetch_count`` and push deliveries as fast as the connection
+            allows; aio-pika buffers them in an unbounded internal queue, so a slow callback
+            on a busy stream can OOM the process. ``max_concurrent_tasks`` does not bound that
+            buffer. Treat this mode as unsafe for production -- use ``auto_ack=False`` if you
+            need backpressure.
         :param bool auto_declare: If True, declare exchange/queue before consuming
         :param str exchange_name: Exchange name for auto_declare
         :param str exchange_type: Exchange type for auto_declare
