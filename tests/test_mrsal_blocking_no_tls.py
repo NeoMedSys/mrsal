@@ -4,6 +4,7 @@ from pika.exceptions import AMQPConnectionError, NackError, UnroutableError
 from pydantic.dataclasses import dataclass
 from tenacity import RetryError, stop_after_attempt
 from mrsal.amqp.subclass import MrsalBlockingAMQP
+from mrsal.exceptions import MrsalAbortedSetup
 
 # Configuration and expected payload definition
 SETUP_ARGS = {
@@ -149,6 +150,7 @@ def test_invalid_message_skipped(amqp_consumer):
     amqp_consumer.start_consumer(
         queue_name='test_queue',
         auto_ack=True,
+        dlx_enable=False,
         exchange_name='test_x',
         exchange_type='direct',
         routing_key='test_route',
@@ -334,6 +336,7 @@ def test_publish_from_inside_consumer_callback(mock_amqp_connection):
         callback=callback,
         auto_declare=False,
         auto_ack=True,
+        dlx_enable=False,
     )
 
     # Both messages were processed — consumer survived the mid-callback publish
@@ -616,3 +619,34 @@ def test_setup_blocking_connection_reraises_unexpected_exception():
                side_effect=RuntimeError("disk on fire")):
         with pytest.raises(RuntimeError, match="disk on fire"):
             consumer.setup_blocking_connection()
+
+
+def test_auto_ack_true_with_dlx_enable_true_raises_at_setup(amqp_consumer):
+    """auto_ack=True + dlx_enable=True is rejected at setup: once the broker has acked,
+    failed messages cannot be routed to the DLX, so the combination is meaningless."""
+    with pytest.raises(MrsalAbortedSetup, match="auto_ack=True is incompatible with dlx_enable=True"):
+        amqp_consumer.start_consumer(
+            queue_name='test_q',
+            callback=Mock(),
+            routing_key='test_route',
+            exchange_name='test_x',
+            exchange_type='direct',
+            auto_ack=True,
+            dlx_enable=True,
+        )
+
+
+def test_auto_ack_true_with_threaded_true_raises_at_setup(amqp_consumer):
+    """auto_ack=True + threaded=True is rejected at setup: the executor submit queue is
+    unbounded, so a slow callback grows pending tasks until OOM."""
+    with pytest.raises(MrsalAbortedSetup, match="auto_ack=True is incompatible with threaded=True"):
+        amqp_consumer.start_consumer(
+            queue_name='test_q',
+            callback=Mock(),
+            routing_key='test_route',
+            exchange_name='test_x',
+            exchange_type='direct',
+            auto_ack=True,
+            dlx_enable=False,
+            threaded=True,
+        )
