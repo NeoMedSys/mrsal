@@ -4,6 +4,7 @@ from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from mrsal.amqp.subclass import MrsalAsyncAMQP
 from mrsal.config import AioPikaAttributes
+from mrsal.exceptions import MrsalAbortedSetup
 from pydantic import ValidationError
 
 from tests.conftest import ExpectedPayload, make_queue_with_messages
@@ -67,6 +68,7 @@ async def test_valid_message_processing(amqp_consumer):
         exchange_name='test_x',
         exchange_type='direct',
         auto_ack=True,
+        dlx_enable=False,
     )
 
     mock_callback.assert_awaited_once()
@@ -99,6 +101,7 @@ async def test_callback_receives_validated_instance(amqp_consumer):
         exchange_type='direct',
         payload_model=ExpectedPayload,
         auto_ack=True,
+        dlx_enable=False,
     )
 
     assert isinstance(received['body'], ExpectedPayload)
@@ -129,6 +132,7 @@ async def test_invalid_payload_validation(amqp_consumer):
         exchange_type='direct',
         payload_model=ExpectedPayload,
         auto_ack=True,
+        dlx_enable=False,
     )
 
     mock_callback.assert_not_called()
@@ -252,8 +256,10 @@ async def test_ensure_async_connection_noop_when_connection_is_open():
 
 
 @pytest.mark.asyncio
-async def test_auto_ack_true_sets_broker_no_ack_and_skips_dlx_on_failure(amqp_consumer):
-    """auto_ack=True must (a) pass no_ack=True to queue.iterator and (b) skip DLX on failure."""
+async def test_auto_ack_true_sets_broker_no_ack_and_drops_failures(amqp_consumer):
+    """auto_ack=True (with dlx_enable=False) must (a) pass no_ack=True to queue.iterator
+    and (b) drop failures silently -- the broker has already acked, there is no DLX to fall
+    back to."""
     consumer = amqp_consumer
 
     valid_body = b'{"id": 1, "name": "Test", "active": true}'
@@ -276,12 +282,38 @@ async def test_auto_ack_true_sets_broker_no_ack_and_skips_dlx_on_failure(amqp_co
             exchange_name='test_x',
             exchange_type='direct',
             auto_ack=True,
+            dlx_enable=False,
         )
 
     assert fake_it.iterator_call_kwargs == {'no_ack': True}
     dlx_spy.assert_not_called()
     mock_message.ack.assert_not_called()
     mock_message.reject.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_auto_ack_true_with_dlx_enable_true_raises_at_setup(amqp_consumer):
+    """auto_ack=True + dlx_enable=True is rejected at setup: once the broker has acked,
+    failed messages cannot be routed to the DLX, so the combination is meaningless.
+
+    Asserts the raise happens before any broker IO, so a future regression that moves
+    the check below ``_ensure_async_connection`` would fail this test.
+    """
+    consumer = amqp_consumer
+
+    with patch.object(consumer, '_ensure_async_connection', AsyncMock()) as ensure_spy, \
+         pytest.raises(MrsalAbortedSetup, match="auto_ack=True is incompatible with dlx_enable=True"):
+        await consumer.start_consumer(
+            queue_name='test_q',
+            callback=AsyncMock(),
+            routing_key='test_route',
+            exchange_name='test_x',
+            exchange_type='direct',
+            auto_ack=True,
+            dlx_enable=True,
+        )
+
+    ensure_spy.assert_not_called()
 
 
 def test_aio_pika_attributes_from_message_populates_all_fields():
@@ -383,6 +415,7 @@ async def test_iterator_used_as_async_context_manager(amqp_consumer):
         exchange_name='test_x',
         exchange_type='direct',
         auto_ack=True,
+        dlx_enable=False,
     )
 
     assert aenter_calls == [True]
@@ -426,6 +459,7 @@ async def test_max_concurrent_tasks_runs_callbacks_in_parallel(amqp_consumer):
         exchange_name='test_x',
         exchange_type='direct',
         auto_ack=True,
+        dlx_enable=False,
         max_concurrent_tasks=N,
     )
 
@@ -458,6 +492,7 @@ async def test_sequential_mode_does_not_overlap_callbacks(amqp_consumer):
         exchange_name='test_x',
         exchange_type='direct',
         auto_ack=True,
+        dlx_enable=False,
     )
 
     assert max_observed == 1
@@ -492,6 +527,7 @@ async def test_stop_exits_loop_after_inflight_messages_finish(amqp_consumer):
         exchange_name='test_x',
         exchange_type='direct',
         auto_ack=True,
+        dlx_enable=False,
         max_concurrent_tasks=2,
     ))
 
@@ -592,6 +628,7 @@ async def test_stop_event_preserved_across_start_consumer_reentry(amqp_consumer)
         exchange_name='test_x',
         exchange_type='direct',
         auto_ack=True,
+        dlx_enable=False,
     )
 
     callback.assert_not_called()
@@ -623,6 +660,7 @@ async def test_drain_timeout_cancels_hung_inflight_tasks(amqp_consumer):
         exchange_name='test_x',
         exchange_type='direct',
         auto_ack=True,
+        dlx_enable=False,
         max_concurrent_tasks=2,
         drain_timeout=0.1,
     ))
@@ -689,6 +727,7 @@ async def test_stop_wakes_idle_iterator(amqp_consumer):
         exchange_name='test_x',
         exchange_type='direct',
         auto_ack=True,
+        dlx_enable=False,
     ))
 
     # Let the consumer reach `async for message in it` and block on __anext__.

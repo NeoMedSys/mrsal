@@ -1,8 +1,25 @@
 # MRSAL AMQP
-[![Release](https://img.shields.io/badge/release-3.7.0-blue.svg)](https://pypi.org/project/mrsal/) 
+[![Release](https://img.shields.io/badge/release-3.8.0-blue.svg)](https://pypi.org/project/mrsal/) 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%7C3.11%7C3.12-blue.svg)](https://www.python.org/downloads/)
 [![Mrsal Workflow](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml/badge.svg?branch=main)](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml)
 [![Coverage](https://neomedsys.github.io/mrsal/reports/badges/coverage-badge.svg)](https://neomedsys.github.io/mrsal/reports/coverage/htmlcov/)
+
+## Breaking changes in 3.8.0
+
+- **`MrsalBlockingAMQP.start_consumer` default `auto_ack` flipped from `True` to
+  `False`,** matching the async consumer and every example in this README.
+  Callers that relied on the previous default were silently opting out of DLX
+  accountability while the library advertised reliability features. To keep the
+  old behaviour, pass `auto_ack=True, dlx_enable=False` explicitly and accept
+  that failed callbacks are dropped.
+- **`start_consumer` now rejects incompatible flag combinations at setup** by
+  raising `MrsalAbortedSetup`:
+  - `auto_ack=True, dlx_enable=True` -- on both consumers. Once the broker has
+    acked at delivery, failed messages cannot be routed to the DLX, so the
+    combination is meaningless.
+  - `auto_ack=True, threaded=True` -- on the blocking consumer. The executor's
+    submit queue is unbounded, so a slow callback grows pending tasks until OOM.
+  See §4.1.1 for full rationale and remediation paths.
 
 ## Breaking changes in 3.7.0
 
@@ -303,6 +320,17 @@ mrsal.start_consumer(
 - Handles longer outages with time-delayed cycles  
 - Full observability with retry tracking  
 - Manual intervention capability for persistent failures
+
+#### 4.1.1 `auto_ack` and reliability
+
+`auto_ack=True` tells the broker to ack each message at delivery, before the consumer has done anything with it. That means **you opt out of every reliability feature in this library**:
+
+- **`auto_ack=True` is incompatible with `dlx_enable=True`.** Once the broker has acked, the message no longer exists from RabbitMQ's perspective — there is nothing left to route to the DLX on failure. Mrsal rejects this combination at `start_consumer` time with `MrsalAbortedSetup`. To use `auto_ack=True`, pass `dlx_enable=False` explicitly.
+- **`auto_ack=True` is incompatible with `threaded=True` (blocking consumer).** With both flags, the consume loop hands each delivery to the `ThreadPoolExecutor` and immediately moves on — the broker has already acked, so `prefetch_count` no longer provides backpressure. A slow callback plus a fast broker grows the executor's pending-task queue without bound until the process runs out of memory. Mrsal rejects this combination at setup.
+- **`auto_ack=True` with `dlx_enable=False` is allowed** and is fire-and-forget: failed callbacks are logged and the message is gone. Use it only when message loss is acceptable.
+- **`auto_ack=True` on the async consumer has no broker-side backpressure.** AMQP's `no_ack=true` mode (what `auto_ack=True` translates to on the wire) tells the broker to disregard `prefetch_count` and push deliveries as fast as the TCP connection allows. aio-pika buffers those internally in an unbounded queue between the broker connection and the `async for ... in iterator` loop, so a slow callback plus a fast broker grows that buffer until the process runs out of memory. `max_concurrent_tasks` bounds mrsal's task set but does *not* bound aio-pika's receive buffer. The blocking consumer hits the same shape of bug under `threaded=True`, which is why that combination is rejected outright -- the async equivalent is allowed for parity with the original API but should be considered unsafe for production. Use `auto_ack=False` if you need both async and reliability.
+
+For production, use `auto_ack=False` (the default) so the consumer acks on success and routes failures through DLX/retry as configured.
 
 #### 4.2 Queue Management & Performance
 

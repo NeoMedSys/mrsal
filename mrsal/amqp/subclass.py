@@ -251,7 +251,7 @@ class MrsalBlockingAMQP(Mrsal):
             queue_name: str,
             callback: Callable | None = None,
             callback_args: Sequence[str | int | float | bool] | None = None,
-            auto_ack: bool = True,
+            auto_ack: bool = False,
             inactivity_timeout: int | None = None,
             auto_declare: bool = True,
             exchange_name: str | None = None,
@@ -279,7 +279,10 @@ class MrsalBlockingAMQP(Mrsal):
         :param Callable callback: Invoked as ``callback(*callback_args, method_frame, properties, body)``.
             When ``payload_model`` is set, ``body`` is the validated model instance, not raw bytes.
         :param Sequence callback_args: Optional positional arguments to pass to the callback
-        :param bool auto_ack: If True, messages are automatically acknowledged
+        :param bool auto_ack: If True, the broker acks at delivery and the consumer opts out of
+            reliability features. Rejected at setup when combined with ``dlx_enable=True`` (DLX is
+            unreachable once the broker has acked) or ``threaded=True`` (the executor's submit
+            queue is unbounded, so a slow callback grows pending tasks until OOM). Default False.
         :param int inactivity_timeout: Timeout for inactivity in the consumer loop
         :param bool auto_declare: If True, will declare exchange/queue before consuming
         :param bool passive: If True, only check if exchange/queue exists (False for consumers)
@@ -304,6 +307,19 @@ class MrsalBlockingAMQP(Mrsal):
         :param bool lazy_queue: Store messages on disk to save memory
         :param int max_workers: Maximum number of threads in the pool when threaded=True. Defaults to prefetch_count.
         """
+        if auto_ack and dlx_enable:
+            raise MrsalAbortedSetup(
+                'auto_ack=True is incompatible with dlx_enable=True: once the broker has acked '
+                'on delivery, failed messages cannot be routed to the DLX. Set dlx_enable=False '
+                'to opt out of DLX, or auto_ack=False to keep DLX accountability.'
+            )
+        if auto_ack and threaded:
+            raise MrsalAbortedSetup(
+                'auto_ack=True is incompatible with threaded=True: the executor submit queue is '
+                'unbounded, so a slow callback grows pending tasks until OOM. Set auto_ack=False '
+                'so prefetch_count provides backpressure, or run without threaded=True.'
+            )
+
         if threaded:
             max_workers = max_workers or self.prefetch_count
 
@@ -907,10 +923,16 @@ class MrsalAsyncAMQP(Mrsal):
         :param Callable callback: Async callable invoked as ``callback(*callback_args, message, properties, body)``.
             When ``payload_model`` is set, ``body`` is the validated model instance, not ``message.body``.
         :param Sequence callback_args: Optional positional arguments prepended to the callback invocation
-        :param bool auto_ack: If True, the broker acks at delivery (``no_ack=True``). On callback/validation
-            failure DLX is skipped; the failure is logged only -- ``auto_ack=True`` is an explicit opt-out
-            from DLX accountability. If False (default), the consumer acks on success and routes failures
-            through DLX/retry as configured.
+        :param bool auto_ack: If True, the broker acks at delivery (``no_ack=True``). Rejected at
+            setup when combined with ``dlx_enable=True`` -- once the broker has acked, failed
+            messages cannot be routed to the DLX, so the combination is meaningless. To use
+            auto_ack, pass ``dlx_enable=False`` explicitly and accept that callback/validation
+            failures are logged and dropped. Default False. WARNING: ``no_ack=true`` makes the
+            broker ignore ``prefetch_count`` and push deliveries as fast as the connection
+            allows; aio-pika buffers them in an unbounded internal queue, so a slow callback
+            on a busy stream can OOM the process. ``max_concurrent_tasks`` does not bound that
+            buffer. Treat this mode as unsafe for production -- use ``auto_ack=False`` if you
+            need backpressure.
         :param bool auto_declare: If True, declare exchange/queue before consuming
         :param str exchange_name: Exchange name for auto_declare
         :param str exchange_type: Exchange type for auto_declare
@@ -930,6 +952,13 @@ class MrsalAsyncAMQP(Mrsal):
             the timeout fires, remaining tasks are cancelled and the consumer returns; messages
             handled by cancelled tasks will be redelivered by the broker.
         """
+        if auto_ack and dlx_enable:
+            raise MrsalAbortedSetup(
+                'auto_ack=True is incompatible with dlx_enable=True: once the broker has acked '
+                'on delivery, failed messages cannot be routed to the DLX. Set dlx_enable=False '
+                'to opt out of DLX, or auto_ack=False to keep DLX accountability.'
+            )
+
         try:
             asyncio.get_running_loop()
         except RuntimeError:
