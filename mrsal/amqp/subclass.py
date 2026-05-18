@@ -621,6 +621,36 @@ class MrsalAsyncAMQP(Mrsal):
     """Handles asynchronous connection with RabbitMQ using aio-pika."""
 
     _dlx_publish_channel = None
+    _stop_event: asyncio.Event | None = None
+    # aio_pika.queue.QueueIterator at runtime; left as Any to avoid importing the
+    # internal queue module just for a type hint.
+    _consumer_iterator: object | None = None
+    _inflight_tasks: set[asyncio.Task] | None = None
+
+    async def stop(self) -> None:
+        """Signal the consumer loop to exit cleanly.
+
+        Sets ``_stop_event`` so the loop breaks at its next iteration and
+        closes the active queue iterator so an idle consumer wakes up
+        instead of hanging on the broker. Safe to call multiple times.
+
+        Any in-flight messages dispatched via ``max_concurrent_tasks`` are
+        drained by ``start_consumer`` before it returns.
+
+        Note: once stop() has been called, this consumer instance cannot be
+        restarted -- ``_stop_event`` remains set so future ``start_consumer``
+        calls would exit on the first iteration. To restart, construct a new
+        ``MrsalAsyncAMQP`` instance. The persistent set state is deliberate:
+        it preserves a stop request that arrives during a tenacity retry
+        backoff, which would otherwise be silently dropped.
+        """
+        if self._stop_event is not None:
+            self._stop_event.set()
+        if self._consumer_iterator is not None:
+            try:
+                await self._consumer_iterator.close()
+            except Exception:
+                log.debug("Consumer iterator close raised; ignoring.", exc_info=True)
 
     async def close(self) -> None:
         """Close channels and connection cleanly.
@@ -731,6 +761,110 @@ class MrsalAsyncAMQP(Mrsal):
             log.error(f'Oh my lordy lord! I caugth an unexpected exception while trying to connect: {e}', exc_info=True)
             raise
 
+    async def _handle_message(self, message, runtime_config: dict) -> None:
+        """Process a single message: validate -> callback -> ack/DLX.
+
+        Shared by the sequential and concurrent paths in ``start_consumer`` so
+        the failure/ack policy stays in one place regardless of dispatch mode.
+        """
+        callback = runtime_config['callback']
+        callback_args = runtime_config['callback_args']
+        auto_ack = runtime_config['auto_ack']
+        payload_model = runtime_config['payload_model']
+        dlx_enable = runtime_config['dlx_enable']
+        enable_retry_cycles = runtime_config['enable_retry_cycles']
+        retry_cycle_interval = runtime_config['retry_cycle_interval']
+        max_retry_time_limit = runtime_config['max_retry_time_limit']
+        exchange_name = runtime_config['exchange_name']
+        routing_key = runtime_config['routing_key']
+        dlx_exchange_name = runtime_config['dlx_exchange_name']
+        dlx_routing_key = runtime_config['dlx_routing_key']
+        queue_name = runtime_config['queue_name']
+
+        app_id = 'NoAppID' if message.app_id is None else message.app_id
+        msg_id = 'NoMsgID' if message.message_id is None else message.message_id
+        properties = config.AioPikaAttributes.from_message(message)
+
+        if self.verbose:
+            log.info(f"""
+                        Message received with:
+                        - Redelivery: {message.redelivered}
+                        - Exchange: {message.exchange}
+                        - Routing Key: {message.routing_key}
+                        - Delivery Tag: {message.delivery_tag}
+                        - Auto Ack: {auto_ack}
+                        """)
+
+        current_retry = message.headers.get('x-delivery-count', 0) if message.headers else 0
+        should_process = True
+        failure_reason: str | None = None
+        # When payload_model is set, the validated instance replaces message.body in the callback.
+        callback_body = message.body
+
+        if payload_model:
+            try:
+                callback_body = self.validate_payload(payload=message.body, model=payload_model)
+            except (ValidationError, json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
+                log.error(f"Payload validation failed: {e}", exc_info=True)
+                should_process = False
+                failure_reason = f"payload validation: {e!r}"
+
+        if callback and should_process:
+            try:
+                if callback_args:
+                    await callback(*callback_args, message, properties, callback_body)
+                else:
+                    await callback(message, properties, callback_body)
+            except Exception as e:
+                log.error(f"Splæt! Error processing message with callback: {e}", exc_info=True)
+                should_process = False
+                failure_reason = f"callback: {e!r}"
+
+        # auto_ack=True: broker already acked; skip DLX (caller opted out of accountability)
+        if auto_ack:
+            if not should_process:
+                log.warning(
+                    f"Message {msg_id} dropped (auto_ack=True): {failure_reason} | "
+                    f"app_id={app_id} routing_key={message.routing_key}"
+                )
+            return
+
+        if not should_process:
+            if dlx_enable and enable_retry_cycles:
+                await self._async_publish_to_dlx_with_retry_cycle(
+                    message, properties, failure_reason or "Callback processing failed",
+                    exchange_name, routing_key, enable_retry_cycles,
+                    retry_cycle_interval, max_retry_time_limit, dlx_exchange_name,
+                    dlx_routing_key,
+                )
+            elif dlx_enable:
+                await message.reject(requeue=False)
+                log.warning(f"Message {msg_id} sent to dead letter exchange after {current_retry} retries")
+            else:
+                await message.reject(requeue=False)
+                log.warning(f"No dead letter exchange for {queue_name} declared, proceeding to drop the message -- Ponder you life choices! byebye")
+                if self.verbose:
+                    log.info(f"Dropped message content: {message.body}")
+            return
+
+        await message.ack()
+        log.info(f'Young grasshopper! Message ({msg_id}) from {app_id} received and properly processed.')
+
+    async def _handle_message_with_release(self, message, runtime_config: dict,
+                                           semaphore: asyncio.Semaphore) -> None:
+        """Task body for concurrent dispatch: handle one message and release the slot.
+
+        Wrapped so a crash inside ``_handle_message`` cannot leak the semaphore
+        permit or kill the parent loop. Errors are logged; the iterator keeps
+        moving.
+        """
+        try:
+            await self._handle_message(message, runtime_config)
+        except Exception:
+            log.exception("Unhandled error processing message in concurrent task")
+        finally:
+            semaphore.release()
+
     @retry(
         retry=retry_if_exception_type((
             AMQPConnectionError,
@@ -764,7 +898,8 @@ class MrsalAsyncAMQP(Mrsal):
             queue_overflow: str | None = None,
             single_active_consumer: bool | None = None,
             lazy_queue: bool | None = None,
-    
+            max_concurrent_tasks: int | None = None,
+            drain_timeout: float | None = None,
             ):
         """Start the async consumer.
 
@@ -773,8 +908,9 @@ class MrsalAsyncAMQP(Mrsal):
             When ``payload_model`` is set, ``body`` is the validated model instance, not ``message.body``.
         :param Sequence callback_args: Optional positional arguments prepended to the callback invocation
         :param bool auto_ack: If True, the broker acks at delivery (``no_ack=True``). On callback/validation
-            failure DLX is skipped; the failure is logged only. If False (default), the consumer acks on
-            success and routes failures through DLX/retry as configured.
+            failure DLX is skipped; the failure is logged only -- ``auto_ack=True`` is an explicit opt-out
+            from DLX accountability. If False (default), the consumer acks on success and routes failures
+            through DLX/retry as configured.
         :param bool auto_declare: If True, declare exchange/queue before consuming
         :param str exchange_name: Exchange name for auto_declare
         :param str exchange_type: Exchange type for auto_declare
@@ -784,6 +920,15 @@ class MrsalAsyncAMQP(Mrsal):
             validated model instance in place of ``message.body``.
         :param bool dlx_enable: Whether to route failed messages to a dead-letter exchange
         :param bool enable_retry_cycles: Whether to apply retry cycle headers when publishing to DLX
+        :param int max_concurrent_tasks: When set, up to N messages are processed concurrently as
+            ``asyncio`` tasks bounded by a semaphore. When ``None`` (default), messages are processed
+            sequentially -- one ``await callback(...)`` at a time -- matching prior behaviour. Note that
+            ``prefetch_count`` only buffers messages on the broker side; it does not parallelize the
+            consumer. Combine with ``prefetch_count >= max_concurrent_tasks`` for steady throughput.
+        :param float drain_timeout: Seconds to wait for in-flight tasks to finish after the loop
+            exits (graceful stop or end-of-iteration). ``None`` (default) waits indefinitely. When
+            the timeout fires, remaining tasks are cancelled and the consumer returns; messages
+            handled by cancelled tasks will be redelivered by the broker.
         """
         try:
             asyncio.get_running_loop()
@@ -823,83 +968,104 @@ class MrsalAsyncAMQP(Mrsal):
             "max_length": max_queue_length or self.max_queue_length,
             "overflow": queue_overflow or self.queue_overflow,
             "single_consumer": single_active_consumer if single_active_consumer is not None else self.single_active_consumer,
-            "lazy": lazy_queue if lazy_queue is not None else self.lazy_queue
+            "lazy": lazy_queue if lazy_queue is not None else self.lazy_queue,
+            "max_concurrent_tasks": max_concurrent_tasks,
         }
 
         log.info(f"Straight out of the swamps -- consumer boi listening with config: {consumer_config}")
 
-        async for message in queue.iterator(no_ack=auto_ack):
-            if message is None:
-                continue
+        runtime_config = {
+            'callback': callback,
+            'callback_args': callback_args,
+            'auto_ack': auto_ack,
+            'payload_model': payload_model,
+            'dlx_enable': dlx_enable,
+            'enable_retry_cycles': enable_retry_cycles,
+            'retry_cycle_interval': retry_cycle_interval,
+            'max_retry_time_limit': max_retry_time_limit,
+            'exchange_name': exchange_name,
+            'routing_key': routing_key,
+            'dlx_exchange_name': dlx_exchange_name,
+            'dlx_routing_key': dlx_routing_key,
+            'queue_name': queue_name,
+        }
 
-            app_id = 'NoAppID' if message.app_id is None else message.app_id
-            msg_id = 'NoMsgID' if message.message_id is None else message.message_id
-            properties = config.AioPikaAttributes.from_message(message)
+        # Lifecycle primitives are created here (not in __init__) because asyncio.Event
+        # needs to bind to a running loop; start_consumer is the first point we have one.
+        # Lazy creation also preserves a stop() that arrived during tenacity exponential
+        # backoff: if the previous attempt set the event and is being retried, we keep
+        # the set state instead of clobbering it with a fresh unset Event.
+        if self._stop_event is None:
+            self._stop_event = asyncio.Event()
+        if self._inflight_tasks is None:
+            self._inflight_tasks = set()
+        if max_concurrent_tasks is not None and max_concurrent_tasks > 0:
+            semaphore = asyncio.Semaphore(max_concurrent_tasks)
+        else:
+            semaphore = None
 
-            if self.verbose:
-                log.info(f"""
-                            Message received with:
-                            - Redelivery: {message.redelivered}
-                            - Exchange: {message.exchange}
-                            - Routing Key: {message.routing_key}
-                            - Delivery Tag: {message.delivery_tag}
-                            - Auto Ack: {auto_ack}
-                            """)
+        try:
+            # async with: ensures the consumer cancellation is deterministically delivered
+            # to the broker on exception or generator GC. Without it, channel state can
+            # be left mid-cancel.
+            async with queue.iterator(no_ack=auto_ack) as it:
+                self._consumer_iterator = it
+                async for message in it:
+                    # Stop check runs BEFORE processing the message we just pulled.
+                    # Trade-off: a stop arriving between pulls leaves the just-pulled
+                    # message unacked, which the broker redelivers on consumer cancel.
+                    # Alternative (process-then-check) would risk an unbounded delay
+                    # before stop() takes effect when callbacks are slow.
+                    if self._stop_event.is_set():
+                        break
+                    if message is None:
+                        continue
 
-            current_retry = message.headers.get('x-delivery-count', 0) if message.headers else 0
-            should_process = True
-            failure_reason: str | None = None
-            # When payload_model is set, the validated instance replaces message.body in the callback.
-            callback_body = message.body
-
-            if payload_model:
-                try:
-                    callback_body = self.validate_payload(payload=message.body, model=payload_model)
-                except (ValidationError, json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
-                    log.error(f"Payload validation failed: {e}", exc_info=True)
-                    should_process = False
-                    failure_reason = f"payload validation: {e!r}"
-
-            if callback and should_process:
-                try:
-                    if callback_args:
-                        await callback(*callback_args, message, properties, callback_body)
+                    if semaphore is None:
+                        # Sequential path -- preserves prior behaviour exactly.
+                        await self._handle_message(message, runtime_config)
                     else:
-                        await callback(message, properties, callback_body)
-                except Exception as e:
-                    log.error(f"Splæt! Error processing message with callback: {e}", exc_info=True)
-                    should_process = False
-                    failure_reason = f"callback: {e!r}"
-
-            # auto_ack=True: broker already acked; skip DLX (caller opted out of accountability)
-            if auto_ack:
-                if not should_process:
-                    log.warning(
-                        f"Message {msg_id} dropped (auto_ack=True): {failure_reason} | "
-                        f"app_id={app_id} routing_key={message.routing_key}"
-                    )
-                continue
-
-            if not should_process:
-                if dlx_enable and enable_retry_cycles:
-                    await self._async_publish_to_dlx_with_retry_cycle(
-                        message, properties, failure_reason or "Callback processing failed",
-                        exchange_name, routing_key, enable_retry_cycles,
-                        retry_cycle_interval, max_retry_time_limit, dlx_exchange_name,
-                        dlx_routing_key,
-                    )
-                elif dlx_enable:
-                    await message.reject(requeue=False)
-                    log.warning(f"Message {msg_id} sent to dead letter exchange after {current_retry} retries")
+                        # Bounded concurrent path. acquire() applies back-pressure so the
+                        # iterator stops pulling new messages once max_concurrent_tasks
+                        # are in flight, even if prefetch_count is larger.
+                        await semaphore.acquire()
+                        if self._stop_event.is_set():
+                            semaphore.release()
+                            break
+                        task = asyncio.create_task(
+                            self._handle_message_with_release(message, runtime_config, semaphore)
+                        )
+                        self._inflight_tasks.add(task)
+                        # add_done_callback invokes the callback with the task as its
+                        # single argument; set.discard takes one argument and removes
+                        # it from the set, so the signatures line up. This keeps the
+                        # in-flight set bounded without an explicit wrapper coroutine.
+                        task.add_done_callback(self._inflight_tasks.discard)
+        finally:
+            self._consumer_iterator = None
+            if self._inflight_tasks:
+                # Drain in-flight messages before returning so callers observing
+                # start_consumer() returning can trust that no work is still pending.
+                # gather() swallows individual task exceptions (already logged inside
+                # _handle_message_with_release).
+                pending = list(self._inflight_tasks)
+                log.info(f"Draining {len(pending)} in-flight message task(s) before exit")
+                drain_coro = asyncio.gather(*pending, return_exceptions=True)
+                if drain_timeout is None:
+                    await drain_coro
                 else:
-                    await message.reject(requeue=False)
-                    log.warning(f"No dead letter exchange for {queue_name} declared, proceeding to drop the message -- Ponder you life choices! byebye")
-                    if self.verbose:
-                        log.info(f"Dropped message content: {message.body}")
-                continue
-
-            await message.ack()
-            log.info(f'Young grasshopper! Message ({msg_id}) from {app_id} received and properly processed.')
+                    try:
+                        await asyncio.wait_for(drain_coro, timeout=drain_timeout)
+                    except asyncio.TimeoutError:
+                        still_pending = [t for t in pending if not t.done()]
+                        log.warning(
+                            f"Drain timeout after {drain_timeout}s: cancelling "
+                            f"{len(still_pending)} unfinished task(s); their messages "
+                            f"will be redelivered by the broker."
+                        )
+                        for task in still_pending:
+                            task.cancel()
+                        await asyncio.gather(*still_pending, return_exceptions=True)
 
     async def _async_publish_to_dlx_with_retry_cycle(self, message, properties, processing_error: str,
                                                    original_exchange: str, original_routing_key: str,

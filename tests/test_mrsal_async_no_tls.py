@@ -1,13 +1,15 @@
+import asyncio
 import pytest
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from mrsal.amqp.subclass import MrsalAsyncAMQP
 from mrsal.config import AioPikaAttributes
-from pydantic.dataclasses import dataclass
 from pydantic import ValidationError
 
+from tests.conftest import ExpectedPayload, make_queue_with_messages
 
-# Configuration and expected payload definition
+
+# Configuration override (this test file uses ssl explicitly).
 SETUP_ARGS = {
     'host': 'localhost',
     'port': 5672,
@@ -17,12 +19,6 @@ SETUP_ARGS = {
     'heartbeat': 60,
     'prefetch_count': 1
 }
-
-@dataclass
-class ExpectedPayload:
-    id: int
-    name: str
-    active: bool
 
 
 # Fixture to mock the async connection and its methods - SYNC fixture
@@ -52,41 +48,28 @@ def amqp_consumer(mock_amqp_connection):
 
 @pytest.mark.asyncio
 async def test_valid_message_processing(amqp_consumer):
-    """Test valid message processing in async consumer."""
-    consumer = amqp_consumer  # No await needed
+    """start_consumer must invoke the callback for a healthy message."""
+    consumer = amqp_consumer
 
     valid_body = b'{"id": 1, "name": "Test", "active": true}'
     mock_message = AsyncMock(body=valid_body, ack=AsyncMock(), reject=AsyncMock())
+    mock_message.configure_mock(app_id="test_app", message_id="12345", headers=None, redelivered=False)
 
-    # Manually set the app_id and message_id properties as simple attributes
-    mock_message.configure_mock(app_id="test_app", message_id="12345")
-
-    mock_queue = AsyncMock()
-    async def message_generator(**kwargs):
-        yield mock_message
-
-    mock_queue.iterator = message_generator
-    mock_queue.__aenter__.return_value = mock_queue
-    mock_queue.__aexit__.return_value = AsyncMock()
-
+    mock_queue, _ = make_queue_with_messages([mock_message])
     consumer._channel.declare_queue.return_value = mock_queue
 
     mock_callback = AsyncMock()
 
-    # Call the async method directly to avoid the asyncio.run() issue
     await consumer.start_consumer(
         queue_name='test_q',
         callback=mock_callback,
         routing_key='test_route',
         exchange_name='test_x',
-        exchange_type='direct'
+        exchange_type='direct',
+        auto_ack=True,
     )
-    mock_callback.reset_mock()
 
-    async for message in mock_queue.iterator():
-        await mock_callback(message)
-
-    mock_callback.assert_called_once_with(mock_message)
+    mock_callback.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -100,11 +83,7 @@ async def test_callback_receives_validated_instance(amqp_consumer):
     mock_message = AsyncMock(body=valid_body, ack=AsyncMock(), reject=AsyncMock())
     mock_message.configure_mock(app_id="test_app", message_id="12345", headers=None, redelivered=False)
 
-    mock_queue = AsyncMock()
-    async def message_generator(**kwargs):
-        yield mock_message
-
-    mock_queue.iterator = message_generator
+    mock_queue, _ = make_queue_with_messages([mock_message])
     consumer._channel.declare_queue.return_value = mock_queue
 
     received = {}
@@ -130,26 +109,18 @@ async def test_callback_receives_validated_instance(amqp_consumer):
 
 @pytest.mark.asyncio
 async def test_invalid_payload_validation(amqp_consumer):
-    """Test invalid payload handling in async consumer."""
+    """auto_ack=True: validation failure must skip the callback and not raise."""
     invalid_payload = b'{"id": "wrong_type", "name": 123, "active": "maybe"}'
-    consumer = amqp_consumer  # No await needed
+    consumer = amqp_consumer
 
     mock_message = AsyncMock(body=invalid_payload, ack=AsyncMock(), reject=AsyncMock())
-    mock_message.configure_mock(app_id="test_app", message_id="12345")
+    mock_message.configure_mock(app_id="test_app", message_id="12345", headers=None, redelivered=False, routing_key="rk")
 
-    mock_queue = AsyncMock()
-    async def message_generator(**kwargs):
-        yield mock_message
-
-    mock_queue.iterator = message_generator
-    mock_queue.__aenter__.return_value = mock_queue
-    mock_queue.__aexit__.return_value = AsyncMock()
-
+    mock_queue, _ = make_queue_with_messages([mock_message])
     consumer._channel.declare_queue.return_value = mock_queue
 
     mock_callback = AsyncMock()
 
-    # Call the async method directly to avoid the asyncio.run() issue
     await consumer.start_consumer(
         queue_name='test_q',
         callback=mock_callback,
@@ -157,56 +128,45 @@ async def test_invalid_payload_validation(amqp_consumer):
         exchange_name='test_x',
         exchange_type='direct',
         payload_model=ExpectedPayload,
-        auto_ack=True
+        auto_ack=True,
     )
 
-    async for message in mock_queue.iterator():
-        with pytest.raises(ValidationError):
-            consumer.validate_payload(message.body, ExpectedPayload)
-        await mock_callback(message)
-
-    mock_callback.assert_called_once_with(mock_message)
+    mock_callback.assert_not_called()
+    # auto_ack=True opts out of DLX; broker already acked
+    mock_message.reject.assert_not_called()
+    mock_message.ack.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_requeue_on_invalid_message(amqp_consumer):
-    """Test that invalid messages are requeued when auto_ack is False."""
+    """auto_ack=False + invalid payload routes the message to DLX (reject without requeue)."""
     invalid_payload = b'{"id": "wrong_type", "name": 123, "active": "maybe"}'
-    consumer = amqp_consumer  # No await needed
+    consumer = amqp_consumer
 
-    mock_message = AsyncMock(body=invalid_payload, ack=AsyncMock(), reject=AsyncMock(), nack=AsyncMock())
-    mock_message.configure_mock(app_id="test_app", message_id="12345")
+    mock_message = AsyncMock(body=invalid_payload, ack=AsyncMock(), reject=AsyncMock())
+    mock_message.configure_mock(app_id="test_app", message_id="12345", headers=None, redelivered=False, routing_key="rk")
 
-    mock_queue = AsyncMock()
-    async def message_generator(**kwargs):
-        yield mock_message
-
-    mock_queue.iterator = message_generator
-    mock_queue.__aenter__.return_value = mock_queue
-    mock_queue.__aexit__.return_value = AsyncMock()
-
+    mock_queue, _ = make_queue_with_messages([mock_message])
     consumer._channel.declare_queue.return_value = mock_queue
 
     mock_callback = AsyncMock()
 
-    # Call the async method directly to avoid the asyncio.run() issue
-    await consumer.start_consumer(
-        queue_name='test_q',
-        callback=mock_callback,
-        routing_key='test_route',
-        exchange_name='test_x',
-        exchange_type='direct',
-        payload_model=ExpectedPayload,
-        auto_ack=False
-    )
-
-    async for message in mock_queue.iterator():
-        with pytest.raises(ValidationError):
-            consumer.validate_payload(message.body, ExpectedPayload)
-        await message.nack(requeue=True)
+    # Patch out the DLX retry-cycle publish (we're not testing that path here).
+    with patch.object(consumer, '_async_publish_to_dlx_with_retry_cycle', AsyncMock()) as dlx_spy:
+        await consumer.start_consumer(
+            queue_name='test_q',
+            callback=mock_callback,
+            routing_key='test_route',
+            exchange_name='test_x',
+            exchange_type='direct',
+            payload_model=ExpectedPayload,
+            auto_ack=False,
+        )
 
     mock_callback.assert_not_called()
-    mock_message.nack.assert_called_once_with(requeue=True)
+    # Validation failure should route through DLX retry cycle with dlx_enable=True (default).
+    dlx_spy.assert_awaited_once()
+    mock_message.ack.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -298,14 +258,9 @@ async def test_auto_ack_true_sets_broker_no_ack_and_skips_dlx_on_failure(amqp_co
 
     valid_body = b'{"id": 1, "name": "Test", "active": true}'
     mock_message = AsyncMock(body=valid_body, ack=AsyncMock(), reject=AsyncMock())
-    mock_message.configure_mock(app_id="test_app", message_id="12345", routing_key="rk", headers=None)
+    mock_message.configure_mock(app_id="test_app", message_id="12345", routing_key="rk", headers=None, redelivered=False)
 
-    async def async_iterator():
-        yield mock_message
-
-    iterator_call = MagicMock(return_value=async_iterator())
-    mock_queue = AsyncMock()
-    mock_queue.iterator = iterator_call
+    mock_queue, fake_it = make_queue_with_messages([mock_message])
     consumer._channel.declare_queue.return_value = mock_queue
 
     failing_callback = AsyncMock(side_effect=RuntimeError("callback boom"))
@@ -323,7 +278,7 @@ async def test_auto_ack_true_sets_broker_no_ack_and_skips_dlx_on_failure(amqp_co
             auto_ack=True,
         )
 
-    iterator_call.assert_called_once_with(no_ack=True)
+    assert fake_it.iterator_call_kwargs == {'no_ack': True}
     dlx_spy.assert_not_called()
     mock_message.ack.assert_not_called()
     mock_message.reject.assert_not_called()
@@ -363,3 +318,385 @@ def test_aio_pika_attributes_from_message_populates_all_fields():
     assert props.timestamp == ts
     assert props.type == "event"
     assert props.user_id == "u1"
+
+
+def _make_messages(n):
+    """Build ``n`` AsyncMock messages with the attributes the consumer reads."""
+    out = []
+    for i in range(n):
+        m = AsyncMock(body=b'{}', ack=AsyncMock(), reject=AsyncMock())
+        m.configure_mock(
+            app_id=f"app{i}", message_id=f"id{i}",
+            headers=None, redelivered=False, routing_key="rk",
+        )
+        out.append(m)
+    return out
+
+
+@pytest.mark.asyncio
+async def test_iterator_used_as_async_context_manager(amqp_consumer):
+    """start_consumer must enter and exit queue.iterator() as an async context manager.
+
+    Closes a regression noted in the #74 review comment: without ``async with``,
+    consumer cancellation isn't deterministically delivered to the broker on
+    exception or GC.
+    """
+    consumer = amqp_consumer
+
+    aenter_calls = []
+    aexit_calls = []
+
+    class TrackedIterator:
+        def __init__(self, messages):
+            self._messages = list(messages)
+            self.iterator_call_kwargs = None
+
+        async def __aenter__(self):
+            aenter_calls.append(True)
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            aexit_calls.append(True)
+            return False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if not self._messages:
+                raise StopAsyncIteration
+            return self._messages.pop(0)
+
+        async def close(self):
+            self._messages = []
+
+    msg = _make_messages(1)[0]
+    tracked = TrackedIterator([msg])
+    mock_queue = AsyncMock()
+    mock_queue.iterator = MagicMock(return_value=tracked)
+    consumer._channel.declare_queue.return_value = mock_queue
+
+    await consumer.start_consumer(
+        queue_name='test_q',
+        callback=AsyncMock(),
+        routing_key='rk',
+        exchange_name='test_x',
+        exchange_type='direct',
+        auto_ack=True,
+    )
+
+    assert aenter_calls == [True]
+    assert aexit_calls == [True]
+
+
+@pytest.mark.asyncio
+async def test_max_concurrent_tasks_runs_callbacks_in_parallel(amqp_consumer):
+    """Acceptance: with max_concurrent_tasks=N, up to N callbacks run concurrently.
+
+    Verified via a max-observed-concurrency counter rather than wall-clock timing
+    so the test stays robust under CI load.
+    """
+    consumer = amqp_consumer
+
+    N = 4
+    messages = _make_messages(N)
+    mock_queue, _ = make_queue_with_messages(messages)
+    consumer._channel.declare_queue.return_value = mock_queue
+
+    active = 0
+    max_observed = 0
+    all_started = asyncio.Event()
+
+    async def slow_callback(message, properties, body):
+        nonlocal active, max_observed
+        active += 1
+        max_observed = max(max_observed, active)
+        if active >= N:
+            all_started.set()
+        # Hold the slot until every callback has entered, proving they overlap.
+        try:
+            await asyncio.wait_for(all_started.wait(), timeout=1.0)
+        finally:
+            active -= 1
+
+    await consumer.start_consumer(
+        queue_name='test_q',
+        callback=slow_callback,
+        routing_key='rk',
+        exchange_name='test_x',
+        exchange_type='direct',
+        auto_ack=True,
+        max_concurrent_tasks=N,
+    )
+
+    assert max_observed == N, f"Expected {N} concurrent callbacks, observed {max_observed}"
+
+
+@pytest.mark.asyncio
+async def test_sequential_mode_does_not_overlap_callbacks(amqp_consumer):
+    """Acceptance: with max_concurrent_tasks=None, callbacks run one at a time."""
+    consumer = amqp_consumer
+
+    active = 0
+    max_observed = 0
+
+    async def callback(message, properties, body):
+        nonlocal active, max_observed
+        active += 1
+        max_observed = max(max_observed, active)
+        await asyncio.sleep(0.02)
+        active -= 1
+
+    messages = _make_messages(3)
+    mock_queue, _ = make_queue_with_messages(messages)
+    consumer._channel.declare_queue.return_value = mock_queue
+
+    await consumer.start_consumer(
+        queue_name='test_q',
+        callback=callback,
+        routing_key='rk',
+        exchange_name='test_x',
+        exchange_type='direct',
+        auto_ack=True,
+    )
+
+    assert max_observed == 1
+
+
+@pytest.mark.asyncio
+async def test_stop_exits_loop_after_inflight_messages_finish(amqp_consumer):
+    """Acceptance: await stop() exits the loop cleanly after in-flight messages finish."""
+    consumer = amqp_consumer
+
+    proceed = asyncio.Event()
+    started_event = asyncio.Event()
+    in_flight = 0
+    completed = []
+
+    async def slow_callback(message, properties, body):
+        nonlocal in_flight
+        in_flight += 1
+        if in_flight >= 2:
+            started_event.set()
+        await proceed.wait()
+        completed.append(message.message_id)
+
+    messages = _make_messages(5)
+    mock_queue, _ = make_queue_with_messages(messages)
+    consumer._channel.declare_queue.return_value = mock_queue
+
+    consumer_task = asyncio.create_task(consumer.start_consumer(
+        queue_name='test_q',
+        callback=slow_callback,
+        routing_key='rk',
+        exchange_name='test_x',
+        exchange_type='direct',
+        auto_ack=True,
+        max_concurrent_tasks=2,
+    ))
+
+    await asyncio.wait_for(started_event.wait(), timeout=1.0)
+
+    # Request graceful stop while two callbacks are mid-flight.
+    await consumer.stop()
+
+    # start_consumer must NOT have returned yet -- it's draining in-flight tasks.
+    await asyncio.sleep(0)
+    assert not consumer_task.done(), "start_consumer returned before draining in-flight tasks"
+
+    # Release the in-flight callbacks; consumer should drain and return.
+    proceed.set()
+    await asyncio.wait_for(consumer_task, timeout=2.0)
+
+    # The two in-flight messages completed; the remaining three were not processed.
+    assert len(completed) == 2
+
+
+@pytest.mark.asyncio
+async def test_no_unacked_messages_dangling_on_graceful_stop(amqp_consumer):
+    """Acceptance: every in-flight message is acked before start_consumer returns from stop()."""
+    consumer = amqp_consumer
+
+    proceed = asyncio.Event()
+    started_event = asyncio.Event()
+    in_flight = 0
+
+    async def slow_callback(message, properties, body):
+        nonlocal in_flight
+        in_flight += 1
+        if in_flight >= 2:
+            started_event.set()
+        await proceed.wait()
+
+    messages = _make_messages(5)
+    mock_queue, _ = make_queue_with_messages(messages)
+    consumer._channel.declare_queue.return_value = mock_queue
+
+    consumer_task = asyncio.create_task(consumer.start_consumer(
+        queue_name='test_q',
+        callback=slow_callback,
+        routing_key='rk',
+        exchange_name='test_x',
+        exchange_type='direct',
+        auto_ack=False,
+        max_concurrent_tasks=2,
+    ))
+
+    await asyncio.wait_for(started_event.wait(), timeout=1.0)
+    await consumer.stop()
+    proceed.set()
+    await asyncio.wait_for(consumer_task, timeout=2.0)
+
+    # The two in-flight messages must be acked.
+    messages[0].ack.assert_awaited_once()
+    messages[1].ack.assert_awaited_once()
+    # The remaining three were never dispatched; nothing touched them.
+    for m in messages[2:]:
+        m.ack.assert_not_called()
+        m.reject.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_stop_is_idempotent_before_start_consumer():
+    """stop() must be safe to call before start_consumer has ever run."""
+    consumer = MrsalAsyncAMQP(**SETUP_ARGS)
+    # Should not raise even though _stop_event and _consumer_iterator are None.
+    await consumer.stop()
+
+
+@pytest.mark.asyncio
+async def test_stop_event_preserved_across_start_consumer_reentry(amqp_consumer):
+    """M1 regression: a stop() that fires between tenacity retries must not be lost.
+
+    Simulates the state after tenacity caught a connection error and is about to
+    re-enter start_consumer: ``_stop_event`` exists and is set. The new attempt
+    must observe the set state and exit immediately, not clobber it with a fresh
+    unset Event.
+    """
+    consumer = amqp_consumer
+
+    # Pre-set the stop event as if stop() was called during exponential backoff.
+    consumer._stop_event = asyncio.Event()
+    consumer._stop_event.set()
+    preexisting_event = consumer._stop_event
+
+    msg = _make_messages(1)[0]
+    mock_queue, _ = make_queue_with_messages([msg])
+    consumer._channel.declare_queue.return_value = mock_queue
+
+    callback = AsyncMock()
+    await consumer.start_consumer(
+        queue_name='test_q',
+        callback=callback,
+        routing_key='rk',
+        exchange_name='test_x',
+        exchange_type='direct',
+        auto_ack=True,
+    )
+
+    callback.assert_not_called()
+    # The event reference must be the same (not replaced) and still set.
+    assert consumer._stop_event is preexisting_event
+    assert consumer._stop_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_drain_timeout_cancels_hung_inflight_tasks(amqp_consumer):
+    """M2: drain_timeout must cancel in-flight tasks that never finish."""
+    consumer = amqp_consumer
+
+    started_event = asyncio.Event()
+    hung = asyncio.Event()  # never set
+
+    async def hung_callback(message, properties, body):
+        started_event.set()
+        await hung.wait()
+
+    messages = _make_messages(2)
+    mock_queue, _ = make_queue_with_messages(messages)
+    consumer._channel.declare_queue.return_value = mock_queue
+
+    consumer_task = asyncio.create_task(consumer.start_consumer(
+        queue_name='test_q',
+        callback=hung_callback,
+        routing_key='rk',
+        exchange_name='test_x',
+        exchange_type='direct',
+        auto_ack=True,
+        max_concurrent_tasks=2,
+        drain_timeout=0.1,
+    ))
+
+    await asyncio.wait_for(started_event.wait(), timeout=1.0)
+    await consumer.stop()
+
+    # Without drain_timeout this would hang forever; the timeout must force return.
+    await asyncio.wait_for(consumer_task, timeout=2.0)
+
+
+class _BlockingQueueIterator:
+    """Async-iterator + context-manager whose __anext__ blocks until close() is called.
+
+    Models an idle aio-pika queue with no pending deliveries.
+    """
+    def __init__(self):
+        self._closed = asyncio.Event()
+        self.iterator_call_kwargs = None
+        self.close_calls = 0
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        await self._closed.wait()
+        raise StopAsyncIteration
+
+    async def close(self):
+        self.close_calls += 1
+        self._closed.set()
+
+
+@pytest.mark.asyncio
+async def test_stop_wakes_idle_iterator(amqp_consumer):
+    """m5: stop() must close the iterator so an idle consumer wakes up promptly.
+
+    Without ``_consumer_iterator.close()`` in stop(), an idle ``async for ... in it``
+    would block on the broker forever even after stop_event is set.
+    """
+    consumer = amqp_consumer
+
+    blocking_it = _BlockingQueueIterator()
+    mock_queue = AsyncMock()
+
+    def iterator_factory(**kwargs):
+        blocking_it.iterator_call_kwargs = kwargs
+        return blocking_it
+
+    mock_queue.iterator = MagicMock(side_effect=iterator_factory)
+    consumer._channel.declare_queue.return_value = mock_queue
+
+    callback = AsyncMock()
+    consumer_task = asyncio.create_task(consumer.start_consumer(
+        queue_name='test_q',
+        callback=callback,
+        routing_key='rk',
+        exchange_name='test_x',
+        exchange_type='direct',
+        auto_ack=True,
+    ))
+
+    # Let the consumer reach `async for message in it` and block on __anext__.
+    await asyncio.sleep(0.05)
+    assert not consumer_task.done(), "consumer should be blocked on idle iterator"
+
+    await consumer.stop()
+    await asyncio.wait_for(consumer_task, timeout=1.0)
+
+    callback.assert_not_called()
+    assert blocking_it.close_calls >= 1

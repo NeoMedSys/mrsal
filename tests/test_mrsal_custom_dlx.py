@@ -1,31 +1,9 @@
 import pytest
 from unittest.mock import Mock, MagicMock, AsyncMock, patch
 from mrsal.amqp.subclass import MrsalBlockingAMQP, MrsalAsyncAMQP
-from pydantic.dataclasses import dataclass
 
 from mrsal.exceptions import MrsalAbortedSetup
-
-
-@dataclass
-class ExpectedPayload:
-	id: int
-	name: str
-	active: bool
-
-
-class AsyncIteratorMock:
-	"""Mock async iterator for aio-pika queue.iterator()"""
-	def __init__(self, items):
-		self.items = iter(items)
-
-	def __aiter__(self):
-		return self
-
-	async def __anext__(self):
-		try:
-			return next(self.items)
-		except StopIteration:
-			raise StopAsyncIteration
+from tests.conftest import AsyncIteratorMock, ExpectedPayload
 
 
 class TestDLXExchangeNameConfiguration:
