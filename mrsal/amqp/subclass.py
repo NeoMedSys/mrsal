@@ -264,8 +264,8 @@ class MrsalBlockingAMQP(Mrsal):
             dlx_routing_key: str | None = None,
             use_quorum_queues: bool = True,
             enable_retry_cycles: bool = True,
-            retry_cycle_interval: int = 10,
-            max_retry_time_limit: int = 60,
+            retry_cycle_interval: int = config.DEFAULT_RETRY_CYCLE_INTERVAL_MIN,
+            max_retry_time_limit: int = config.DEFAULT_MAX_RETRY_TIME_LIMIT_MIN,
             max_queue_length: int | None = None,
             max_queue_length_bytes: int | None = None,
             queue_overflow: str | None = None,
@@ -320,6 +320,13 @@ class MrsalBlockingAMQP(Mrsal):
                 'unbounded, so a slow callback grows pending tasks until OOM. Set auto_ack=False '
                 'so prefetch_count provides backpressure, or run without threaded=True.'
             )
+        if enable_retry_cycles and dlx_enable:
+            self._validate_retry_cycle_preconditions(
+                exchange_type=exchange_type,
+                routing_key=routing_key,
+                retry_cycle_interval=retry_cycle_interval,
+                auto_declare=auto_declare,
+            )
 
         if threaded:
             max_workers = max_workers or self.prefetch_count
@@ -346,6 +353,8 @@ class MrsalBlockingAMQP(Mrsal):
                     queue_overflow=queue_overflow,
                     single_active_consumer=single_active_consumer,
                     lazy_queue=lazy_queue,
+                    enable_retry_cycles=enable_retry_cycles,
+                    retry_cycle_interval=retry_cycle_interval,
                     channel=self._consumer_channel
             )
             
@@ -612,11 +621,14 @@ class MrsalBlockingAMQP(Mrsal):
     def _publish_to_dlx(self, dlx_exchange: str, routing_key: str, body: bytes, properties: dict):
         """Blocking implementation of DLX publishing.
 
-        Publishes via a dedicated channel with ``confirm_delivery()`` enabled,
-        so broker rejection or unroutable destination raises
-        (``pika.exceptions.NackError`` / ``UnroutableError``) instead of
-        silently dropping the message. The caller is responsible for nacking
-        the original message on failure.
+        Publishes via a dedicated channel with ``confirm_delivery()`` enabled
+        and ``mandatory=True``, so broker rejection or unroutable destination
+        raises (``pika.exceptions.NackError`` / ``UnroutableError``) instead of
+        silently dropping the message. Without ``mandatory=True`` the broker
+        ack-and-discards unroutable publishes under publisher confirms; this
+        would silently lose messages if the ``.retry`` or ``.dlx`` queue setup
+        failed. The caller is responsible for nacking the original message on
+        failure.
         """
         pika_properties = pika.BasicProperties(
             headers=properties.get('headers'),
@@ -630,7 +642,8 @@ class MrsalBlockingAMQP(Mrsal):
             exchange=dlx_exchange,
             routing_key=routing_key,
             body=body,
-            properties=pika_properties
+            properties=pika_properties,
+            mandatory=True,
         )
 
 
@@ -909,8 +922,8 @@ class MrsalAsyncAMQP(Mrsal):
             dlx_routing_key: str | None = None,
             use_quorum_queues: bool = True,
             enable_retry_cycles: bool = True,
-            retry_cycle_interval: int = 10,         # Minutes between cycles
-            max_retry_time_limit: int = 60,         # Minutes total before permanent DLX
+            retry_cycle_interval: int = config.DEFAULT_RETRY_CYCLE_INTERVAL_MIN,
+            max_retry_time_limit: int = config.DEFAULT_MAX_RETRY_TIME_LIMIT_MIN,
             max_queue_length: int | None = None,
             max_queue_length_bytes: int | None = None,
             queue_overflow: str | None = None,
@@ -960,6 +973,13 @@ class MrsalAsyncAMQP(Mrsal):
                 'on delivery, failed messages cannot be routed to the DLX. Set dlx_enable=False '
                 'to opt out of DLX, or auto_ack=False to keep DLX accountability.'
             )
+        if enable_retry_cycles and dlx_enable:
+            self._validate_retry_cycle_preconditions(
+                exchange_type=exchange_type,
+                routing_key=routing_key,
+                retry_cycle_interval=retry_cycle_interval,
+                auto_declare=auto_declare,
+            )
 
         try:
             asyncio.get_running_loop()
@@ -985,7 +1005,9 @@ class MrsalAsyncAMQP(Mrsal):
                     max_queue_length_bytes=max_queue_length_bytes,
                     queue_overflow=queue_overflow,
                     single_active_consumer=single_active_consumer,
-                    lazy_queue=lazy_queue
+                    lazy_queue=lazy_queue,
+                    enable_retry_cycles=enable_retry_cycles,
+                    retry_cycle_interval=retry_cycle_interval
                     )
 
             if not self.auto_declare_ok:
@@ -1138,11 +1160,13 @@ class MrsalAsyncAMQP(Mrsal):
     async def _publish_to_dlx(self, dlx_exchange: str, routing_key: str, body: bytes, properties: dict):
         """Async implementation of DLX publishing.
 
-        Publishes via a dedicated channel with publisher confirms enabled, so
-        broker rejection or connection loss raises (typically
-        ``aio_pika.exceptions.DeliveryError``) instead of silently dropping
-        the message. The caller is responsible for rejecting the original
-        message on failure.
+        Publishes via a dedicated channel with publisher confirms enabled and
+        ``mandatory=True``, so broker rejection or unroutable destination
+        raises (typically ``aio_pika.exceptions.DeliveryError``) instead of
+        silently dropping the message. aio-pika's current default for
+        ``mandatory`` is True, but we pin it explicitly to match the sync path
+        and to defend against an upstream default change. The caller is
+        responsible for rejecting the original message on failure.
         """
         message = Message(
             body,
@@ -1156,4 +1180,4 @@ class MrsalAsyncAMQP(Mrsal):
 
         await self._ensure_dlx_publish_channel()
         exchange = await self._dlx_publish_channel.get_exchange(dlx_exchange)
-        await exchange.publish(message, routing_key=routing_key)
+        await exchange.publish(message, routing_key=routing_key, mandatory=True)
