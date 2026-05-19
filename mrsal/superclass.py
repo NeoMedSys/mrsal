@@ -1,4 +1,4 @@
- # external
+# external
 import os
 import ssl
 import pika
@@ -23,942 +23,942 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class Mrsal:
-    """
-    Mrsal creates a layer on top of Pika's core, providing methods to setup a RabbitMQ broker with multiple functionalities.
-
-    Properties:
-        :param str host: Hostname or IP Address to connect to
-        :param int port: TCP port to connect to
-        :param pika.credentials.Credentials credentials: auth credentials
-        :param str virtual_host: RabbitMQ virtual host to use
-        :param bool verbose: If True then more INFO logs will be printed
-        :param int heartbeat: Controls RabbitMQ's server heartbeat timeout negotiation
-        :param int prefetch_count: Specifies a prefetch window in terms of whole messages.
-        :param bool ssl: Set this flag to true if you want to connect externally to the rabbit server.
-        :param int max_queue_length: Maximum number of messages in queue before overflow behavior triggers
-        :param int max_queue_length_bytes: Maximum queue size in bytes (optional)
-        :param str queue_overflow: Behavior when queue is full - "drop-head" or "reject-publish"
-        :param bool single_active_consumer: If True, only one consumer processes messages at a time
-        :param bool lazy_queue: If True, messages are stored on disk to save memory
-    """
-
-    host: str
-    port: int
-    credentials: tuple[str, str] = field(repr=False)
-    virtual_host: str
-    ssl: bool = False
-    verbose: bool = False
-    prefetch_count: int = 5
-    heartbeat: int = 60  # sec
-    dlx_enable: bool = True
-    dlx_exchange_name: str | None = None
-    use_quorum_queues: bool = True
-    max_queue_length: int = 10000  # Good default for most use cases
-    max_queue_length_bytes: int | None = None  # Optional memory limit
-    queue_overflow: str = "drop-head"  # Drop old messages by default
-    single_active_consumer: bool = False  # Allow parallel processing
-    lazy_queue: bool = False  # Keep messages in RAM for speed
-    _connection: Any = field(init=False, default=None)
-    _channel: Any = field(init=False, default=None)
-    auto_declare_ok: bool = field(init=False, default=False)
-
-    def __post_init__(self) -> None:
-        if self.ssl:
-            tls_dict = {
-                    'crt': os.environ.get('RABBITMQ_CERT'),
-                    'key': os.environ.get('RABBITMQ_KEY'),
-                    'ca': os.environ.get('RABBITMQ_CAFILE')
-                    }
-            # empty string handling
-            self.tls_dict = {cert: (env_var if env_var != '' else None) for cert, env_var in tls_dict.items()}
-            config.ValidateTLS(**self.tls_dict)
-
-    def _build_queue_args(
-        self,
-        *,
-        queue_name: str,
-        dlx_enable: bool,
-        dlx_name: str | None,
-        dlx_routing: str | None,
-        use_quorum_queues: bool,
-        max_queue_length: int | None,
-        max_queue_length_bytes: int | None,
-        queue_overflow: str | None,
-        single_active_consumer: bool | None,
-        lazy_queue: bool | None,
-        extra: dict | None = None,
-    ) -> dict:
-        """Build the ``x-arguments`` dict for queue declaration.
-
-        Pure helper shared by the sync and async setup paths. No broker side
-        effects. ``dlx_name``/``dlx_routing`` must be pre-computed by the
-        caller (which also needs them to drive the DLX declare/bind calls).
-
-        Returns a new dict — ``extra`` is *not* mutated.
-        """
-        args: dict = dict(extra) if extra else {}
-
-        if dlx_enable and dlx_name is not None and dlx_routing is not None:
-            args['x-dead-letter-exchange'] = dlx_name
-            args['x-dead-letter-routing-key'] = dlx_routing
-
-        if use_quorum_queues:
-            args['x-queue-type'] = 'quorum'
-            args['x-quorum-initial-group-size'] = 3
-
-        if max_queue_length and max_queue_length > 0:
-            args['x-max-length'] = max_queue_length
-
-        if max_queue_length_bytes and max_queue_length_bytes > 0:
-            args['x-max-length-bytes'] = max_queue_length_bytes
-
-        if queue_overflow and queue_overflow in ["drop-head", "reject-publish"]:
-            args['x-overflow'] = queue_overflow
-
-        if single_active_consumer:
-            args['x-single-active-consumer'] = True
-
-        if lazy_queue:
-            args['x-queue-mode'] = 'lazy'
-
-        if self.verbose and args:
-            log.info(f"Queue {queue_name} configured with arguments: {args}")
-
-        return args
-
-    def _validate_retry_cycle_preconditions(
-        self,
-        *,
-        exchange_type: str | None,
-        routing_key: str | None,
-        retry_cycle_interval: int,
-        auto_declare: bool,
-    ) -> None:
-        """Reject ``enable_retry_cycles=True`` configurations that would silently drop messages.
-
-        - Non-positive ``retry_cycle_interval`` produces ``x-message-ttl <= 0``;
-          RabbitMQ either rejects the declare or dead-letters immediately,
-          creating a tight retry loop.
-        - Fanout / headers exchanges ignore routing keys, so the ``.retry`` and
-          ``.dlx`` bindings collapse to "every queue gets every message" and
-          exhausted messages get re-cycled indefinitely.
-        - Topic exchanges with wildcard binding keys (``*`` / ``#`` segments)
-          can't be used as the broker's dead-letter routing key — when the TTL
-          fires the broker tries to publish back to the original exchange with
-          the literal wildcard string, which matches no binding and is dropped.
-
-        When ``auto_declare=False`` the operator has set up the broker topology
-        themselves, so the library trusts ``exchange_type=None`` (no topology
-        is being declared from here, and ``mandatory=True`` on publish will
-        surface routing errors). With ``auto_declare=True`` we're about to
-        declare ``.retry``/``.dlx`` bindings tied to ``exchange_type``, so a
-        missing type is rejected outright.
-        """
-        if retry_cycle_interval <= 0:
-            raise MrsalAbortedSetup(
-                f"retry_cycle_interval must be > 0 (got {retry_cycle_interval}); "
-                "use enable_retry_cycles=False to opt out of cycling."
-            )
-        if exchange_type is None:
-            if auto_declare:
-                raise MrsalAbortedSetup(
-                    "enable_retry_cycles=True with auto_declare=True requires an explicit "
-                    "exchange_type so the retry topology can be validated and declared. "
-                    "Pass exchange_type ('direct' or 'topic' with a concrete routing key), "
-                    "or set enable_retry_cycles=False."
-                )
-            # auto_declare=False: operator-declared topology, nothing to validate here.
-            return
-        if exchange_type not in config.RETRY_SAFE_EXCHANGE_TYPES:
-            raise MrsalAbortedSetup(
-                f"enable_retry_cycles=True is incompatible with exchange_type={exchange_type!r}: "
-                f"only {sorted(config.RETRY_SAFE_EXCHANGE_TYPES)} honor the .retry binding key, "
-                "so on fanout/headers exchanges cycling and parking collapse into the same queue "
-                "and exhausted messages re-cycle indefinitely. Set enable_retry_cycles=False."
-            )
-        if routing_key is not None and exchange_type == 'topic':
-            segments = routing_key.split('.')
-            if any(seg == '*' or seg == '#' for seg in segments):
-                raise MrsalAbortedSetup(
-                    f"enable_retry_cycles=True is incompatible with topic wildcard "
-                    f"routing_key={routing_key!r}: the broker would dead-letter expired "
-                    "messages back to the original exchange with the literal wildcard "
-                    "string as the routing key, which matches no binding and is silently "
-                    "dropped. Use a concrete routing key or set enable_retry_cycles=False."
-                )
-
-    def _build_retry_queue_args(
-        self,
-        *,
-        exchange_name: str,
-        routing_key: str,
-        retry_cycle_interval: int,
-        use_quorum_queues: bool,
-    ) -> dict:
-        """Build the ``x-arguments`` dict for the ``.retry`` queue declaration.
-
-        Shared by the sync and async setup paths to keep the two code paths
-        from drifting. ``x-message-ttl`` + ``x-dead-letter-exchange`` +
-        ``x-dead-letter-routing-key`` are queue-level arguments — RabbitMQ
-        does not honor the dead-letter keys in message headers.
-        """
-        args: dict = {
-            'x-message-ttl': retry_cycle_interval * 60 * 1000,
-            'x-dead-letter-exchange': exchange_name,
-            'x-dead-letter-routing-key': routing_key,
-        }
-        if use_quorum_queues:
-            args['x-queue-type'] = 'quorum'
-            args['x-quorum-initial-group-size'] = 3
-        return args
-
-    def _setup_exchange_and_queue(self,
-                                 exchange_name: str, queue_name: str, exchange_type: str,
-                                 routing_key: str, exch_args: dict[str, Any] | None = None,
-                                 queue_args: dict[str, Any] | None = None,
-                                 bind_args: dict[str, Any] | None = None,
-                                 exch_durable: bool = True, queue_durable: bool =True,
-                                 passive: bool = False, internal: bool = False,
-                                 auto_delete: bool = False, exclusive: bool = False,
-                                 dlx_enable: bool = True, dlx_exchange_name: str | None = None,
-                                 dlx_routing_key: str | None = None, use_quorum_queues: bool = True,
-                                 max_queue_length: int | None = None,
-                                 max_queue_length_bytes: int | None = None,
-                                 queue_overflow: str | None = None,
-                                 single_active_consumer: bool | None = None,
-                                 lazy_queue: bool | None = None,
-                                 enable_retry_cycles: bool = False,
-                                 retry_cycle_interval: int = config.DEFAULT_RETRY_CYCLE_INTERVAL_MIN,
-                                 channel=None
-                                 ) -> None:
-
-        self.auto_declare_ok = False
-        dlx_name: str | None = None
-        dlx_routing: str | None = None
-        dlx_setup_ok = False
-
-        if not passive:
-            if dlx_enable:
-                dlx_name = dlx_exchange_name or f"{exchange_name}{config.DLX_SUFFIX}"
-                dlx_routing = dlx_routing_key or routing_key
-                try:
-                    self._declare_exchange(
-                        exchange=dlx_name,
-                        exchange_type=exchange_type,
-                        arguments=None,
-                        durable=exch_durable,
-                        passive=passive,
-                        internal=internal,
-                        auto_delete=auto_delete,
-                        channel=channel
-                    )
-                    if self.verbose:
-                        log.info(f"Dead letter exchange {dlx_name} declared successfully")
-
-                except MrsalSetupError as e:
-                    log.warning(f"DLX {dlx_name} might already exist or failed to create: {e}")
-
-                dlx_queue_name = f"{queue_name}{config.DLX_SUFFIX}"
-                try:
-                    self._declare_queue(
-                            queue=dlx_queue_name,
-                            arguments=None,
-                            durable=exch_durable,
-                            passive=False,
-                            exclusive=False,
-                            auto_delete=False,
-                            channel=channel
-                            )
-                    self._declare_queue_binding(
-                            exchange=dlx_name,
-                            queue=dlx_queue_name,
-                            routing_key=dlx_routing,
-                            arguments=None,
-                            channel=channel
-                            )
-                    dlx_setup_ok = True
-                    if self.verbose:
-                        log.info(f"DLX queue {dlx_queue_name} declared and bound successfully")
-                except MrsalSetupError as e:
-                    # Fail loud: if the .dlx queue isn't declared/bound, every future
-                    # DLX publish becomes unroutable and we're back to silent loss.
-                    raise MrsalAbortedSetup(
-                        f"DLX queue {dlx_queue_name} setup failed: {e}. "
-                        "Future DLX publishes would be unroutable; refusing to start."
-                    ) from e
-
-                if enable_retry_cycles:
-                    # Broker-driven retry: TTL + DLX queue args route expired messages
-                    # back to the original exchange. Changing retry_cycle_interval after
-                    # the queue exists triggers RabbitMQ's "inequivalent arg" error;
-                    # delete <queue>.retry before redeploying with a new interval.
-                    retry_queue_name = f"{queue_name}{config.RETRY_SUFFIX}"
-                    retry_queue_args = self._build_retry_queue_args(
-                        exchange_name=exchange_name,
-                        routing_key=routing_key,
-                        retry_cycle_interval=retry_cycle_interval,
-                        use_quorum_queues=use_quorum_queues,
-                    )
-                    try:
-                        self._declare_queue(
-                                queue=retry_queue_name,
-                                arguments=retry_queue_args,
-                                durable=exch_durable,
-                                passive=False,
-                                exclusive=False,
-                                auto_delete=False,
-                                channel=channel
-                                )
-                        self._declare_queue_binding(
-                                exchange=dlx_name,
-                                queue=retry_queue_name,
-                                routing_key=f"{dlx_routing}{config.RETRY_SUFFIX}",
-                                arguments=None,
-                                channel=channel
-                                )
-                        if self.verbose:
-                            log.info(f"Retry queue {retry_queue_name} declared (TTL={retry_cycle_interval}m, dead-letters back to {exchange_name}/{routing_key})")
-                    except MrsalSetupError as e:
-                        # Fail loud: cycling publishes target the .retry binding, so a
-                        # missing/inconsistent .retry queue silently drops cycled
-                        # messages. If this fires after a retry_cycle_interval change,
-                        # delete <queue>.retry on the broker and redeploy.
-                        raise MrsalAbortedSetup(
-                            f"Retry queue {retry_queue_name} setup failed: {e}. "
-                            f"If retry_cycle_interval changed, delete {retry_queue_name} on the broker and redeploy."
-                        ) from e
-
-            queue_args = self._build_queue_args(
-                queue_name=queue_name,
-                dlx_enable=dlx_enable,
-                dlx_name=dlx_name,
-                dlx_routing=dlx_routing,
-                use_quorum_queues=use_quorum_queues,
-                max_queue_length=max_queue_length,
-                max_queue_length_bytes=max_queue_length_bytes,
-                queue_overflow=queue_overflow,
-                single_active_consumer=single_active_consumer,
-                lazy_queue=lazy_queue,
-                extra=queue_args,
-            )
-        else:
-            queue_args = {}
-            if self.verbose:
-                log.info(f"Passive mode: checking existence of queue {queue_name} without configuration")
-
-
-        declare_exhange_dict = {
-                'exchange': exchange_name,
-                'exchange_type': exchange_type,
-                'arguments': exch_args if not passive else None,
-                'durable': exch_durable,
-                'passive': passive,
-                'internal': internal,
-                'auto_delete': auto_delete
-                }
-
-        declare_queue_dict = {
-                'queue': queue_name,
-                'arguments': queue_args,
-                'durable': queue_durable,
-                'passive': passive,
-                'exclusive': exclusive,
-                'auto_delete': auto_delete
-                }
-
-        declare_queue_binding_dict = {
-                'exchange': exchange_name,
-                'queue': queue_name,
-                'routing_key': routing_key,
-                'arguments': bind_args
-
-                }
-        try:
-            self._declare_exchange(**declare_exhange_dict, channel=channel)
-            self._declare_queue(**declare_queue_dict, channel=channel)
-            if not passive:
-                self._declare_queue_binding(**declare_queue_binding_dict, channel=channel)
-            self.auto_declare_ok = True
-            if not passive:
-                log.info(f"Exchange {exchange_name} and Queue {queue_name} declared successfully.")
-            else:
-                log.info(f"Exchange {exchange_name} and Queue {queue_name} verified to exist.")
-            if dlx_setup_ok:
-                log.info(f"You have a dead letter exhange {dlx_name} for fault tolerance -- use it well young grasshopper!")
-        except MrsalSetupError as e:
-            log.error(f'Splæt! I failed the declaration setup with {e}', exc_info=True)
-            self.auto_declare_ok = False
-
-    async def _async_setup_exchange_and_queue(self,
-                                              exchange_name: str, queue_name: str,
-                                              routing_key: str, exchange_type: str,
-                                              exch_args: dict[str, Any] | None = None,
-                                              queue_args: dict[str, Any] | None = None,
-                                              bind_args: dict[str, Any] | None = None,
-                                              exch_durable: bool = True, queue_durable: bool = True,
-                                              passive: bool = False, internal: bool = False,
-                                              auto_delete: bool = False, exclusive: bool = False,
-                                              dlx_enable: bool = True,
-                                              dlx_exchange_name: str | None = None,
-                                              dlx_routing_key: str | None = None,
-                                              use_quorum_queues: bool = True,
-                                              max_queue_length: int | None = None,
-                                              max_queue_length_bytes: int | None = None,
-                                              queue_overflow: str | None = None,
-                                              single_active_consumer: bool | None = None,
-                                              lazy_queue: bool | None = None,
-                                              enable_retry_cycles: bool = False,
-                                              retry_cycle_interval: int = config.DEFAULT_RETRY_CYCLE_INTERVAL_MIN
-                                              ) -> AioQueue | None:
-        """Setup exchange and queue with bindings asynchronously."""
-        if not self._connection:
-            raise MrsalAbortedSetup("Oh my Oh my! Connection not found when trying to run the setup!")
-
-        self.auto_declare_ok = False
-        dlx_name: str | None = None
-        dlx_routing: str | None = None
-        dlx_setup_ok = False
-
-        if not passive:
-            if dlx_enable:
-                dlx_name = dlx_exchange_name or f"{exchange_name}{config.DLX_SUFFIX}"
-                dlx_routing = dlx_routing_key or routing_key
-
-                try:
-                    await self._async_declare_exchange(
-                        exchange=dlx_name,
-                        exchange_type=exchange_type,
-                        arguments=None,
-                        durable=exch_durable,
-                        passive=passive,
-                        internal=internal,
-                        auto_delete=auto_delete
-                    )
-
-                    if self.verbose:
-                        log.info(f"Dead letter exchange {dlx_name} declared successfully")
-
-                except MrsalSetupError as e:
-                    log.warning(f"DLX {dlx_name} might already exist or failed to create: {e}")
-
-                dlx_queue_name = f"{queue_name}{config.DLX_SUFFIX}"
-                try:
-                    dlx_queue = await self._async_declare_queue(
-                            queue_name=dlx_queue_name,
-                            arguments=None,
-                            durable=exch_durable,
-                            passive=False,
-                            exclusive=False,
-                            auto_delete=False
-                            )
-
-                    dlx_exchange_obj = await self._channel.get_exchange(dlx_name)
-
-                    await self._async_declare_queue_binding(
-                            exchange=dlx_exchange_obj,
-                            queue=dlx_queue,
-                            routing_key=dlx_routing,
-                            arguments=None
-                            )
-                    dlx_setup_ok = True
-                    if self.verbose:
-                        log.info(f"DLX queue {dlx_queue_name} declared and bound successfully")
-                except MrsalSetupError as e:
-                    raise MrsalAbortedSetup(
-                        f"DLX queue {dlx_queue_name} setup failed: {e}. "
-                        "Future DLX publishes would be unroutable; refusing to start."
-                    ) from e
-
-                if enable_retry_cycles:
-                    # Broker-driven retry: TTL + DLX queue args route expired messages
-                    # back to the original exchange. Changing retry_cycle_interval after
-                    # the queue exists triggers RabbitMQ's "inequivalent arg" error;
-                    # delete <queue>.retry before redeploying with a new interval.
-                    retry_queue_name = f"{queue_name}{config.RETRY_SUFFIX}"
-                    retry_queue_args = self._build_retry_queue_args(
-                        exchange_name=exchange_name,
-                        routing_key=routing_key,
-                        retry_cycle_interval=retry_cycle_interval,
-                        use_quorum_queues=use_quorum_queues,
-                    )
-                    try:
-                        retry_queue = await self._async_declare_queue(
-                                queue_name=retry_queue_name,
-                                arguments=retry_queue_args,
-                                durable=exch_durable,
-                                passive=False,
-                                exclusive=False,
-                                auto_delete=False
-                                )
-                        dlx_exchange_obj = await self._channel.get_exchange(dlx_name)
-                        await self._async_declare_queue_binding(
-                                exchange=dlx_exchange_obj,
-                                queue=retry_queue,
-                                routing_key=f"{dlx_routing}{config.RETRY_SUFFIX}",
-                                arguments=None
-                                )
-                        if self.verbose:
-                            log.info(f"Retry queue {retry_queue_name} declared (TTL={retry_cycle_interval}m, dead-letters back to {exchange_name}/{routing_key})")
-                    except MrsalSetupError as e:
-                        raise MrsalAbortedSetup(
-                            f"Retry queue {retry_queue_name} setup failed: {e}. "
-                            f"If retry_cycle_interval changed, delete {retry_queue_name} on the broker and redeploy."
-                        ) from e
-
-            queue_args = self._build_queue_args(
-                queue_name=queue_name,
-                dlx_enable=dlx_enable,
-                dlx_name=dlx_name,
-                dlx_routing=dlx_routing,
-                use_quorum_queues=use_quorum_queues,
-                max_queue_length=max_queue_length,
-                max_queue_length_bytes=max_queue_length_bytes,
-                queue_overflow=queue_overflow,
-                single_active_consumer=single_active_consumer,
-                lazy_queue=lazy_queue,
-                extra=queue_args,
-            )
-        else:
-            queue_args = {}
-            if self.verbose:
-                log.info(f"Passive mode: checking existence of queue {queue_name} without configuration")
-
-
-        async_declare_exhange_dict = {
-                'exchange': exchange_name,
-                'exchange_type': exchange_type,
-                'arguments': exch_args if not passive else None,
-                'durable': exch_durable,
-                'passive': passive,
-                'internal': internal,
-                'auto_delete': auto_delete
-                }
-
-        async_declare_queue_dict = {
-                'queue_name': queue_name,
-                'arguments': queue_args,
-                'durable': queue_durable,
-                'exclusive': exclusive,
-                'auto_delete': auto_delete,
-                'passive': passive
-                }
-
-        async_declare_queue_binding_dict = {
-                'routing_key': routing_key,
-                'arguments': bind_args
-
-                }
-
-        try:
-            # Declare exchange and queue
-            exchange = await self._async_declare_exchange(**async_declare_exhange_dict)
-            queue = await self._async_declare_queue(**async_declare_queue_dict)
-            if not passive:
-                await self._async_declare_queue_binding(queue=queue, exchange=exchange, **async_declare_queue_binding_dict)
-            self.auto_declare_ok = True
-            if not passive:
-                log.info(f"Exchange {exchange_name} and Queue {queue_name} declared successfully.")
-            else:
-                log.info(f"Exchange {exchange_name} and Queue {queue_name} verified to exist.")
-            if dlx_setup_ok:
-                log.info(f"You have a dead letter exhange {dlx_name} for fault tolerance -- use it well young grasshopper!")
-            return queue
-        except MrsalSetupError as e:
-            log.error(f'Splæt! I failed the declaration setup with {e}', exc_info=True)
-            self.auto_declare_ok = False
-
-
-    def _declare_exchange(self,
-                             exchange: str, exchange_type: str,
-                             arguments: dict[str, str] | None,
-                             durable: bool, passive: bool,
-                             internal: bool, auto_delete: bool,
-                             channel=None
-                            ) -> None:
-        """This method creates an exchange if it does not already exist, and if the exchange exists, verifies that it is of the correct and expected class.
-
-        If passive set, the server will reply with Declare-Ok if the exchange already exists with the same name,
-        and raise an error if not and if the exchange does not already exist, the server MUST raise a channel exception with reply code 404 (not found).
-
-        :param str exchange: The exchange name
-        :param str exchange_type: The exchange type to use
-        :param bool passive: Perform a declare or just check to see if it exists
-        :param bool durable: Survive a reboot of RabbitMQ
-        :param bool auto_delete: Remove when no more queues are bound to it
-        :param bool internal: Can only be published to by other exchanges
-        :param dict arguments: Custom key/value pair arguments for the exchange
-        :rtype: `pika.frame.Method` having `method` attribute of type `spec.Exchange.DeclareOk`
-        """
-        exchange_declare_info = f"""
-                                exchange={exchange},
-                                exchange_type={exchange_type},
-                                durable={durable},
-                                passive={passive},
-                                internal={internal},
-                                auto_delete={auto_delete},
-                                arguments={arguments}
-                                """
-        if self.verbose:
-            log.info(f"Declaring exchange with: {exchange_declare_info}")
-        ch = channel or self._channel
-        try:
-            ch.exchange_declare(
-                exchange=exchange, exchange_type=exchange_type,
-                arguments=arguments, durable=durable,
-                passive=passive, internal=internal,
-                auto_delete=auto_delete
-                )
-        except Exception as e:
-            raise MrsalSetupError(f'Oooopise! I failed declaring the exchange with : {e}')
-        if self.verbose:
-            log.info("Exchange declared yo!")
-
-    async def _async_declare_exchange(self,
-                                      exchange: str,
-                                      exchange_type: AioExchangeType,
-                                      arguments: dict[str, str] | None = None,
-                                      durable: bool = True,
-                                      passive: bool = False,
-                                      internal: bool = False,
-                                      auto_delete: bool = False) -> AioExchange:
-        """Declare a RabbitMQ exchange in async mode."""
-        exchange_declare_info = f"""
-                                exchange={exchange},
-                                exchange_type={exchange_type},
-                                durable={durable},
-                                passive={passive},
-                                internal={internal},
-                                auto_delete={auto_delete},
-                                arguments={arguments}
-                                """
-        if self.verbose:
-            log.info(f"Declaring exchange with: {exchange_declare_info}")
-
-        try:
-            exchange_obj = await self._channel.declare_exchange(
-                name=exchange,
-                type=exchange_type,
-                durable=durable,
-                auto_delete=auto_delete,
-                internal=internal,
-                arguments=arguments
-            )
-            return exchange_obj
-        except Exception as e:
-            raise MrsalSetupError(f"Failed to declare async exchange: {e}")
-
-    def _declare_queue(self,
-                    queue: str, arguments: dict[str, str] | None,
-                    durable: bool, exclusive: bool,
-                    auto_delete: bool, passive: bool,
-                    channel=None
-                    ) -> None:
-        """Declare queue, create if needed. This method creates or checks a queue.
-        When creating a new queue the client can specify various properties that control the durability of the queue and its contents,
-        and the level of sharing for the queue.
-
-        Use an empty string as the queue name for the broker to auto-generate one.
-        Retrieve this auto-generated queue name from the returned `spec.Queue.DeclareOk` method frame.
-
-        :param str queue: The queue name; if empty string, the broker will create a unique queue name
-        :param bool passive: Only check to see if the queue exists and raise `ChannelClosed` if it doesn't
-        :param bool durable: Survive reboots of the broker
-        :param bool exclusive: Only allow access by the current connection
-        :param bool auto_delete: Delete after consumer cancels or disconnects
-        :param dict arguments: Custom key/value arguments for the queue
-        :returns: Method frame from the Queue.Declare-ok response
-        :rtype: `pika.frame.Method` having `method` attribute of type `spec.Queue.DeclareOk`
-        """
-        queue_declare_info = f"""
-                                queue={queue},
-                                durable={durable},
-                                exclusive={exclusive},
-                                auto_delete={auto_delete},
-                                arguments={arguments}
-                                """
-        if self.verbose:
-            log.info(f"Declaring queue with: {queue_declare_info}")
-
-        ch = channel or self._channel
-        try:
-            ch.queue_declare(queue=queue, arguments=arguments, durable=durable, exclusive=exclusive, auto_delete=auto_delete, passive=passive)
-        except Exception as e:
-            raise MrsalSetupError(f'Oooopise! I failed declaring the queue with : {e}')
-        if self.verbose:
-            log.info(f"Queue declared yo")
-
-    async def _async_declare_queue(self,
-                                   queue_name: str,
-                                   durable: bool = True,
-                                   exclusive: bool = False,
-                                   auto_delete: bool = False,
-                                   passive: bool = False,
-                                   arguments: dict[str, Any] | None = None) -> AioQueue:
-        """Declare a RabbitMQ queue asynchronously."""
-        queue_declare_info = f"""
-                                queue={queue_name},
-                                durable={durable},
-                                exclusive={exclusive},
-                                auto_delete={auto_delete},
-                                arguments={arguments}
-                                """
-        if self.verbose:
-            log.info(f"Declaring queue with: {queue_declare_info}")
-
-        try:
-            queue_obj = await self._channel.declare_queue(
-                name=queue_name,
-                durable=durable,
-                exclusive=exclusive,
-                auto_delete=auto_delete,
-                arguments=arguments,
-                passive=passive
-            )
-            return queue_obj
-        except Exception as e:
-            raise MrsalSetupError(f"Failed to declare async queue: {e}")
-
-    def _declare_queue_binding(self,
-                            exchange: str, queue: str,
-                            routing_key: str | None,
-                            arguments: dict[str, str] | None,
-                            channel=None
-                            ) -> None:
-        """Bind queue to exchange.
-
-        :param str queue: The queue to bind to the exchange
-        :param str exchange: The source exchange to bind to
-        :param str routing_key: The routing key to bind on
-        :param dict arguments: Custom key/value pair arguments for the binding
-
-        :returns: Method frame from the Queue.Bind-ok response
-        :rtype: `pika.frame.Method` having `method` attribute of type `spec.Queue.BindOk`
-        """
-        if self.verbose:
-            log.info(f"Binding queue to exchange: queue={queue}, exchange={exchange}, routing_key={routing_key}")
-
-        ch = channel or self._channel
-        try:
-            ch.queue_bind(exchange=exchange, queue=queue, routing_key=routing_key, arguments=arguments)
-            if self.verbose:
-                log.info(f"The queue is bound to exchange successfully: queue={queue}, exchange={exchange}, routing_key={routing_key}")
-        except Exception as e:
-            raise MrsalSetupError(f'I failed binding the queue with : {e}')
-        if self.verbose:
-            log.info(f"Queue bound yo")
-
-    async def _async_declare_queue_binding(self,
-                                           queue: AioQueue,
-                                           exchange: AioExchange,
-                                           routing_key: str | None,
-                                           arguments: dict[str, Any] | None = None) -> None:
-        """Bind the queue to the exchange asynchronously."""
-        binding_info = f"""
-                        queue={queue.name},
-                        exchange={exchange.name},
-                        routing_key={routing_key},
-                        arguments={arguments}
-                        """
-        if self.verbose:
-            log.info(f"Binding queue to exchange with: {binding_info}")
-
-        try:
-            await queue.bind(exchange, routing_key=routing_key, arguments=arguments)
-        except Exception as e:
-            raise MrsalSetupError(f"Failed to bind async queue: {e}")
-
-    def _ssl_setup(self) -> SSLContext:
-        """_ssl_setup is private method we are using to connect with rabbit server via signed certificates and some TLS settings.
-
-        Parameters
-        ----------
-
-        Returns
-        -------
-        SSLContext
-
-        """
-        context = ssl.create_default_context(cafile=self.tls_dict['ca'])
-        context.load_cert_chain(certfile=self.tls_dict['crt'], keyfile=self.tls_dict['key'])
-        return context
-
-    def get_ssl_context(self, async_conn: bool = True) -> SSLOptions | SSLContext | None:
-        if self.ssl:
-            log.info("Setting up TLS connection")
-            context = self._ssl_setup()
-            # use_blocking is the same as sync
-            if not async_conn:
-                ssl_options = pika.SSLOptions(context, self.host)
-                return ssl_options
-            else:
-                return context
-        else:
-            return None
-
-    def validate_payload(self, payload: Any, model: Type[T]) -> T:
-        """
-        Parses and validates the incoming message payload using the provided dataclass model.
-        :param payload: The message payload which could be of any type (str, bytes, dict, etc.).
-        :param model: The pydantic dataclass model class to validate against.
-        :return: An instance of ``model`` on success. Raises on validation failure.
-        """
-        # If payload is bytes, decode it to a string
-        if isinstance(payload, bytes):
-            payload = payload.decode('utf-8')
-
-        # If payload is a string, attempt to load it as JSON
-        if isinstance(payload, str):
-            payload = json.loads(payload)  # Converts JSON string to a dictionary
-
-        # Validate the payload against the provided model
-        if isinstance(payload, dict):
-            return model(**payload)
-        else:
-            raise TypeError(f"Fool, we aint supporting this type yet {type(payload)}.. Bytes or str -- get it straight")
-
-    def _get_retry_cycle_info(self, properties) -> dict:
-        """Extract retry cycle information from message headers."""
-        if not hasattr(properties, 'headers') or not properties.headers:
-            return {'cycle_count': 0, 'first_failure': None, 'total_elapsed': 0}
-
-        headers = properties.headers
-        return {
-            'cycle_count': headers.get('x-cycle-count', 0),
-            'first_failure': headers.get('x-first-failure'),
-            'total_elapsed': headers.get('x-total-elapsed', 0)
-        }
-
-    def _should_continue_retry_cycles(self, retry_info: dict, enable_retry_cycles: bool, 
-                                     max_retry_time_limit: int) -> bool:
-        """Check if message should continue retry cycles or go to permanent DLX."""
-        if not enable_retry_cycles or not self.dlx_enable:
-            return False
-
-        max_time_ms = max_retry_time_limit * 60 * 1000
-        return retry_info['total_elapsed'] < max_time_ms
-
-    def _create_retry_cycle_headers(self, original_headers: dict, cycle_count: int,
-                                   first_failure: str, processing_error: str,
-                                   should_cycle: bool) -> dict:
-        """Create headers for DLX message with retry cycle info.
-
-        Note: routing back to the original queue is driven by ``x-dead-letter-exchange``
-        / ``x-dead-letter-routing-key`` *queue arguments* on the ``.retry`` queue, not
-        by message headers — RabbitMQ does not honor those keys in headers.
-        """
-        headers = original_headers.copy() if original_headers else {}
-        now = datetime.now(timezone.utc).isoformat()
-
-        # Calculate elapsed time
-        if first_failure:
-            try:
-                first_time = datetime.fromisoformat(first_failure.replace('Z', ''))
-                elapsed_ms = int((datetime.now(timezone.utc) - first_time).total_seconds() * 1000)
-            except (ValueError, TypeError):
-                elapsed_ms = 0
-        else:
-            first_failure = now
-            elapsed_ms = 0
-
-        # Update retry cycle tracking
-        headers.update({
-            'x-cycle-count': cycle_count + 1,
-            'x-first-failure': first_failure,
-            'x-total-elapsed': elapsed_ms,
-            'x-processing-error': processing_error,
-            'x-retry-exhausted': not should_cycle
-        })
-
-        return headers
-
-    def _build_dlx_retry_properties(self, properties, processing_error: str,
-                                    original_exchange: str, original_routing_key: str,
-                                    enable_retry_cycles: bool, retry_cycle_interval: int,
-                                    max_retry_time_limit: int, dlx_exchange_name: str | None,
-                                    dlx_routing_key: str | None = None) -> tuple[str, str, dict, dict]:
-        """Build DLX target and properties for retry cycle publishing.
-
-        Returns (target_exchange, target_routing_key, properties, retry_info).
-        When ``should_cycle`` is True, target is the ``.retry`` queue binding
-        (``<dlx_routing>.retry``) so the broker-side TTL on that queue drives
-        the delay. When False, target is the terminal ``.dlx`` queue binding
-        and the message stays parked for manual review.
-        """
-        retry_info = self._get_retry_cycle_info(properties)
-        should_cycle = self._should_continue_retry_cycles(retry_info, enable_retry_cycles, max_retry_time_limit)
-
-        target_exchange = dlx_exchange_name or f"{original_exchange}{config.DLX_SUFFIX}"
-        # Honor explicit dlx_routing_key (also used at bind time); fall back to original routing key.
-        dlx_routing = dlx_routing_key or original_routing_key
-        target_routing = f"{dlx_routing}{config.RETRY_SUFFIX}" if should_cycle else dlx_routing
-
-        original_headers = getattr(properties, 'headers', {}) or {}
-        enhanced_headers = self._create_retry_cycle_headers(
-            original_headers, retry_info['cycle_count'], retry_info['first_failure'],
-            processing_error, should_cycle
-        )
-
-        target_properties = {
-            'headers': enhanced_headers,
-            'delivery_mode': 2,
-            'content_type': getattr(properties, 'content_type', 'application/json')
-        }
-
-        return target_exchange, target_routing, target_properties, retry_info
-
-    def _log_dlx_result(self, retry_info: dict, retry_cycle_interval: int, should_cycle: bool) -> None:
-        """Log the result of a DLX retry cycle publish."""
-        if should_cycle:
-            log.info(f"Message sent to DLX for retry cycle {retry_info['cycle_count'] + 1} "
-                    f"(next retry in {retry_cycle_interval}m)")
-        else:
-            log.error(f"Message permanently failed after {retry_info['cycle_count']} cycles "
-                     f"- staying in DLX for manual replay")
-
-    def _handle_dlx_with_retry_cycle_sync(
-            self, method_frame, properties, body, processing_error: str,
-            original_exchange: str, original_routing_key: str,
-            enable_retry_cycles: bool, retry_cycle_interval: int,
-            max_retry_time_limit: int, dlx_exchange_name: str | None,
-            dlx_routing_key: str | None = None):
-        """Base method for DLX handling with retry cycles (sync)."""
-        target_exchange, target_routing, target_properties, retry_info = self._build_dlx_retry_properties(
-            properties=properties,
-            processing_error=processing_error,
-            original_exchange=original_exchange,
-            original_routing_key=original_routing_key,
-            enable_retry_cycles=enable_retry_cycles,
-            retry_cycle_interval=retry_cycle_interval,
-            max_retry_time_limit=max_retry_time_limit,
-            dlx_exchange_name=dlx_exchange_name,
-            dlx_routing_key=dlx_routing_key,
-        )
-        self._publish_to_dlx(target_exchange, target_routing, body, target_properties)
-        should_cycle = self._should_continue_retry_cycles(retry_info, enable_retry_cycles, max_retry_time_limit)
-        self._log_dlx_result(retry_info, retry_cycle_interval, should_cycle)
-
-    async def _handle_dlx_with_retry_cycle_async(
-            self, message, properties, processing_error: str,
-            original_exchange: str, original_routing_key: str,
-            enable_retry_cycles: bool, retry_cycle_interval: int,
-            max_retry_time_limit: int, dlx_exchange_name: str | None,
-            dlx_routing_key: str | None = None):
-        """Base method for DLX handling with retry cycles (async)."""
-        target_exchange, target_routing, target_properties, retry_info = self._build_dlx_retry_properties(
-            properties=properties,
-            processing_error=processing_error,
-            original_exchange=original_exchange,
-            original_routing_key=original_routing_key,
-            enable_retry_cycles=enable_retry_cycles,
-            retry_cycle_interval=retry_cycle_interval,
-            max_retry_time_limit=max_retry_time_limit,
-            dlx_exchange_name=dlx_exchange_name,
-            dlx_routing_key=dlx_routing_key,
-        )
-        await self._publish_to_dlx(target_exchange, target_routing, message.body, target_properties)
-        should_cycle = self._should_continue_retry_cycles(retry_info, enable_retry_cycles, max_retry_time_limit)
-        self._log_dlx_result(retry_info, retry_cycle_interval, should_cycle)
-
-    def _publish_to_dlx(self, dlx_exchange: str, routing_key: str, body: bytes, properties: dict):
-        """Abstract method - implemented by subclasses."""
-        raise NotImplementedError("Subclasses must implement _publish_to_dlx")
+	"""
+	Mrsal creates a layer on top of Pika's core, providing methods to setup a RabbitMQ broker with multiple functionalities.
+
+	Properties:
+		:param str host: Hostname or IP Address to connect to
+		:param int port: TCP port to connect to
+		:param pika.credentials.Credentials credentials: auth credentials
+		:param str virtual_host: RabbitMQ virtual host to use
+		:param bool verbose: If True then more INFO logs will be printed
+		:param int heartbeat: Controls RabbitMQ's server heartbeat timeout negotiation
+		:param int prefetch_count: Specifies a prefetch window in terms of whole messages.
+		:param bool ssl: Set this flag to true if you want to connect externally to the rabbit server.
+		:param int max_queue_length: Maximum number of messages in queue before overflow behavior triggers
+		:param int max_queue_length_bytes: Maximum queue size in bytes (optional)
+		:param str queue_overflow: Behavior when queue is full - "drop-head" or "reject-publish"
+		:param bool single_active_consumer: If True, only one consumer processes messages at a time
+		:param bool lazy_queue: If True, messages are stored on disk to save memory
+	"""
+
+	host: str
+	port: int
+	credentials: tuple[str, str] = field(repr=False)
+	virtual_host: str
+	ssl: bool = False
+	verbose: bool = False
+	prefetch_count: int = 5
+	heartbeat: int = 60  # sec
+	dlx_enable: bool = True
+	dlx_exchange_name: str | None = None
+	use_quorum_queues: bool = True
+	max_queue_length: int = 10000  # Good default for most use cases
+	max_queue_length_bytes: int | None = None  # Optional memory limit
+	queue_overflow: str = "drop-head"  # Drop old messages by default
+	single_active_consumer: bool = False  # Allow parallel processing
+	lazy_queue: bool = False  # Keep messages in RAM for speed
+	_connection: Any = field(init=False, default=None)
+	_channel: Any = field(init=False, default=None)
+	auto_declare_ok: bool = field(init=False, default=False)
+
+	def __post_init__(self) -> None:
+		if self.ssl:
+			tls_dict = {
+					'crt': os.environ.get('RABBITMQ_CERT'),
+					'key': os.environ.get('RABBITMQ_KEY'),
+					'ca': os.environ.get('RABBITMQ_CAFILE')
+					}
+			# empty string handling
+			self.tls_dict = {cert: (env_var if env_var != '' else None) for cert, env_var in tls_dict.items()}
+			config.ValidateTLS(**self.tls_dict)
+
+	def _build_queue_args(
+		self,
+		*,
+		queue_name: str,
+		dlx_enable: bool,
+		dlx_name: str | None,
+		dlx_routing: str | None,
+		use_quorum_queues: bool,
+		max_queue_length: int | None,
+		max_queue_length_bytes: int | None,
+		queue_overflow: str | None,
+		single_active_consumer: bool | None,
+		lazy_queue: bool | None,
+		extra: dict | None = None,
+	) -> dict:
+		"""Build the ``x-arguments`` dict for queue declaration.
+
+		Pure helper shared by the sync and async setup paths. No broker side
+		effects. ``dlx_name``/``dlx_routing`` must be pre-computed by the
+		caller (which also needs them to drive the DLX declare/bind calls).
+
+		Returns a new dict — ``extra`` is *not* mutated.
+		"""
+		args: dict = dict(extra) if extra else {}
+
+		if dlx_enable and dlx_name is not None and dlx_routing is not None:
+			args['x-dead-letter-exchange'] = dlx_name
+			args['x-dead-letter-routing-key'] = dlx_routing
+
+		if use_quorum_queues:
+			args['x-queue-type'] = 'quorum'
+			args['x-quorum-initial-group-size'] = 3
+
+		if max_queue_length and max_queue_length > 0:
+			args['x-max-length'] = max_queue_length
+
+		if max_queue_length_bytes and max_queue_length_bytes > 0:
+			args['x-max-length-bytes'] = max_queue_length_bytes
+
+		if queue_overflow and queue_overflow in ["drop-head", "reject-publish"]:
+			args['x-overflow'] = queue_overflow
+
+		if single_active_consumer:
+			args['x-single-active-consumer'] = True
+
+		if lazy_queue:
+			args['x-queue-mode'] = 'lazy'
+
+		if self.verbose and args:
+			log.info(f"Queue {queue_name} configured with arguments: {args}")
+
+		return args
+
+	def _validate_retry_cycle_preconditions(
+		self,
+		*,
+		exchange_type: str | None,
+		routing_key: str | None,
+		retry_cycle_interval: int,
+		auto_declare: bool,
+	) -> None:
+		"""Reject ``enable_retry_cycles=True`` configurations that would silently drop messages.
+
+		- Non-positive ``retry_cycle_interval`` produces ``x-message-ttl <= 0``;
+		RabbitMQ either rejects the declare or dead-letters immediately,
+		creating a tight retry loop.
+		- Fanout / headers exchanges ignore routing keys, so the ``.retry`` and
+		``.dlx`` bindings collapse to "every queue gets every message" and
+		exhausted messages get re-cycled indefinitely.
+		- Topic exchanges with wildcard binding keys (``*`` / ``#`` segments)
+		can't be used as the broker's dead-letter routing key — when the TTL
+		fires the broker tries to publish back to the original exchange with
+		the literal wildcard string, which matches no binding and is dropped.
+
+		When ``auto_declare=False`` the operator has set up the broker topology
+		themselves, so the library trusts ``exchange_type=None`` (no topology
+		is being declared from here, and ``mandatory=True`` on publish will
+		surface routing errors). With ``auto_declare=True`` we're about to
+		declare ``.retry``/``.dlx`` bindings tied to ``exchange_type``, so a
+		missing type is rejected outright.
+		"""
+		if retry_cycle_interval <= 0:
+			raise MrsalAbortedSetup(
+				f"retry_cycle_interval must be > 0 (got {retry_cycle_interval}); "
+				"use enable_retry_cycles=False to opt out of cycling."
+			)
+		if exchange_type is None:
+			if auto_declare:
+				raise MrsalAbortedSetup(
+					"enable_retry_cycles=True with auto_declare=True requires an explicit "
+					"exchange_type so the retry topology can be validated and declared. "
+					"Pass exchange_type ('direct' or 'topic' with a concrete routing key), "
+					"or set enable_retry_cycles=False."
+				)
+			# auto_declare=False: operator-declared topology, nothing to validate here.
+			return
+		if exchange_type not in config.RETRY_SAFE_EXCHANGE_TYPES:
+			raise MrsalAbortedSetup(
+				f"enable_retry_cycles=True is incompatible with exchange_type={exchange_type!r}: "
+				f"only {sorted(config.RETRY_SAFE_EXCHANGE_TYPES)} honor the .retry binding key, "
+				"so on fanout/headers exchanges cycling and parking collapse into the same queue "
+				"and exhausted messages re-cycle indefinitely. Set enable_retry_cycles=False."
+			)
+		if routing_key is not None and exchange_type == 'topic':
+			segments = routing_key.split('.')
+			if any(seg == '*' or seg == '#' for seg in segments):
+				raise MrsalAbortedSetup(
+					f"enable_retry_cycles=True is incompatible with topic wildcard "
+					f"routing_key={routing_key!r}: the broker would dead-letter expired "
+					"messages back to the original exchange with the literal wildcard "
+					"string as the routing key, which matches no binding and is silently "
+					"dropped. Use a concrete routing key or set enable_retry_cycles=False."
+				)
+
+	def _build_retry_queue_args(
+		self,
+		*,
+		exchange_name: str,
+		routing_key: str,
+		retry_cycle_interval: int,
+		use_quorum_queues: bool,
+	) -> dict:
+		"""Build the ``x-arguments`` dict for the ``.retry`` queue declaration.
+
+		Shared by the sync and async setup paths to keep the two code paths
+		from drifting. ``x-message-ttl`` + ``x-dead-letter-exchange`` +
+		``x-dead-letter-routing-key`` are queue-level arguments — RabbitMQ
+		does not honor the dead-letter keys in message headers.
+		"""
+		args: dict = {
+			'x-message-ttl': retry_cycle_interval * 60 * 1000,
+			'x-dead-letter-exchange': exchange_name,
+			'x-dead-letter-routing-key': routing_key,
+		}
+		if use_quorum_queues:
+			args['x-queue-type'] = 'quorum'
+			args['x-quorum-initial-group-size'] = 3
+		return args
+
+	def _setup_exchange_and_queue(self,
+								exchange_name: str, queue_name: str, exchange_type: str,
+								routing_key: str, exch_args: dict[str, Any] | None = None,
+								queue_args: dict[str, Any] | None = None,
+								bind_args: dict[str, Any] | None = None,
+								exch_durable: bool = True, queue_durable: bool =True,
+								passive: bool = False, internal: bool = False,
+								auto_delete: bool = False, exclusive: bool = False,
+								dlx_enable: bool = True, dlx_exchange_name: str | None = None,
+								dlx_routing_key: str | None = None, use_quorum_queues: bool = True,
+								max_queue_length: int | None = None,
+								max_queue_length_bytes: int | None = None,
+								queue_overflow: str | None = None,
+								single_active_consumer: bool | None = None,
+								lazy_queue: bool | None = None,
+								enable_retry_cycles: bool = False,
+								retry_cycle_interval: int = config.DEFAULT_RETRY_CYCLE_INTERVAL_MIN,
+								channel=None
+								) -> None:
+
+		self.auto_declare_ok = False
+		dlx_name: str | None = None
+		dlx_routing: str | None = None
+		dlx_setup_ok = False
+
+		if not passive:
+			if dlx_enable:
+				dlx_name = dlx_exchange_name or f"{exchange_name}{config.DLX_SUFFIX}"
+				dlx_routing = dlx_routing_key or routing_key
+				try:
+					self._declare_exchange(
+						exchange=dlx_name,
+						exchange_type=exchange_type,
+						arguments=None,
+						durable=exch_durable,
+						passive=passive,
+						internal=internal,
+						auto_delete=auto_delete,
+						channel=channel
+					)
+					if self.verbose:
+						log.info(f"Dead letter exchange {dlx_name} declared successfully")
+
+				except MrsalSetupError as e:
+					log.warning(f"DLX {dlx_name} might already exist or failed to create: {e}")
+
+				dlx_queue_name = f"{queue_name}{config.DLX_SUFFIX}"
+				try:
+					self._declare_queue(
+							queue=dlx_queue_name,
+							arguments=None,
+							durable=exch_durable,
+							passive=False,
+							exclusive=False,
+							auto_delete=False,
+							channel=channel
+							)
+					self._declare_queue_binding(
+							exchange=dlx_name,
+							queue=dlx_queue_name,
+							routing_key=dlx_routing,
+							arguments=None,
+							channel=channel
+							)
+					dlx_setup_ok = True
+					if self.verbose:
+						log.info(f"DLX queue {dlx_queue_name} declared and bound successfully")
+				except MrsalSetupError as e:
+					# Fail loud: if the .dlx queue isn't declared/bound, every future
+					# DLX publish becomes unroutable and we're back to silent loss.
+					raise MrsalAbortedSetup(
+						f"DLX queue {dlx_queue_name} setup failed: {e}. "
+						"Future DLX publishes would be unroutable; refusing to start."
+					) from e
+
+				if enable_retry_cycles:
+					# Broker-driven retry: TTL + DLX queue args route expired messages
+					# back to the original exchange. Changing retry_cycle_interval after
+					# the queue exists triggers RabbitMQ's "inequivalent arg" error;
+					# delete <queue>.retry before redeploying with a new interval.
+					retry_queue_name = f"{queue_name}{config.RETRY_SUFFIX}"
+					retry_queue_args = self._build_retry_queue_args(
+						exchange_name=exchange_name,
+						routing_key=routing_key,
+						retry_cycle_interval=retry_cycle_interval,
+						use_quorum_queues=use_quorum_queues,
+					)
+					try:
+						self._declare_queue(
+								queue=retry_queue_name,
+								arguments=retry_queue_args,
+								durable=exch_durable,
+								passive=False,
+								exclusive=False,
+								auto_delete=False,
+								channel=channel
+								)
+						self._declare_queue_binding(
+								exchange=dlx_name,
+								queue=retry_queue_name,
+								routing_key=f"{dlx_routing}{config.RETRY_SUFFIX}",
+								arguments=None,
+								channel=channel
+								)
+						if self.verbose:
+							log.info(f"Retry queue {retry_queue_name} declared (TTL={retry_cycle_interval}m, dead-letters back to {exchange_name}/{routing_key})")
+					except MrsalSetupError as e:
+						# Fail loud: cycling publishes target the .retry binding, so a
+						# missing/inconsistent .retry queue silently drops cycled
+						# messages. If this fires after a retry_cycle_interval change,
+						# delete <queue>.retry on the broker and redeploy.
+						raise MrsalAbortedSetup(
+							f"Retry queue {retry_queue_name} setup failed: {e}. "
+							f"If retry_cycle_interval changed, delete {retry_queue_name} on the broker and redeploy."
+						) from e
+
+			queue_args = self._build_queue_args(
+				queue_name=queue_name,
+				dlx_enable=dlx_enable,
+				dlx_name=dlx_name,
+				dlx_routing=dlx_routing,
+				use_quorum_queues=use_quorum_queues,
+				max_queue_length=max_queue_length,
+				max_queue_length_bytes=max_queue_length_bytes,
+				queue_overflow=queue_overflow,
+				single_active_consumer=single_active_consumer,
+				lazy_queue=lazy_queue,
+				extra=queue_args,
+			)
+		else:
+			queue_args = {}
+			if self.verbose:
+				log.info(f"Passive mode: checking existence of queue {queue_name} without configuration")
+
+
+		declare_exhange_dict = {
+				'exchange': exchange_name,
+				'exchange_type': exchange_type,
+				'arguments': exch_args if not passive else None,
+				'durable': exch_durable,
+				'passive': passive,
+				'internal': internal,
+				'auto_delete': auto_delete
+				}
+
+		declare_queue_dict = {
+				'queue': queue_name,
+				'arguments': queue_args,
+				'durable': queue_durable,
+				'passive': passive,
+				'exclusive': exclusive,
+				'auto_delete': auto_delete
+				}
+
+		declare_queue_binding_dict = {
+				'exchange': exchange_name,
+				'queue': queue_name,
+				'routing_key': routing_key,
+				'arguments': bind_args
+
+				}
+		try:
+			self._declare_exchange(**declare_exhange_dict, channel=channel)
+			self._declare_queue(**declare_queue_dict, channel=channel)
+			if not passive:
+				self._declare_queue_binding(**declare_queue_binding_dict, channel=channel)
+			self.auto_declare_ok = True
+			if not passive:
+				log.info(f"Exchange {exchange_name} and Queue {queue_name} declared successfully.")
+			else:
+				log.info(f"Exchange {exchange_name} and Queue {queue_name} verified to exist.")
+			if dlx_setup_ok:
+				log.info(f"You have a dead letter exhange {dlx_name} for fault tolerance -- use it well young grasshopper!")
+		except MrsalSetupError as e:
+			log.error(f'Splæt! I failed the declaration setup with {e}', exc_info=True)
+			self.auto_declare_ok = False
+
+	async def _async_setup_exchange_and_queue(self,
+											exchange_name: str, queue_name: str,
+											routing_key: str, exchange_type: str,
+											exch_args: dict[str, Any] | None = None,
+											queue_args: dict[str, Any] | None = None,
+											bind_args: dict[str, Any] | None = None,
+											exch_durable: bool = True, queue_durable: bool = True,
+											passive: bool = False, internal: bool = False,
+											auto_delete: bool = False, exclusive: bool = False,
+											dlx_enable: bool = True,
+											dlx_exchange_name: str | None = None,
+											dlx_routing_key: str | None = None,
+											use_quorum_queues: bool = True,
+											max_queue_length: int | None = None,
+											max_queue_length_bytes: int | None = None,
+											queue_overflow: str | None = None,
+											single_active_consumer: bool | None = None,
+											lazy_queue: bool | None = None,
+											enable_retry_cycles: bool = False,
+											retry_cycle_interval: int = config.DEFAULT_RETRY_CYCLE_INTERVAL_MIN
+											) -> AioQueue | None:
+		"""Setup exchange and queue with bindings asynchronously."""
+		if not self._connection:
+			raise MrsalAbortedSetup("Oh my Oh my! Connection not found when trying to run the setup!")
+
+		self.auto_declare_ok = False
+		dlx_name: str | None = None
+		dlx_routing: str | None = None
+		dlx_setup_ok = False
+
+		if not passive:
+			if dlx_enable:
+				dlx_name = dlx_exchange_name or f"{exchange_name}{config.DLX_SUFFIX}"
+				dlx_routing = dlx_routing_key or routing_key
+
+				try:
+					await self._async_declare_exchange(
+						exchange=dlx_name,
+						exchange_type=exchange_type,
+						arguments=None,
+						durable=exch_durable,
+						passive=passive,
+						internal=internal,
+						auto_delete=auto_delete
+					)
+
+					if self.verbose:
+						log.info(f"Dead letter exchange {dlx_name} declared successfully")
+
+				except MrsalSetupError as e:
+					log.warning(f"DLX {dlx_name} might already exist or failed to create: {e}")
+
+				dlx_queue_name = f"{queue_name}{config.DLX_SUFFIX}"
+				try:
+					dlx_queue = await self._async_declare_queue(
+							queue_name=dlx_queue_name,
+							arguments=None,
+							durable=exch_durable,
+							passive=False,
+							exclusive=False,
+							auto_delete=False
+							)
+
+					dlx_exchange_obj = await self._channel.get_exchange(dlx_name)
+
+					await self._async_declare_queue_binding(
+							exchange=dlx_exchange_obj,
+							queue=dlx_queue,
+							routing_key=dlx_routing,
+							arguments=None
+							)
+					dlx_setup_ok = True
+					if self.verbose:
+						log.info(f"DLX queue {dlx_queue_name} declared and bound successfully")
+				except MrsalSetupError as e:
+					raise MrsalAbortedSetup(
+						f"DLX queue {dlx_queue_name} setup failed: {e}. "
+						"Future DLX publishes would be unroutable; refusing to start."
+					) from e
+
+				if enable_retry_cycles:
+					# Broker-driven retry: TTL + DLX queue args route expired messages
+					# back to the original exchange. Changing retry_cycle_interval after
+					# the queue exists triggers RabbitMQ's "inequivalent arg" error;
+					# delete <queue>.retry before redeploying with a new interval.
+					retry_queue_name = f"{queue_name}{config.RETRY_SUFFIX}"
+					retry_queue_args = self._build_retry_queue_args(
+						exchange_name=exchange_name,
+						routing_key=routing_key,
+						retry_cycle_interval=retry_cycle_interval,
+						use_quorum_queues=use_quorum_queues,
+					)
+					try:
+						retry_queue = await self._async_declare_queue(
+								queue_name=retry_queue_name,
+								arguments=retry_queue_args,
+								durable=exch_durable,
+								passive=False,
+								exclusive=False,
+								auto_delete=False
+								)
+						dlx_exchange_obj = await self._channel.get_exchange(dlx_name)
+						await self._async_declare_queue_binding(
+								exchange=dlx_exchange_obj,
+								queue=retry_queue,
+								routing_key=f"{dlx_routing}{config.RETRY_SUFFIX}",
+								arguments=None
+								)
+						if self.verbose:
+							log.info(f"Retry queue {retry_queue_name} declared (TTL={retry_cycle_interval}m, dead-letters back to {exchange_name}/{routing_key})")
+					except MrsalSetupError as e:
+						raise MrsalAbortedSetup(
+							f"Retry queue {retry_queue_name} setup failed: {e}. "
+							f"If retry_cycle_interval changed, delete {retry_queue_name} on the broker and redeploy."
+						) from e
+
+			queue_args = self._build_queue_args(
+				queue_name=queue_name,
+				dlx_enable=dlx_enable,
+				dlx_name=dlx_name,
+				dlx_routing=dlx_routing,
+				use_quorum_queues=use_quorum_queues,
+				max_queue_length=max_queue_length,
+				max_queue_length_bytes=max_queue_length_bytes,
+				queue_overflow=queue_overflow,
+				single_active_consumer=single_active_consumer,
+				lazy_queue=lazy_queue,
+				extra=queue_args,
+			)
+		else:
+			queue_args = {}
+			if self.verbose:
+				log.info(f"Passive mode: checking existence of queue {queue_name} without configuration")
+
+
+		async_declare_exhange_dict = {
+				'exchange': exchange_name,
+				'exchange_type': exchange_type,
+				'arguments': exch_args if not passive else None,
+				'durable': exch_durable,
+				'passive': passive,
+				'internal': internal,
+				'auto_delete': auto_delete
+				}
+
+		async_declare_queue_dict = {
+				'queue_name': queue_name,
+				'arguments': queue_args,
+				'durable': queue_durable,
+				'exclusive': exclusive,
+				'auto_delete': auto_delete,
+				'passive': passive
+				}
+
+		async_declare_queue_binding_dict = {
+				'routing_key': routing_key,
+				'arguments': bind_args
+
+				}
+
+		try:
+			# Declare exchange and queue
+			exchange = await self._async_declare_exchange(**async_declare_exhange_dict)
+			queue = await self._async_declare_queue(**async_declare_queue_dict)
+			if not passive:
+				await self._async_declare_queue_binding(queue=queue, exchange=exchange, **async_declare_queue_binding_dict)
+			self.auto_declare_ok = True
+			if not passive:
+				log.info(f"Exchange {exchange_name} and Queue {queue_name} declared successfully.")
+			else:
+				log.info(f"Exchange {exchange_name} and Queue {queue_name} verified to exist.")
+			if dlx_setup_ok:
+				log.info(f"You have a dead letter exhange {dlx_name} for fault tolerance -- use it well young grasshopper!")
+			return queue
+		except MrsalSetupError as e:
+			log.error(f'Splæt! I failed the declaration setup with {e}', exc_info=True)
+			self.auto_declare_ok = False
+
+
+	def _declare_exchange(self,
+							exchange: str, exchange_type: str,
+							arguments: dict[str, str] | None,
+							durable: bool, passive: bool,
+							internal: bool, auto_delete: bool,
+							channel=None
+							) -> None:
+		"""This method creates an exchange if it does not already exist, and if the exchange exists, verifies that it is of the correct and expected class.
+
+		If passive set, the server will reply with Declare-Ok if the exchange already exists with the same name,
+		and raise an error if not and if the exchange does not already exist, the server MUST raise a channel exception with reply code 404 (not found).
+
+		:param str exchange: The exchange name
+		:param str exchange_type: The exchange type to use
+		:param bool passive: Perform a declare or just check to see if it exists
+		:param bool durable: Survive a reboot of RabbitMQ
+		:param bool auto_delete: Remove when no more queues are bound to it
+		:param bool internal: Can only be published to by other exchanges
+		:param dict arguments: Custom key/value pair arguments for the exchange
+		:rtype: `pika.frame.Method` having `method` attribute of type `spec.Exchange.DeclareOk`
+		"""
+		exchange_declare_info = f"""
+								exchange={exchange},
+								exchange_type={exchange_type},
+								durable={durable},
+								passive={passive},
+								internal={internal},
+								auto_delete={auto_delete},
+								arguments={arguments}
+								"""
+		if self.verbose:
+			log.info(f"Declaring exchange with: {exchange_declare_info}")
+		ch = channel or self._channel
+		try:
+			ch.exchange_declare(
+				exchange=exchange, exchange_type=exchange_type,
+				arguments=arguments, durable=durable,
+				passive=passive, internal=internal,
+				auto_delete=auto_delete
+				)
+		except Exception as e:
+			raise MrsalSetupError(f'Oooopise! I failed declaring the exchange with : {e}')
+		if self.verbose:
+			log.info("Exchange declared yo!")
+
+	async def _async_declare_exchange(self,
+									exchange: str,
+									exchange_type: AioExchangeType,
+									arguments: dict[str, str] | None = None,
+									durable: bool = True,
+									passive: bool = False,
+									internal: bool = False,
+									auto_delete: bool = False) -> AioExchange:
+		"""Declare a RabbitMQ exchange in async mode."""
+		exchange_declare_info = f"""
+								exchange={exchange},
+								exchange_type={exchange_type},
+								durable={durable},
+								passive={passive},
+								internal={internal},
+								auto_delete={auto_delete},
+								arguments={arguments}
+								"""
+		if self.verbose:
+			log.info(f"Declaring exchange with: {exchange_declare_info}")
+
+		try:
+			exchange_obj = await self._channel.declare_exchange(
+				name=exchange,
+				type=exchange_type,
+				durable=durable,
+				auto_delete=auto_delete,
+				internal=internal,
+				arguments=arguments
+			)
+			return exchange_obj
+		except Exception as e:
+			raise MrsalSetupError(f"Failed to declare async exchange: {e}")
+
+	def _declare_queue(self,
+					queue: str, arguments: dict[str, str] | None,
+					durable: bool, exclusive: bool,
+					auto_delete: bool, passive: bool,
+					channel=None
+					) -> None:
+		"""Declare queue, create if needed. This method creates or checks a queue.
+		When creating a new queue the client can specify various properties that control the durability of the queue and its contents,
+		and the level of sharing for the queue.
+
+		Use an empty string as the queue name for the broker to auto-generate one.
+		Retrieve this auto-generated queue name from the returned `spec.Queue.DeclareOk` method frame.
+
+		:param str queue: The queue name; if empty string, the broker will create a unique queue name
+		:param bool passive: Only check to see if the queue exists and raise `ChannelClosed` if it doesn't
+		:param bool durable: Survive reboots of the broker
+		:param bool exclusive: Only allow access by the current connection
+		:param bool auto_delete: Delete after consumer cancels or disconnects
+		:param dict arguments: Custom key/value arguments for the queue
+		:returns: Method frame from the Queue.Declare-ok response
+		:rtype: `pika.frame.Method` having `method` attribute of type `spec.Queue.DeclareOk`
+		"""
+		queue_declare_info = f"""
+								queue={queue},
+								durable={durable},
+								exclusive={exclusive},
+								auto_delete={auto_delete},
+								arguments={arguments}
+								"""
+		if self.verbose:
+			log.info(f"Declaring queue with: {queue_declare_info}")
+
+		ch = channel or self._channel
+		try:
+			ch.queue_declare(queue=queue, arguments=arguments, durable=durable, exclusive=exclusive, auto_delete=auto_delete, passive=passive)
+		except Exception as e:
+			raise MrsalSetupError(f'Oooopise! I failed declaring the queue with : {e}')
+		if self.verbose:
+			log.info("Queue declared yo")
+
+	async def _async_declare_queue(self,
+								queue_name: str,
+								durable: bool = True,
+								exclusive: bool = False,
+								auto_delete: bool = False,
+								passive: bool = False,
+								arguments: dict[str, Any] | None = None) -> AioQueue:
+		"""Declare a RabbitMQ queue asynchronously."""
+		queue_declare_info = f"""
+								queue={queue_name},
+								durable={durable},
+								exclusive={exclusive},
+								auto_delete={auto_delete},
+								arguments={arguments}
+								"""
+		if self.verbose:
+			log.info(f"Declaring queue with: {queue_declare_info}")
+
+		try:
+			queue_obj = await self._channel.declare_queue(
+				name=queue_name,
+				durable=durable,
+				exclusive=exclusive,
+				auto_delete=auto_delete,
+				arguments=arguments,
+				passive=passive
+			)
+			return queue_obj
+		except Exception as e:
+			raise MrsalSetupError(f"Failed to declare async queue: {e}")
+
+	def _declare_queue_binding(self,
+							exchange: str, queue: str,
+							routing_key: str | None,
+							arguments: dict[str, str] | None,
+							channel=None
+							) -> None:
+		"""Bind queue to exchange.
+
+		:param str queue: The queue to bind to the exchange
+		:param str exchange: The source exchange to bind to
+		:param str routing_key: The routing key to bind on
+		:param dict arguments: Custom key/value pair arguments for the binding
+
+		:returns: Method frame from the Queue.Bind-ok response
+		:rtype: `pika.frame.Method` having `method` attribute of type `spec.Queue.BindOk`
+		"""
+		if self.verbose:
+			log.info(f"Binding queue to exchange: queue={queue}, exchange={exchange}, routing_key={routing_key}")
+
+		ch = channel or self._channel
+		try:
+			ch.queue_bind(exchange=exchange, queue=queue, routing_key=routing_key, arguments=arguments)
+			if self.verbose:
+				log.info(f"The queue is bound to exchange successfully: queue={queue}, exchange={exchange}, routing_key={routing_key}")
+		except Exception as e:
+			raise MrsalSetupError(f'I failed binding the queue with : {e}')
+		if self.verbose:
+			log.info("Queue bound yo")
+
+	async def _async_declare_queue_binding(self,
+										queue: AioQueue,
+										exchange: AioExchange,
+										routing_key: str | None,
+										arguments: dict[str, Any] | None = None) -> None:
+		"""Bind the queue to the exchange asynchronously."""
+		binding_info = f"""
+						queue={queue.name},
+						exchange={exchange.name},
+						routing_key={routing_key},
+						arguments={arguments}
+						"""
+		if self.verbose:
+			log.info(f"Binding queue to exchange with: {binding_info}")
+
+		try:
+			await queue.bind(exchange, routing_key=routing_key, arguments=arguments)
+		except Exception as e:
+			raise MrsalSetupError(f"Failed to bind async queue: {e}")
+
+	def _ssl_setup(self) -> SSLContext:
+		"""_ssl_setup is private method we are using to connect with rabbit server via signed certificates and some TLS settings.
+
+		Parameters
+		----------
+
+		Returns
+		-------
+		SSLContext
+
+		"""
+		context = ssl.create_default_context(cafile=self.tls_dict['ca'])
+		context.load_cert_chain(certfile=self.tls_dict['crt'], keyfile=self.tls_dict['key'])
+		return context
+
+	def get_ssl_context(self, async_conn: bool = True) -> SSLOptions | SSLContext | None:
+		if self.ssl:
+			log.info("Setting up TLS connection")
+			context = self._ssl_setup()
+			# use_blocking is the same as sync
+			if not async_conn:
+				ssl_options = pika.SSLOptions(context, self.host)
+				return ssl_options
+			else:
+				return context
+		else:
+			return None
+
+	def validate_payload(self, payload: Any, model: Type[T]) -> T:
+		"""
+		Parses and validates the incoming message payload using the provided dataclass model.
+		:param payload: The message payload which could be of any type (str, bytes, dict, etc.).
+		:param model: The pydantic dataclass model class to validate against.
+		:return: An instance of ``model`` on success. Raises on validation failure.
+		"""
+		# If payload is bytes, decode it to a string
+		if isinstance(payload, bytes):
+			payload = payload.decode('utf-8')
+
+		# If payload is a string, attempt to load it as JSON
+		if isinstance(payload, str):
+			payload = json.loads(payload)  # Converts JSON string to a dictionary
+
+		# Validate the payload against the provided model
+		if isinstance(payload, dict):
+			return model(**payload)
+		else:
+			raise TypeError(f"Fool, we aint supporting this type yet {type(payload)}.. Bytes or str -- get it straight")
+
+	def _get_retry_cycle_info(self, properties) -> dict:
+		"""Extract retry cycle information from message headers."""
+		if not hasattr(properties, 'headers') or not properties.headers:
+			return {'cycle_count': 0, 'first_failure': None, 'total_elapsed': 0}
+
+		headers = properties.headers
+		return {
+			'cycle_count': headers.get('x-cycle-count', 0),
+			'first_failure': headers.get('x-first-failure'),
+			'total_elapsed': headers.get('x-total-elapsed', 0)
+		}
+
+	def _should_continue_retry_cycles(self, retry_info: dict, enable_retry_cycles: bool, 
+									max_retry_time_limit: int) -> bool:
+		"""Check if message should continue retry cycles or go to permanent DLX."""
+		if not enable_retry_cycles or not self.dlx_enable:
+			return False
+
+		max_time_ms = max_retry_time_limit * 60 * 1000
+		return retry_info['total_elapsed'] < max_time_ms
+
+	def _create_retry_cycle_headers(self, original_headers: dict, cycle_count: int,
+								first_failure: str, processing_error: str,
+								should_cycle: bool) -> dict:
+		"""Create headers for DLX message with retry cycle info.
+
+		Note: routing back to the original queue is driven by ``x-dead-letter-exchange``
+		/ ``x-dead-letter-routing-key`` *queue arguments* on the ``.retry`` queue, not
+		by message headers — RabbitMQ does not honor those keys in headers.
+		"""
+		headers = original_headers.copy() if original_headers else {}
+		now = datetime.now(timezone.utc).isoformat()
+
+		# Calculate elapsed time
+		if first_failure:
+			try:
+				first_time = datetime.fromisoformat(first_failure.replace('Z', ''))
+				elapsed_ms = int((datetime.now(timezone.utc) - first_time).total_seconds() * 1000)
+			except (ValueError, TypeError):
+				elapsed_ms = 0
+		else:
+			first_failure = now
+			elapsed_ms = 0
+
+		# Update retry cycle tracking
+		headers.update({
+			'x-cycle-count': cycle_count + 1,
+			'x-first-failure': first_failure,
+			'x-total-elapsed': elapsed_ms,
+			'x-processing-error': processing_error,
+			'x-retry-exhausted': not should_cycle
+		})
+
+		return headers
+
+	def _build_dlx_retry_properties(self, properties, processing_error: str,
+									original_exchange: str, original_routing_key: str,
+									enable_retry_cycles: bool, retry_cycle_interval: int,
+									max_retry_time_limit: int, dlx_exchange_name: str | None,
+									dlx_routing_key: str | None = None) -> tuple[str, str, dict, dict]:
+		"""Build DLX target and properties for retry cycle publishing.
+
+		Returns (target_exchange, target_routing_key, properties, retry_info).
+		When ``should_cycle`` is True, target is the ``.retry`` queue binding
+		(``<dlx_routing>.retry``) so the broker-side TTL on that queue drives
+		the delay. When False, target is the terminal ``.dlx`` queue binding
+		and the message stays parked for manual review.
+		"""
+		retry_info = self._get_retry_cycle_info(properties)
+		should_cycle = self._should_continue_retry_cycles(retry_info, enable_retry_cycles, max_retry_time_limit)
+
+		target_exchange = dlx_exchange_name or f"{original_exchange}{config.DLX_SUFFIX}"
+		# Honor explicit dlx_routing_key (also used at bind time); fall back to original routing key.
+		dlx_routing = dlx_routing_key or original_routing_key
+		target_routing = f"{dlx_routing}{config.RETRY_SUFFIX}" if should_cycle else dlx_routing
+
+		original_headers = getattr(properties, 'headers', {}) or {}
+		enhanced_headers = self._create_retry_cycle_headers(
+			original_headers, retry_info['cycle_count'], retry_info['first_failure'],
+			processing_error, should_cycle
+		)
+
+		target_properties = {
+			'headers': enhanced_headers,
+			'delivery_mode': 2,
+			'content_type': getattr(properties, 'content_type', 'application/json')
+		}
+
+		return target_exchange, target_routing, target_properties, retry_info
+
+	def _log_dlx_result(self, retry_info: dict, retry_cycle_interval: int, should_cycle: bool) -> None:
+		"""Log the result of a DLX retry cycle publish."""
+		if should_cycle:
+			log.info(f"Message sent to DLX for retry cycle {retry_info['cycle_count'] + 1} "
+					f"(next retry in {retry_cycle_interval}m)")
+		else:
+			log.error(f"Message permanently failed after {retry_info['cycle_count']} cycles "
+					f"- staying in DLX for manual replay")
+
+	def _handle_dlx_with_retry_cycle_sync(
+			self, method_frame, properties, body, processing_error: str,
+			original_exchange: str, original_routing_key: str,
+			enable_retry_cycles: bool, retry_cycle_interval: int,
+			max_retry_time_limit: int, dlx_exchange_name: str | None,
+			dlx_routing_key: str | None = None):
+		"""Base method for DLX handling with retry cycles (sync)."""
+		target_exchange, target_routing, target_properties, retry_info = self._build_dlx_retry_properties(
+			properties=properties,
+			processing_error=processing_error,
+			original_exchange=original_exchange,
+			original_routing_key=original_routing_key,
+			enable_retry_cycles=enable_retry_cycles,
+			retry_cycle_interval=retry_cycle_interval,
+			max_retry_time_limit=max_retry_time_limit,
+			dlx_exchange_name=dlx_exchange_name,
+			dlx_routing_key=dlx_routing_key,
+		)
+		self._publish_to_dlx(target_exchange, target_routing, body, target_properties)
+		should_cycle = self._should_continue_retry_cycles(retry_info, enable_retry_cycles, max_retry_time_limit)
+		self._log_dlx_result(retry_info, retry_cycle_interval, should_cycle)
+
+	async def _handle_dlx_with_retry_cycle_async(
+			self, message, properties, processing_error: str,
+			original_exchange: str, original_routing_key: str,
+			enable_retry_cycles: bool, retry_cycle_interval: int,
+			max_retry_time_limit: int, dlx_exchange_name: str | None,
+			dlx_routing_key: str | None = None):
+		"""Base method for DLX handling with retry cycles (async)."""
+		target_exchange, target_routing, target_properties, retry_info = self._build_dlx_retry_properties(
+			properties=properties,
+			processing_error=processing_error,
+			original_exchange=original_exchange,
+			original_routing_key=original_routing_key,
+			enable_retry_cycles=enable_retry_cycles,
+			retry_cycle_interval=retry_cycle_interval,
+			max_retry_time_limit=max_retry_time_limit,
+			dlx_exchange_name=dlx_exchange_name,
+			dlx_routing_key=dlx_routing_key,
+		)
+		await self._publish_to_dlx(target_exchange, target_routing, message.body, target_properties)
+		should_cycle = self._should_continue_retry_cycles(retry_info, enable_retry_cycles, max_retry_time_limit)
+		self._log_dlx_result(retry_info, retry_cycle_interval, should_cycle)
+
+	def _publish_to_dlx(self, dlx_exchange: str, routing_key: str, body: bytes, properties: dict):
+		"""Abstract method - implemented by subclasses."""
+		raise NotImplementedError("Subclasses must implement _publish_to_dlx")
