@@ -529,6 +529,9 @@ def test_dlx_republish_honors_explicit_dlx_routing_key(amqp_consumer):
     Previously the DLX publish path used original_routing_key, but the DLX bind
     used dlx_routing_key. If they differed (e.g. orders_route vs orders_dlx),
     DLX messages were unroutable and silently dropped.
+
+    Under retry cycles (#84) the cycling publish targets ``<dlx_routing>.retry``;
+    the test still validates the dlx_routing_key base is honored.
     """
     valid_body = b'{"id": 1, "name": "Test", "active": true}'
     mock_method_frame = MagicMock()
@@ -564,7 +567,7 @@ def test_dlx_republish_honors_explicit_dlx_routing_key(amqp_consumer):
     dlx_publish_channel.basic_publish.assert_called_once()
     _, kwargs = dlx_publish_channel.basic_publish.call_args
     assert kwargs['exchange'] == 'test_x.dlx'
-    assert kwargs['routing_key'] == 'orders_dlx'
+    assert kwargs['routing_key'] == 'orders_dlx.retry'
     assert kwargs['body'] == valid_body
 
 

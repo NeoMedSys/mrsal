@@ -126,6 +126,74 @@ class Mrsal:
 
         return args
 
+    def _validate_retry_cycle_preconditions(
+        self,
+        *,
+        exchange_type: str | None,
+        routing_key: str | None,
+        retry_cycle_interval: int,
+    ) -> None:
+        """Reject ``enable_retry_cycles=True`` configurations that would silently drop messages.
+
+        - Non-positive ``retry_cycle_interval`` produces ``x-message-ttl <= 0``;
+          RabbitMQ either rejects the declare or dead-letters immediately,
+          creating a tight retry loop.
+        - Fanout / headers exchanges ignore routing keys, so the ``.retry`` and
+          ``.dlx`` bindings collapse to "every queue gets every message" and
+          exhausted messages get re-cycled indefinitely.
+        - Topic exchanges with wildcard binding keys (``*`` / ``#`` segments)
+          can't be used as the broker's dead-letter routing key — when the TTL
+          fires the broker tries to publish back to the original exchange with
+          the literal wildcard string, which matches no binding and is dropped.
+        """
+        if retry_cycle_interval <= 0:
+            raise MrsalAbortedSetup(
+                f"retry_cycle_interval must be > 0 (got {retry_cycle_interval}); "
+                "use enable_retry_cycles=False to opt out of cycling."
+            )
+        if exchange_type is not None and exchange_type not in config.RETRY_SAFE_EXCHANGE_TYPES:
+            raise MrsalAbortedSetup(
+                f"enable_retry_cycles=True is incompatible with exchange_type={exchange_type!r}: "
+                f"only {sorted(config.RETRY_SAFE_EXCHANGE_TYPES)} honor the .retry binding key, "
+                "so on fanout/headers exchanges cycling and parking collapse into the same queue "
+                "and exhausted messages re-cycle indefinitely. Set enable_retry_cycles=False."
+            )
+        if routing_key is not None and exchange_type == 'topic':
+            segments = routing_key.split('.')
+            if any(seg == '*' or seg == '#' for seg in segments):
+                raise MrsalAbortedSetup(
+                    f"enable_retry_cycles=True is incompatible with topic wildcard "
+                    f"routing_key={routing_key!r}: the broker would dead-letter expired "
+                    "messages back to the original exchange with the literal wildcard "
+                    "string as the routing key, which matches no binding and is silently "
+                    "dropped. Use a concrete routing key or set enable_retry_cycles=False."
+                )
+
+    def _build_retry_queue_args(
+        self,
+        *,
+        exchange_name: str,
+        routing_key: str,
+        retry_cycle_interval: int,
+        use_quorum_queues: bool,
+    ) -> dict:
+        """Build the ``x-arguments`` dict for the ``.retry`` queue declaration.
+
+        Shared by the sync and async setup paths to keep the two code paths
+        from drifting. ``x-message-ttl`` + ``x-dead-letter-exchange`` +
+        ``x-dead-letter-routing-key`` are queue-level arguments — RabbitMQ
+        does not honor the dead-letter keys in message headers.
+        """
+        args: dict = {
+            'x-message-ttl': retry_cycle_interval * 60 * 1000,
+            'x-dead-letter-exchange': exchange_name,
+            'x-dead-letter-routing-key': routing_key,
+        }
+        if use_quorum_queues:
+            args['x-queue-type'] = 'quorum'
+            args['x-quorum-initial-group-size'] = 3
+        return args
+
     def _setup_exchange_and_queue(self,
                                  exchange_name: str, queue_name: str, exchange_type: str,
                                  routing_key: str, exch_args: dict[str, Any] | None = None,
@@ -141,6 +209,8 @@ class Mrsal:
                                  queue_overflow: str | None = None,
                                  single_active_consumer: bool | None = None,
                                  lazy_queue: bool | None = None,
+                                 enable_retry_cycles: bool = False,
+                                 retry_cycle_interval: int = config.DEFAULT_RETRY_CYCLE_INTERVAL_MIN,
                                  channel=None
                                  ) -> None:
 
@@ -151,7 +221,7 @@ class Mrsal:
 
         if not passive:
             if dlx_enable:
-                dlx_name = dlx_exchange_name or f"{exchange_name}.dlx"
+                dlx_name = dlx_exchange_name or f"{exchange_name}{config.DLX_QUEUE_SUFFIX}"
                 dlx_routing = dlx_routing_key or routing_key
                 try:
                     self._declare_exchange(
@@ -170,7 +240,7 @@ class Mrsal:
                 except MrsalSetupError as e:
                     log.warning(f"DLX {dlx_name} might already exist or failed to create: {e}")
 
-                dlx_queue_name = f"{queue_name}.dlx"
+                dlx_queue_name = f"{queue_name}{config.DLX_QUEUE_SUFFIX}"
                 try:
                     self._declare_queue(
                             queue=dlx_queue_name,
@@ -192,7 +262,53 @@ class Mrsal:
                     if self.verbose:
                         log.info(f"DLX queue {dlx_queue_name} declared and bound successfully")
                 except MrsalSetupError as e:
-                    log.warning(f"DLX queue {dlx_queue_name} setup failed")
+                    # Fail loud: if the .dlx queue isn't declared/bound, every future
+                    # DLX publish becomes unroutable and we're back to silent loss.
+                    raise MrsalAbortedSetup(
+                        f"DLX queue {dlx_queue_name} setup failed: {e}. "
+                        "Future DLX publishes would be unroutable; refusing to start."
+                    ) from e
+
+                if enable_retry_cycles:
+                    # Broker-driven retry: TTL + DLX queue args route expired messages
+                    # back to the original exchange. Changing retry_cycle_interval after
+                    # the queue exists triggers RabbitMQ's "inequivalent arg" error;
+                    # delete <queue>.retry before redeploying with a new interval.
+                    retry_queue_name = f"{queue_name}{config.RETRY_QUEUE_SUFFIX}"
+                    retry_queue_args = self._build_retry_queue_args(
+                        exchange_name=exchange_name,
+                        routing_key=routing_key,
+                        retry_cycle_interval=retry_cycle_interval,
+                        use_quorum_queues=use_quorum_queues,
+                    )
+                    try:
+                        self._declare_queue(
+                                queue=retry_queue_name,
+                                arguments=retry_queue_args,
+                                durable=exch_durable,
+                                passive=False,
+                                exclusive=False,
+                                auto_delete=False,
+                                channel=channel
+                                )
+                        self._declare_queue_binding(
+                                exchange=dlx_name,
+                                queue=retry_queue_name,
+                                routing_key=f"{dlx_routing}{config.RETRY_QUEUE_SUFFIX}",
+                                arguments=None,
+                                channel=channel
+                                )
+                        if self.verbose:
+                            log.info(f"Retry queue {retry_queue_name} declared (TTL={retry_cycle_interval}m, dead-letters back to {exchange_name}/{routing_key})")
+                    except MrsalSetupError as e:
+                        # Fail loud: cycling publishes target the .retry binding, so a
+                        # missing/inconsistent .retry queue silently drops cycled
+                        # messages. If this fires after a retry_cycle_interval change,
+                        # delete <queue>.retry on the broker and redeploy.
+                        raise MrsalAbortedSetup(
+                            f"Retry queue {retry_queue_name} setup failed: {e}. "
+                            f"If retry_cycle_interval changed, delete {retry_queue_name} on the broker and redeploy."
+                        ) from e
 
             queue_args = self._build_queue_args(
                 queue_name=queue_name,
@@ -272,7 +388,9 @@ class Mrsal:
                                               max_queue_length_bytes: int | None = None,
                                               queue_overflow: str | None = None,
                                               single_active_consumer: bool | None = None,
-                                              lazy_queue: bool | None = None
+                                              lazy_queue: bool | None = None,
+                                              enable_retry_cycles: bool = False,
+                                              retry_cycle_interval: int = config.DEFAULT_RETRY_CYCLE_INTERVAL_MIN
                                               ) -> AioQueue | None:
         """Setup exchange and queue with bindings asynchronously."""
         if not self._connection:
@@ -285,7 +403,7 @@ class Mrsal:
 
         if not passive:
             if dlx_enable:
-                dlx_name = dlx_exchange_name or f"{exchange_name}.dlx"
+                dlx_name = dlx_exchange_name or f"{exchange_name}{config.DLX_QUEUE_SUFFIX}"
                 dlx_routing = dlx_routing_key or routing_key
 
                 try:
@@ -305,7 +423,7 @@ class Mrsal:
                 except MrsalSetupError as e:
                     log.warning(f"DLX {dlx_name} might already exist or failed to create: {e}")
 
-                dlx_queue_name = f"{queue_name}.dlx"
+                dlx_queue_name = f"{queue_name}{config.DLX_QUEUE_SUFFIX}"
                 try:
                     dlx_queue = await self._async_declare_queue(
                             queue_name=dlx_queue_name,
@@ -328,7 +446,46 @@ class Mrsal:
                     if self.verbose:
                         log.info(f"DLX queue {dlx_queue_name} declared and bound successfully")
                 except MrsalSetupError as e:
-                    log.warning(f"DLX queue {dlx_queue_name} setup failed")
+                    raise MrsalAbortedSetup(
+                        f"DLX queue {dlx_queue_name} setup failed: {e}. "
+                        "Future DLX publishes would be unroutable; refusing to start."
+                    ) from e
+
+                if enable_retry_cycles:
+                    # Broker-driven retry: TTL + DLX queue args route expired messages
+                    # back to the original exchange. Changing retry_cycle_interval after
+                    # the queue exists triggers RabbitMQ's "inequivalent arg" error;
+                    # delete <queue>.retry before redeploying with a new interval.
+                    retry_queue_name = f"{queue_name}{config.RETRY_QUEUE_SUFFIX}"
+                    retry_queue_args = self._build_retry_queue_args(
+                        exchange_name=exchange_name,
+                        routing_key=routing_key,
+                        retry_cycle_interval=retry_cycle_interval,
+                        use_quorum_queues=use_quorum_queues,
+                    )
+                    try:
+                        retry_queue = await self._async_declare_queue(
+                                queue_name=retry_queue_name,
+                                arguments=retry_queue_args,
+                                durable=exch_durable,
+                                passive=False,
+                                exclusive=False,
+                                auto_delete=False
+                                )
+                        dlx_exchange_obj = await self._channel.get_exchange(dlx_name)
+                        await self._async_declare_queue_binding(
+                                exchange=dlx_exchange_obj,
+                                queue=retry_queue,
+                                routing_key=f"{dlx_routing}{config.RETRY_QUEUE_SUFFIX}",
+                                arguments=None
+                                )
+                        if self.verbose:
+                            log.info(f"Retry queue {retry_queue_name} declared (TTL={retry_cycle_interval}m, dead-letters back to {exchange_name}/{routing_key})")
+                    except MrsalSetupError as e:
+                        raise MrsalAbortedSetup(
+                            f"Retry queue {retry_queue_name} setup failed: {e}. "
+                            f"If retry_cycle_interval changed, delete {retry_queue_name} on the broker and redeploy."
+                        ) from e
 
             queue_args = self._build_queue_args(
                 queue_name=queue_name,
@@ -664,9 +821,13 @@ class Mrsal:
 
     def _create_retry_cycle_headers(self, original_headers: dict, cycle_count: int,
                                    first_failure: str, processing_error: str,
-                                   should_cycle: bool, original_exchange: str,
-                                   original_routing_key: str) -> dict:
-        """Create headers for DLX message with retry cycle info."""
+                                   should_cycle: bool) -> dict:
+        """Create headers for DLX message with retry cycle info.
+
+        Note: routing back to the original queue is driven by ``x-dead-letter-exchange``
+        / ``x-dead-letter-routing-key`` *queue arguments* on the ``.retry`` queue, not
+        by message headers — RabbitMQ does not honor those keys in headers.
+        """
         headers = original_headers.copy() if original_headers else {}
         now = datetime.now(timezone.utc).isoformat()
 
@@ -690,13 +851,6 @@ class Mrsal:
             'x-retry-exhausted': not should_cycle
         })
 
-        # If cycling, set TTL and routing back to original queue
-        if should_cycle:
-            headers.update({
-                'x-dead-letter-exchange': original_exchange,
-                'x-dead-letter-routing-key': original_routing_key
-            })
-
         return headers
 
     def _build_dlx_retry_properties(self, properties, processing_error: str,
@@ -704,34 +858,35 @@ class Mrsal:
                                     enable_retry_cycles: bool, retry_cycle_interval: int,
                                     max_retry_time_limit: int, dlx_exchange_name: str | None,
                                     dlx_routing_key: str | None = None) -> tuple[str, str, dict, dict]:
-        """Build DLX properties and headers for retry cycle publishing.
+        """Build DLX target and properties for retry cycle publishing.
 
-        Returns (dlx_name, dlx_routing, dlx_properties, retry_info).
+        Returns (target_exchange, target_routing_key, properties, retry_info).
+        When ``should_cycle`` is True, target is the ``.retry`` queue binding
+        (``<dlx_routing>.retry``) so the broker-side TTL on that queue drives
+        the delay. When False, target is the terminal ``.dlx`` queue binding
+        and the message stays parked for manual review.
         """
         retry_info = self._get_retry_cycle_info(properties)
         should_cycle = self._should_continue_retry_cycles(retry_info, enable_retry_cycles, max_retry_time_limit)
 
-        dlx_name = dlx_exchange_name or f"{original_exchange}.dlx"
+        target_exchange = dlx_exchange_name or f"{original_exchange}{config.DLX_QUEUE_SUFFIX}"
         # Honor explicit dlx_routing_key (also used at bind time); fall back to original routing key.
         dlx_routing = dlx_routing_key or original_routing_key
+        target_routing = f"{dlx_routing}{config.RETRY_QUEUE_SUFFIX}" if should_cycle else dlx_routing
 
         original_headers = getattr(properties, 'headers', {}) or {}
         enhanced_headers = self._create_retry_cycle_headers(
             original_headers, retry_info['cycle_count'], retry_info['first_failure'],
-            processing_error, should_cycle, original_exchange, original_routing_key
+            processing_error, should_cycle
         )
 
-        dlx_properties = {
+        target_properties = {
             'headers': enhanced_headers,
             'delivery_mode': 2,
             'content_type': getattr(properties, 'content_type', 'application/json')
         }
 
-        if should_cycle:
-            ttl_ms = retry_cycle_interval * 60 * 1000
-            dlx_properties['expiration'] = str(ttl_ms)
-
-        return dlx_name, dlx_routing, dlx_properties, retry_info
+        return target_exchange, target_routing, target_properties, retry_info
 
     def _log_dlx_result(self, retry_info: dict, retry_cycle_interval: int, should_cycle: bool) -> None:
         """Log the result of a DLX retry cycle publish."""
@@ -749,7 +904,7 @@ class Mrsal:
             max_retry_time_limit: int, dlx_exchange_name: str | None,
             dlx_routing_key: str | None = None):
         """Base method for DLX handling with retry cycles (sync)."""
-        dlx_name, dlx_routing, dlx_properties, retry_info = self._build_dlx_retry_properties(
+        target_exchange, target_routing, target_properties, retry_info = self._build_dlx_retry_properties(
             properties=properties,
             processing_error=processing_error,
             original_exchange=original_exchange,
@@ -760,7 +915,7 @@ class Mrsal:
             dlx_exchange_name=dlx_exchange_name,
             dlx_routing_key=dlx_routing_key,
         )
-        self._publish_to_dlx(dlx_name, dlx_routing, body, dlx_properties)
+        self._publish_to_dlx(target_exchange, target_routing, body, target_properties)
         should_cycle = self._should_continue_retry_cycles(retry_info, enable_retry_cycles, max_retry_time_limit)
         self._log_dlx_result(retry_info, retry_cycle_interval, should_cycle)
 
@@ -771,7 +926,7 @@ class Mrsal:
             max_retry_time_limit: int, dlx_exchange_name: str | None,
             dlx_routing_key: str | None = None):
         """Base method for DLX handling with retry cycles (async)."""
-        dlx_name, dlx_routing, dlx_properties, retry_info = self._build_dlx_retry_properties(
+        target_exchange, target_routing, target_properties, retry_info = self._build_dlx_retry_properties(
             properties=properties,
             processing_error=processing_error,
             original_exchange=original_exchange,
@@ -782,7 +937,7 @@ class Mrsal:
             dlx_exchange_name=dlx_exchange_name,
             dlx_routing_key=dlx_routing_key,
         )
-        await self._publish_to_dlx(dlx_name, dlx_routing, message.body, dlx_properties)
+        await self._publish_to_dlx(target_exchange, target_routing, message.body, target_properties)
         should_cycle = self._should_continue_retry_cycles(retry_info, enable_retry_cycles, max_retry_time_limit)
         self._log_dlx_result(retry_info, retry_cycle_interval, should_cycle)
 

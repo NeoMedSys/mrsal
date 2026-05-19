@@ -3,6 +3,7 @@ from unittest.mock import Mock, MagicMock, AsyncMock, patch
 from aio_pika.exceptions import DeliveryError
 
 from mrsal.amqp.subclass import MrsalBlockingAMQP, MrsalAsyncAMQP
+from mrsal.exceptions import MrsalAbortedSetup
 from tests.conftest import AsyncIteratorMock, ExpectedPayload
 
 
@@ -576,3 +577,460 @@ class TestDLXRetryHeaders:
 			retry_info, enable_retry_cycles=True, max_retry_time_limit=1
 		)
 		assert should_continue is False
+
+	def test_cycling_publish_targets_retry_binding(self, mock_consumer):
+		"""Cycling DLX publish must route to the ``<dlx_routing>.retry`` binding
+		so the broker-side TTL on the ``.retry`` queue drives the delay.
+		Regression for the silent-drop bug (#84): the previous implementation
+		published to the terminal ``.dlx`` binding with a per-message TTL,
+		which RabbitMQ then expired without a dead-letter target."""
+		mock_properties = MagicMock()
+		mock_properties.headers = None
+		mock_properties.content_type = 'application/json'
+
+		target_exchange, target_routing, dlx_properties, _ = mock_consumer._build_dlx_retry_properties(
+			properties=mock_properties,
+			processing_error="boom",
+			original_exchange="orders_exchange",
+			original_routing_key="new_order",
+			enable_retry_cycles=True,
+			retry_cycle_interval=1,
+			max_retry_time_limit=60,
+			dlx_exchange_name=None,
+		)
+
+		assert target_exchange == "orders_exchange.dlx"
+		assert target_routing == "new_order.retry"
+		# Per-message expiration is gone -- queue-level TTL handles the delay now.
+		assert 'expiration' not in dlx_properties
+		# Routing-back-to-original lives in queue args, not headers.
+		assert 'x-dead-letter-exchange' not in dlx_properties['headers']
+		assert 'x-dead-letter-routing-key' not in dlx_properties['headers']
+		# Retry tracking headers are still produced.
+		assert dlx_properties['headers']['x-cycle-count'] == 1
+		assert dlx_properties['headers']['x-retry-exhausted'] is False
+
+	def test_exhausted_publish_targets_terminal_dlx_binding(self, mock_consumer):
+		"""When the retry budget is spent, publish must target the terminal
+		``.dlx`` binding (not the ``.retry`` one) so the message stays parked
+		for human review instead of cycling forever."""
+		mock_properties = MagicMock()
+		# Already exceeded max_retry_time_limit=1 minute.
+		mock_properties.headers = {
+			'x-cycle-count': 5,
+			'x-first-failure': '2024-01-01T10:00:00Z',
+			'x-total-elapsed': 120000
+		}
+		mock_properties.content_type = 'application/json'
+
+		target_exchange, target_routing, dlx_properties, _ = mock_consumer._build_dlx_retry_properties(
+			properties=mock_properties,
+			processing_error="boom",
+			original_exchange="orders_exchange",
+			original_routing_key="new_order",
+			enable_retry_cycles=True,
+			retry_cycle_interval=1,
+			max_retry_time_limit=1,
+			dlx_exchange_name=None,
+		)
+
+		assert target_exchange == "orders_exchange.dlx"
+		assert target_routing == "new_order"
+		assert 'expiration' not in dlx_properties
+		assert dlx_properties['headers']['x-retry-exhausted'] is True
+
+	def test_retry_queue_declared_with_ttl_and_dead_letter_args(self, mock_consumer):
+		"""Setup must declare ``<queue>.retry`` with queue-level TTL + DLX args
+		pointing back to the original exchange. RabbitMQ does not honor those
+		keys in message headers, only in queue arguments."""
+		# Capture queue declarations made during setup.
+		declared_queues: list[dict] = []
+		mock_consumer._declare_exchange = MagicMock()
+		mock_consumer._declare_queue = MagicMock(
+			side_effect=lambda **kwargs: declared_queues.append(kwargs)
+		)
+		mock_consumer._declare_queue_binding = MagicMock()
+
+		mock_consumer._setup_exchange_and_queue(
+			exchange_name="orders_exchange",
+			queue_name="orders_queue",
+			exchange_type="direct",
+			routing_key="new_order",
+			dlx_enable=True,
+			enable_retry_cycles=True,
+			retry_cycle_interval=5,
+			use_quorum_queues=False,
+		)
+
+		retry_decls = [q for q in declared_queues if q['queue'] == 'orders_queue.retry']
+		assert len(retry_decls) == 1, f"expected one .retry queue declaration, got {declared_queues}"
+		retry_args = retry_decls[0]['arguments']
+		assert retry_args['x-message-ttl'] == 5 * 60 * 1000
+		assert retry_args['x-dead-letter-exchange'] == 'orders_exchange'
+		assert retry_args['x-dead-letter-routing-key'] == 'new_order'
+
+	def test_retry_queue_not_declared_when_retry_cycles_disabled(self, mock_consumer):
+		"""Operators who opt out of retry cycles should not get an unused
+		``.retry`` queue created on the broker."""
+		declared_queues: list[dict] = []
+		mock_consumer._declare_exchange = MagicMock()
+		mock_consumer._declare_queue = MagicMock(
+			side_effect=lambda **kwargs: declared_queues.append(kwargs)
+		)
+		mock_consumer._declare_queue_binding = MagicMock()
+
+		mock_consumer._setup_exchange_and_queue(
+			exchange_name="orders_exchange",
+			queue_name="orders_queue",
+			exchange_type="direct",
+			routing_key="new_order",
+			dlx_enable=True,
+			enable_retry_cycles=False,
+			use_quorum_queues=False,
+		)
+
+		retry_decls = [q for q in declared_queues if q['queue'].endswith('.retry')]
+		assert retry_decls == []
+
+
+class TestRetryCyclePreconditions:
+	"""start_consumer must reject configurations that would silently drop cycled messages."""
+
+	@pytest.fixture
+	def mock_consumer(self):
+		consumer = MrsalBlockingAMQP(
+			host="localhost",
+			port=5672,
+			credentials=("user", "password"),
+			virtual_host="testboi",
+			dlx_enable=True,
+			blocked_connection_timeout=60,
+		)
+		consumer._connection = MagicMock()
+		consumer._channel = MagicMock()
+		consumer._consumer_channel = consumer._channel
+		consumer._connection.channel.return_value = consumer._channel
+		consumer._setup_exchange_and_queue = MagicMock()
+		consumer.auto_declare_ok = True
+		return consumer
+
+	@pytest.fixture
+	def mock_async_consumer(self):
+		consumer = MrsalAsyncAMQP(
+			host="localhost",
+			port=5672,
+			credentials=("user", "password"),
+			virtual_host="testboi",
+			dlx_enable=True,
+		)
+		consumer._connection = AsyncMock()
+		consumer._connection.is_closed = False
+		consumer._channel = AsyncMock()
+		consumer._channel.is_closed = False
+		consumer._async_setup_exchange_and_queue = AsyncMock()
+		return consumer
+
+	def test_rejects_zero_retry_cycle_interval(self, mock_consumer):
+		with pytest.raises(MrsalAbortedSetup, match="retry_cycle_interval must be > 0"):
+			mock_consumer.start_consumer(
+				queue_name="q",
+				exchange_name="x",
+				exchange_type="direct",
+				routing_key="rk",
+				callback=Mock(),
+				enable_retry_cycles=True,
+				retry_cycle_interval=0,
+			)
+
+	def test_rejects_negative_retry_cycle_interval(self, mock_consumer):
+		with pytest.raises(MrsalAbortedSetup, match="retry_cycle_interval must be > 0"):
+			mock_consumer.start_consumer(
+				queue_name="q",
+				exchange_name="x",
+				exchange_type="direct",
+				routing_key="rk",
+				callback=Mock(),
+				enable_retry_cycles=True,
+				retry_cycle_interval=-5,
+			)
+
+	def test_rejects_fanout_exchange_with_retry_cycles(self, mock_consumer):
+		with pytest.raises(MrsalAbortedSetup, match="exchange_type='fanout'"):
+			mock_consumer.start_consumer(
+				queue_name="q",
+				exchange_name="x",
+				exchange_type="fanout",
+				routing_key="",
+				callback=Mock(),
+				enable_retry_cycles=True,
+			)
+
+	def test_rejects_headers_exchange_with_retry_cycles(self, mock_consumer):
+		with pytest.raises(MrsalAbortedSetup, match="exchange_type='headers'"):
+			mock_consumer.start_consumer(
+				queue_name="q",
+				exchange_name="x",
+				exchange_type="headers",
+				routing_key="rk",
+				callback=Mock(),
+				enable_retry_cycles=True,
+			)
+
+	def test_rejects_topic_wildcard_star(self, mock_consumer):
+		with pytest.raises(MrsalAbortedSetup, match="topic wildcard"):
+			mock_consumer.start_consumer(
+				queue_name="q",
+				exchange_name="x",
+				exchange_type="topic",
+				routing_key="orders.*",
+				callback=Mock(),
+				enable_retry_cycles=True,
+			)
+
+	def test_rejects_topic_wildcard_hash(self, mock_consumer):
+		with pytest.raises(MrsalAbortedSetup, match="topic wildcard"):
+			mock_consumer.start_consumer(
+				queue_name="q",
+				exchange_name="x",
+				exchange_type="topic",
+				routing_key="orders.#",
+				callback=Mock(),
+				enable_retry_cycles=True,
+			)
+
+	def test_concrete_topic_key_is_accepted(self, mock_consumer):
+		"""A topic exchange with a concrete (non-wildcard) routing key is fine."""
+		mock_consumer._channel.consume.return_value = []
+		# Should not raise.
+		mock_consumer.start_consumer(
+			queue_name="q",
+			exchange_name="x",
+			exchange_type="topic",
+			routing_key="orders.created",
+			callback=Mock(),
+			enable_retry_cycles=True,
+		)
+
+	def test_rejections_skipped_when_retry_cycles_disabled(self, mock_consumer):
+		"""Fanout + retry cycles disabled is a valid combination (terminal DLX only)."""
+		mock_consumer._channel.consume.return_value = []
+		# Should not raise even though the exchange is fanout.
+		mock_consumer.start_consumer(
+			queue_name="q",
+			exchange_name="x",
+			exchange_type="fanout",
+			routing_key="",
+			callback=Mock(),
+			enable_retry_cycles=False,
+		)
+
+	@pytest.mark.asyncio
+	async def test_async_rejects_fanout_exchange(self, mock_async_consumer):
+		with pytest.raises(MrsalAbortedSetup, match="exchange_type='fanout'"):
+			await mock_async_consumer.start_consumer(
+				queue_name="q",
+				exchange_name="x",
+				exchange_type="fanout",
+				routing_key="",
+				callback=AsyncMock(),
+				enable_retry_cycles=True,
+			)
+
+	@pytest.mark.asyncio
+	async def test_async_rejects_topic_wildcard(self, mock_async_consumer):
+		with pytest.raises(MrsalAbortedSetup, match="topic wildcard"):
+			await mock_async_consumer.start_consumer(
+				queue_name="q",
+				exchange_name="x",
+				exchange_type="topic",
+				routing_key="orders.*",
+				callback=AsyncMock(),
+				enable_retry_cycles=True,
+			)
+
+
+class TestRetryQueueSetupFailureEscalation:
+	"""Setup failures on the .dlx / .retry queues must abort start_consumer.
+
+	A missing or inconsistent queue makes future DLX publishes unroutable; with
+	``mandatory=True`` they'd raise per message, but operators want the failure
+	at startup, not later in production."""
+
+	@pytest.fixture
+	def consumer(self):
+		from mrsal.exceptions import MrsalSetupError
+		consumer = MrsalBlockingAMQP(
+			host="localhost",
+			port=5672,
+			credentials=("user", "password"),
+			virtual_host="testboi",
+			dlx_enable=True,
+			blocked_connection_timeout=60,
+		)
+		consumer._connection = MagicMock()
+		consumer._channel = MagicMock()
+		consumer._declare_exchange = MagicMock()
+		consumer._declare_queue_binding = MagicMock()
+		return consumer
+
+	def test_dlx_queue_setup_failure_raises_aborted_setup(self, consumer):
+		from mrsal.exceptions import MrsalSetupError
+		# The first _declare_queue call is for .dlx -- make it fail.
+		consumer._declare_queue = MagicMock(
+			side_effect=MrsalSetupError("inequivalent arg 'x-max-length'")
+		)
+		with pytest.raises(MrsalAbortedSetup, match="DLX queue .* setup failed"):
+			consumer._setup_exchange_and_queue(
+				exchange_name="x",
+				queue_name="q",
+				exchange_type="direct",
+				routing_key="rk",
+				dlx_enable=True,
+				enable_retry_cycles=False,
+			)
+
+	def test_retry_queue_setup_failure_raises_aborted_setup(self, consumer):
+		from mrsal.exceptions import MrsalSetupError
+		# Let .dlx declare succeed, but fail on the second declare (.retry).
+		call_log: list[str] = []
+
+		def declare(**kwargs):
+			call_log.append(kwargs['queue'])
+			if kwargs['queue'].endswith('.retry'):
+				raise MrsalSetupError("inequivalent arg 'x-message-ttl'")
+
+		consumer._declare_queue = MagicMock(side_effect=declare)
+
+		with pytest.raises(MrsalAbortedSetup, match="Retry queue .* setup failed"):
+			consumer._setup_exchange_and_queue(
+				exchange_name="x",
+				queue_name="q",
+				exchange_type="direct",
+				routing_key="rk",
+				dlx_enable=True,
+				enable_retry_cycles=True,
+				retry_cycle_interval=5,
+			)
+		# Sanity check: .dlx was declared, then .retry tried.
+		assert call_log == ['q.dlx', 'q.retry']
+
+
+class TestSyncDLXPublishMandatoryFlag:
+	"""_publish_to_dlx must publish with mandatory=True so unroutable messages
+	(e.g. .retry queue missing after a botched redeploy) raise instead of
+	being ack-and-discarded by the broker under publisher confirms."""
+
+	def test_sync_publish_uses_mandatory_true(self):
+		consumer = MrsalBlockingAMQP(
+			host="localhost",
+			port=5672,
+			credentials=("user", "password"),
+			virtual_host="testboi",
+			dlx_enable=True,
+			blocked_connection_timeout=60,
+		)
+		consumer._connection = MagicMock()
+		consumer._channel = MagicMock()
+		consumer._consumer_channel = MagicMock()
+
+		consumer._publish_to_dlx(
+			dlx_exchange="x.dlx",
+			routing_key="rk",
+			body=b"{}",
+			properties={'headers': None},
+		)
+
+		dlx_channel = consumer._connection.channel.return_value
+		dlx_channel.basic_publish.assert_called_once()
+		_, kwargs = dlx_channel.basic_publish.call_args
+		assert kwargs['mandatory'] is True, (
+			"Without mandatory=True, unroutable DLX publishes are silently dropped "
+			"by the broker under publisher confirms -- defeats the whole point of #84."
+		)
+
+
+class TestAsyncRetryQueueSetup:
+	"""Mirror the sync .retry-queue declaration coverage for the async setup path."""
+
+	@pytest.mark.asyncio
+	async def test_async_retry_queue_declared_with_ttl_and_dead_letter_args(self):
+		consumer = MrsalAsyncAMQP(
+			host="localhost",
+			port=5672,
+			credentials=("user", "password"),
+			virtual_host="testboi",
+			dlx_enable=True,
+			use_quorum_queues=False,
+		)
+		consumer._connection = AsyncMock()
+		consumer._channel = AsyncMock()
+		# get_exchange is awaited during binding setup.
+		consumer._channel.get_exchange = AsyncMock(return_value=AsyncMock())
+
+		declared: list[dict] = []
+
+		async def fake_declare_queue(**kwargs):
+			declared.append(kwargs)
+			return AsyncMock()
+
+		async def fake_declare_exchange(**kwargs):
+			return AsyncMock()
+
+		async def fake_declare_binding(**kwargs):
+			return None
+
+		consumer._async_declare_queue = fake_declare_queue
+		consumer._async_declare_exchange = fake_declare_exchange
+		consumer._async_declare_queue_binding = fake_declare_binding
+
+		await consumer._async_setup_exchange_and_queue(
+			exchange_name="orders_exchange",
+			queue_name="orders_queue",
+			exchange_type="direct",
+			routing_key="new_order",
+			dlx_enable=True,
+			enable_retry_cycles=True,
+			retry_cycle_interval=5,
+			use_quorum_queues=False,
+		)
+
+		retry_decls = [q for q in declared if q['queue_name'] == 'orders_queue.retry']
+		assert len(retry_decls) == 1, f"expected one .retry queue declaration, got {declared}"
+		retry_args = retry_decls[0]['arguments']
+		assert retry_args['x-message-ttl'] == 5 * 60 * 1000
+		assert retry_args['x-dead-letter-exchange'] == 'orders_exchange'
+		assert retry_args['x-dead-letter-routing-key'] == 'new_order'
+
+	@pytest.mark.asyncio
+	async def test_async_retry_queue_setup_failure_raises_aborted_setup(self):
+		from mrsal.exceptions import MrsalSetupError
+		consumer = MrsalAsyncAMQP(
+			host="localhost",
+			port=5672,
+			credentials=("user", "password"),
+			virtual_host="testboi",
+			dlx_enable=True,
+		)
+		consumer._connection = AsyncMock()
+		consumer._channel = AsyncMock()
+		consumer._channel.get_exchange = AsyncMock(return_value=AsyncMock())
+
+		async def declare(**kwargs):
+			if kwargs['queue_name'].endswith('.retry'):
+				raise MrsalSetupError("inequivalent arg 'x-message-ttl'")
+			return AsyncMock()
+
+		consumer._async_declare_queue = declare
+		consumer._async_declare_exchange = AsyncMock(return_value=AsyncMock())
+		consumer._async_declare_queue_binding = AsyncMock()
+
+		with pytest.raises(MrsalAbortedSetup, match="Retry queue .* setup failed"):
+			await consumer._async_setup_exchange_and_queue(
+				exchange_name="x",
+				queue_name="q",
+				exchange_type="direct",
+				routing_key="rk",
+				dlx_enable=True,
+				enable_retry_cycles=True,
+				retry_cycle_interval=5,
+			)

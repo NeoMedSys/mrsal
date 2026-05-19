@@ -1,5 +1,5 @@
 # MRSAL AMQP
-[![Release](https://img.shields.io/badge/release-3.8.1-blue.svg)](https://pypi.org/project/mrsal/) 
+[![Release](https://img.shields.io/badge/release-3.8.2-blue.svg)](https://pypi.org/project/mrsal/) 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%7C3.11%7C3.12-blue.svg)](https://www.python.org/downloads/)
 [![Mrsal Workflow](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml/badge.svg?branch=main)](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml)
 [![Coverage](https://neomedsys.github.io/mrsal/reports/badges/coverage-badge.svg)](https://neomedsys.github.io/mrsal/reports/coverage/htmlcov/)
@@ -290,7 +290,7 @@ mrsal = MrsalBlockingAMQP(
     port=int(RABBITMQ_PORT),
     credentials=(RABBITMQ_USER, RABBITMQ_PASSWORD),
     virtual_host=RABBITMQ_VHOST,
-    dlx_enable=True,        # Default: creates '<exchange_name>.dlx'
+    dlx_enable=True,        # Default: creates '<exchange>.dlx' (+ '<queue>.retry' when retry cycles are on)
 )
 
 # Advanced retry configuration with cycles
@@ -312,14 +312,29 @@ mrsal.start_consumer(
 
 **How the advanced retry logic works:**
 
-2. **Retry Cycles**: Send to DLX with TTL for time-delayed retry
-3. **Cycle Tracking**: Each cycle increments counters and tracks total elapsed time
-4. **Permanent Failure**: After \`max_retry_time_limit\` exceeded → message stays in DLX for manual review
+When `enable_retry_cycles=True`, Mrsal declares two queues alongside the DLX exchange:
+
+- `<queue>.retry` — a delay queue with a broker-side `x-message-ttl` of `retry_cycle_interval` minutes and `x-dead-letter-exchange` / `x-dead-letter-routing-key` queue arguments pointing back to the original exchange/routing key. Failed messages land here, sit for the TTL, and are dead-lettered back to the original queue automatically by the broker.
+- `<queue>.dlx` — the terminal parking lot. Messages whose `max_retry_time_limit` is exhausted are published here and stay until a human replays them.
+
+1. **First failure**: Message is published to `<queue>.retry` with retry-tracking headers (`x-cycle-count`, `x-first-failure`, `x-total-elapsed`, `x-processing-error`).
+2. **Retry Cycles**: After `retry_cycle_interval` minutes, RabbitMQ dead-letters the message back to the original queue. The consumer reprocesses it; if it fails again and `total_elapsed < max_retry_time_limit`, it cycles again.
+3. **Permanent Failure**: Once `max_retry_time_limit` is exceeded, the message is published to `<queue>.dlx` with `x-retry-exhausted=True` and stays there for manual review.
 
 **Benefits:**
 - Handles longer outages with time-delayed cycles  
 - Full observability with retry tracking  
 - Manual intervention capability for persistent failures
+
+> **Operational note:** `retry_cycle_interval` is baked into the `<queue>.retry` queue declaration as `x-message-ttl`. Changing it between deployments will trip RabbitMQ's `PRECONDITION_FAILED - inequivalent arg 'x-message-ttl'` error on the existing queue, and Mrsal will **abort startup with `MrsalAbortedSetup`** rather than silently fall through to a misconfigured retry path. To roll out a new interval: delete the `<queue>.retry` queue on the broker, then redeploy.
+
+**Constraints (rejected at `start_consumer` time):**
+
+Because the two-queue retry topology relies on the broker honoring distinct binding keys for `<queue>.retry` and `<queue>.dlx`, some configurations would silently drop cycled messages and are rejected with `MrsalAbortedSetup`:
+
+- `exchange_type='fanout'` or `'headers'` with `enable_retry_cycles=True` — fanout/headers exchanges ignore routing keys, so cycling and parking collapse into the same queue and exhausted messages re-cycle indefinitely. Use `enable_retry_cycles=False` for these exchange types (terminal DLX still works).
+- `exchange_type='topic'` with a wildcard `routing_key` (`*` or `#` segments) and `enable_retry_cycles=True` — the broker would dead-letter expired messages back to the original exchange with the literal wildcard string as the routing key, which matches no binding. Use a concrete routing key, or `enable_retry_cycles=False`.
+- `retry_cycle_interval <= 0` — produces a zero or negative TTL, which either makes the broker reject the declare or dead-letters every message immediately into a tight retry loop.
 
 #### 4.1.1 `auto_ack` and reliability
 

@@ -18,6 +18,24 @@ except ValueError:
 	LOG_DAYS: int = 10
 
 
+# DLX retry-cycle defaults. Sourced here so the consumer entry points and
+# the setup paths stay in sync — they used to duplicate the literal 10 / 60.
+DEFAULT_RETRY_CYCLE_INTERVAL_MIN: int = 10
+DEFAULT_MAX_RETRY_TIME_LIMIT_MIN: int = 60
+
+# Naming convention for the two-queue retry topology. Both suffixes are
+# appended to the consumer's queue name (and the binding key on the DLX
+# exchange) so operators can identify each queue's role at a glance.
+DLX_QUEUE_SUFFIX: str = ".dlx"
+RETRY_QUEUE_SUFFIX: str = ".retry"
+
+# Exchange types where the .retry binding key is honored. fanout and headers
+# exchanges ignore routing keys, so retry/.dlx separation collapses and the
+# message gets re-cycled even after the retry budget is exhausted. The
+# consumer entry points reject ``enable_retry_cycles=True`` for the others.
+RETRY_SAFE_EXCHANGE_TYPES: frozenset[str] = frozenset({"direct", "topic"})
+
+
 class AioPikaAttributes(BaseModel):
     """Mirrors the subset of pika.BasicProperties that callbacks may read.
 
