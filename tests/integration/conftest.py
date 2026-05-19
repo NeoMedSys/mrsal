@@ -151,6 +151,10 @@ def cleanup_topology():
     tracker = _Tracker()
     yield tracker
 
+    # ``queue_delete`` removes the queue's bindings implicitly — that's why the
+    # tracker doesn't need to track ``.retry`` -> DLX exchange bindings
+    # separately. If a future test asserts on binding state directly, switch
+    # to explicit ``queue_unbind`` before delete.
     with raw_pika_channel() as ch:
         for q in queues:
             try:
@@ -207,6 +211,17 @@ class SyncConsumerRunner:
         )
 
     def stop(self, timeout: float = 10.0) -> None:
+        # Two cooperating exit mechanisms here:
+        #   1. ``BlockingChannel.cancel()`` (no-arg) cancels every active
+        #      consumer on the channel and drains the generator returned by
+        #      ``channel.consume(...)``, so the ``for ... in consume(...)``
+        #      loop inside ``start_consumer`` exits with StopIteration on
+        #      its next iteration. Scheduled via ``add_callback_threadsafe``
+        #      because pika channels are owned by the consumer thread.
+        #   2. As a safety net, every test passes ``inactivity_timeout=1`` so
+        #      the consume loop wakes up at least once per second — if (1)
+        #      ever stops working on a future pika version, the loop will
+        #      still drain on its own once the broker side falls quiet.
         c = self.consumer
         if c._consumer_channel is not None and c._connection is not None:
             try:
