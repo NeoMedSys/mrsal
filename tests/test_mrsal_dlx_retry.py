@@ -754,6 +754,34 @@ class TestRetryCyclePreconditions:
 				retry_cycle_interval=-5,
 			)
 
+	def test_rejects_none_exchange_type_with_auto_declare(self, mock_consumer):
+		"""auto_declare=True + retry_cycles=True + exchange_type=None is incoherent:
+		the library is about to declare .retry/.dlx bindings tied to exchange_type,
+		and a missing type can't be validated or declared. Fail loud."""
+		with pytest.raises(MrsalAbortedSetup, match="requires an explicit exchange_type"):
+			mock_consumer.start_consumer(
+				queue_name="q",
+				exchange_name="x",
+				exchange_type=None,
+				routing_key="rk",
+				callback=Mock(),
+				auto_declare=True,
+				enable_retry_cycles=True,
+			)
+
+	def test_allows_none_exchange_type_when_auto_declare_off(self, mock_consumer):
+		"""auto_declare=False + exchange_type=None is allowed: the operator has
+		set up the topology themselves; mandatory=True on publish is the safety
+		net for routing errors."""
+		mock_consumer._channel.consume.return_value = []
+		# Should not raise.
+		mock_consumer.start_consumer(
+			queue_name="q",
+			callback=Mock(),
+			auto_declare=False,
+			enable_retry_cycles=True,
+		)
+
 	def test_rejects_fanout_exchange_with_retry_cycles(self, mock_consumer):
 		with pytest.raises(MrsalAbortedSetup, match="exchange_type='fanout'"):
 			mock_consumer.start_consumer(
@@ -946,6 +974,40 @@ class TestSyncDLXPublishMandatoryFlag:
 		assert kwargs['mandatory'] is True, (
 			"Without mandatory=True, unroutable DLX publishes are silently dropped "
 			"by the broker under publisher confirms -- defeats the whole point of #84."
+		)
+
+	@pytest.mark.asyncio
+	async def test_async_publish_uses_mandatory_true(self):
+		"""Pin aio-pika's mandatory=True default so an upstream default flip
+		doesn't quietly re-open the silent-drop path on the async side."""
+		consumer = MrsalAsyncAMQP(
+			host="localhost",
+			port=5672,
+			credentials=("user", "password"),
+			virtual_host="testboi",
+			dlx_enable=True,
+		)
+		consumer._connection = AsyncMock()
+		consumer._connection.is_closed = False
+		dlx_channel = AsyncMock()
+		dlx_channel.is_closed = False
+		dlx_exchange = AsyncMock()
+		dlx_channel.get_exchange = AsyncMock(return_value=dlx_exchange)
+		consumer._connection.channel = AsyncMock(return_value=dlx_channel)
+		consumer._dlx_publish_channel = None
+
+		await consumer._publish_to_dlx(
+			dlx_exchange="x.dlx",
+			routing_key="rk",
+			body=b"{}",
+			properties={'headers': None},
+		)
+
+		dlx_exchange.publish.assert_awaited_once()
+		_, kwargs = dlx_exchange.publish.call_args
+		assert kwargs.get('mandatory') is True, (
+			"Pin mandatory=True explicitly on the async publish -- aio-pika's default "
+			"may flip in a future release, and silent-drop is exactly the bug #84 fixed."
 		)
 
 

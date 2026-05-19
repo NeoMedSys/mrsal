@@ -132,6 +132,7 @@ class Mrsal:
         exchange_type: str | None,
         routing_key: str | None,
         retry_cycle_interval: int,
+        auto_declare: bool,
     ) -> None:
         """Reject ``enable_retry_cycles=True`` configurations that would silently drop messages.
 
@@ -145,13 +146,30 @@ class Mrsal:
           can't be used as the broker's dead-letter routing key — when the TTL
           fires the broker tries to publish back to the original exchange with
           the literal wildcard string, which matches no binding and is dropped.
+
+        When ``auto_declare=False`` the operator has set up the broker topology
+        themselves, so the library trusts ``exchange_type=None`` (no topology
+        is being declared from here, and ``mandatory=True`` on publish will
+        surface routing errors). With ``auto_declare=True`` we're about to
+        declare ``.retry``/``.dlx`` bindings tied to ``exchange_type``, so a
+        missing type is rejected outright.
         """
         if retry_cycle_interval <= 0:
             raise MrsalAbortedSetup(
                 f"retry_cycle_interval must be > 0 (got {retry_cycle_interval}); "
                 "use enable_retry_cycles=False to opt out of cycling."
             )
-        if exchange_type is not None and exchange_type not in config.RETRY_SAFE_EXCHANGE_TYPES:
+        if exchange_type is None:
+            if auto_declare:
+                raise MrsalAbortedSetup(
+                    "enable_retry_cycles=True with auto_declare=True requires an explicit "
+                    "exchange_type so the retry topology can be validated and declared. "
+                    "Pass exchange_type ('direct' or 'topic' with a concrete routing key), "
+                    "or set enable_retry_cycles=False."
+                )
+            # auto_declare=False: operator-declared topology, nothing to validate here.
+            return
+        if exchange_type not in config.RETRY_SAFE_EXCHANGE_TYPES:
             raise MrsalAbortedSetup(
                 f"enable_retry_cycles=True is incompatible with exchange_type={exchange_type!r}: "
                 f"only {sorted(config.RETRY_SAFE_EXCHANGE_TYPES)} honor the .retry binding key, "
@@ -221,7 +239,7 @@ class Mrsal:
 
         if not passive:
             if dlx_enable:
-                dlx_name = dlx_exchange_name or f"{exchange_name}{config.DLX_QUEUE_SUFFIX}"
+                dlx_name = dlx_exchange_name or f"{exchange_name}{config.DLX_SUFFIX}"
                 dlx_routing = dlx_routing_key or routing_key
                 try:
                     self._declare_exchange(
@@ -240,7 +258,7 @@ class Mrsal:
                 except MrsalSetupError as e:
                     log.warning(f"DLX {dlx_name} might already exist or failed to create: {e}")
 
-                dlx_queue_name = f"{queue_name}{config.DLX_QUEUE_SUFFIX}"
+                dlx_queue_name = f"{queue_name}{config.DLX_SUFFIX}"
                 try:
                     self._declare_queue(
                             queue=dlx_queue_name,
@@ -274,7 +292,7 @@ class Mrsal:
                     # back to the original exchange. Changing retry_cycle_interval after
                     # the queue exists triggers RabbitMQ's "inequivalent arg" error;
                     # delete <queue>.retry before redeploying with a new interval.
-                    retry_queue_name = f"{queue_name}{config.RETRY_QUEUE_SUFFIX}"
+                    retry_queue_name = f"{queue_name}{config.RETRY_SUFFIX}"
                     retry_queue_args = self._build_retry_queue_args(
                         exchange_name=exchange_name,
                         routing_key=routing_key,
@@ -294,7 +312,7 @@ class Mrsal:
                         self._declare_queue_binding(
                                 exchange=dlx_name,
                                 queue=retry_queue_name,
-                                routing_key=f"{dlx_routing}{config.RETRY_QUEUE_SUFFIX}",
+                                routing_key=f"{dlx_routing}{config.RETRY_SUFFIX}",
                                 arguments=None,
                                 channel=channel
                                 )
@@ -403,7 +421,7 @@ class Mrsal:
 
         if not passive:
             if dlx_enable:
-                dlx_name = dlx_exchange_name or f"{exchange_name}{config.DLX_QUEUE_SUFFIX}"
+                dlx_name = dlx_exchange_name or f"{exchange_name}{config.DLX_SUFFIX}"
                 dlx_routing = dlx_routing_key or routing_key
 
                 try:
@@ -423,7 +441,7 @@ class Mrsal:
                 except MrsalSetupError as e:
                     log.warning(f"DLX {dlx_name} might already exist or failed to create: {e}")
 
-                dlx_queue_name = f"{queue_name}{config.DLX_QUEUE_SUFFIX}"
+                dlx_queue_name = f"{queue_name}{config.DLX_SUFFIX}"
                 try:
                     dlx_queue = await self._async_declare_queue(
                             queue_name=dlx_queue_name,
@@ -456,7 +474,7 @@ class Mrsal:
                     # back to the original exchange. Changing retry_cycle_interval after
                     # the queue exists triggers RabbitMQ's "inequivalent arg" error;
                     # delete <queue>.retry before redeploying with a new interval.
-                    retry_queue_name = f"{queue_name}{config.RETRY_QUEUE_SUFFIX}"
+                    retry_queue_name = f"{queue_name}{config.RETRY_SUFFIX}"
                     retry_queue_args = self._build_retry_queue_args(
                         exchange_name=exchange_name,
                         routing_key=routing_key,
@@ -476,7 +494,7 @@ class Mrsal:
                         await self._async_declare_queue_binding(
                                 exchange=dlx_exchange_obj,
                                 queue=retry_queue,
-                                routing_key=f"{dlx_routing}{config.RETRY_QUEUE_SUFFIX}",
+                                routing_key=f"{dlx_routing}{config.RETRY_SUFFIX}",
                                 arguments=None
                                 )
                         if self.verbose:
@@ -869,10 +887,10 @@ class Mrsal:
         retry_info = self._get_retry_cycle_info(properties)
         should_cycle = self._should_continue_retry_cycles(retry_info, enable_retry_cycles, max_retry_time_limit)
 
-        target_exchange = dlx_exchange_name or f"{original_exchange}{config.DLX_QUEUE_SUFFIX}"
+        target_exchange = dlx_exchange_name or f"{original_exchange}{config.DLX_SUFFIX}"
         # Honor explicit dlx_routing_key (also used at bind time); fall back to original routing key.
         dlx_routing = dlx_routing_key or original_routing_key
-        target_routing = f"{dlx_routing}{config.RETRY_QUEUE_SUFFIX}" if should_cycle else dlx_routing
+        target_routing = f"{dlx_routing}{config.RETRY_SUFFIX}" if should_cycle else dlx_routing
 
         original_headers = getattr(properties, 'headers', {}) or {}
         enhanced_headers = self._create_retry_cycle_headers(

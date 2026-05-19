@@ -325,6 +325,7 @@ class MrsalBlockingAMQP(Mrsal):
                 exchange_type=exchange_type,
                 routing_key=routing_key,
                 retry_cycle_interval=retry_cycle_interval,
+                auto_declare=auto_declare,
             )
 
         if threaded:
@@ -977,6 +978,7 @@ class MrsalAsyncAMQP(Mrsal):
                 exchange_type=exchange_type,
                 routing_key=routing_key,
                 retry_cycle_interval=retry_cycle_interval,
+                auto_declare=auto_declare,
             )
 
         try:
@@ -1158,11 +1160,13 @@ class MrsalAsyncAMQP(Mrsal):
     async def _publish_to_dlx(self, dlx_exchange: str, routing_key: str, body: bytes, properties: dict):
         """Async implementation of DLX publishing.
 
-        Publishes via a dedicated channel with publisher confirms enabled, so
-        broker rejection or connection loss raises (typically
-        ``aio_pika.exceptions.DeliveryError``) instead of silently dropping
-        the message. The caller is responsible for rejecting the original
-        message on failure.
+        Publishes via a dedicated channel with publisher confirms enabled and
+        ``mandatory=True``, so broker rejection or unroutable destination
+        raises (typically ``aio_pika.exceptions.DeliveryError``) instead of
+        silently dropping the message. aio-pika's current default for
+        ``mandatory`` is True, but we pin it explicitly to match the sync path
+        and to defend against an upstream default change. The caller is
+        responsible for rejecting the original message on failure.
         """
         message = Message(
             body,
@@ -1176,4 +1180,4 @@ class MrsalAsyncAMQP(Mrsal):
 
         await self._ensure_dlx_publish_channel()
         exchange = await self._dlx_publish_channel.get_exchange(dlx_exchange)
-        await exchange.publish(message, routing_key=routing_key)
+        await exchange.publish(message, routing_key=routing_key, mandatory=True)

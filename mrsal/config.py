@@ -23,11 +23,11 @@ except ValueError:
 DEFAULT_RETRY_CYCLE_INTERVAL_MIN: int = 10
 DEFAULT_MAX_RETRY_TIME_LIMIT_MIN: int = 60
 
-# Naming convention for the two-queue retry topology. Both suffixes are
-# appended to the consumer's queue name (and the binding key on the DLX
-# exchange) so operators can identify each queue's role at a glance.
-DLX_QUEUE_SUFFIX: str = ".dlx"
-RETRY_QUEUE_SUFFIX: str = ".retry"
+# Naming convention for the two-queue retry topology. The same suffix is
+# applied to both the DLX exchange name and the .dlx queue name (and similarly
+# for retry), so operators can identify each component's role at a glance.
+DLX_SUFFIX: str = ".dlx"
+RETRY_SUFFIX: str = ".retry"
 
 # Exchange types where the .retry binding key is honored. fanout and headers
 # exchanges ignore routing keys, so retry/.dlx separation collapses and the
