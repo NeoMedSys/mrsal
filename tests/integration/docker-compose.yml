@@ -1,0 +1,24 @@
+# Local RabbitMQ for mrsal integration tests.
+#
+# Usage:
+#   docker compose -f tests/integration/docker-compose.yml up -d
+#   poetry run nox -s integration
+#   docker compose -f tests/integration/docker-compose.yml down -v
+#
+# Override broker endpoint with MRSAL_IT_HOST / MRSAL_IT_PORT if you point the
+# tests at a different broker (e.g. a CI service container).
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: mrsal-it-rabbitmq
+    # Host ports are off the RabbitMQ defaults to avoid colliding with a
+    # locally-running dev broker. The integration tests default
+    # to MRSAL_IT_PORT=5673 to match.
+    ports:
+      - "5673:5672"
+      - "15673:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 5s
+      timeout: 5s
+      retries: 20

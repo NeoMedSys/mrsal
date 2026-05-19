@@ -53,6 +53,9 @@ def tests(session: Session):
             "./tests",
             "--junitxml=./reports/junit/junit.xml",
             "--ignore=./tests/test_ssl",
+            # Integration tests require a live RabbitMQ broker; they live in
+            # their own session (``nox -s integration``) so unit runs stay fast.
+            "--ignore=./tests/integration",
             external=True,
         )
 
@@ -68,6 +71,33 @@ def tests(session: Session):
         session.log("Tests and coverage reporting complete.")
     except Exception as e:
         session.error(f"Tests failed: {e}")
+
+
+@nox.session(name="integration", reuse_venv=True)
+def integration(session: Session):
+    """
+    Run integration tests against a real RabbitMQ broker.
+
+    Requires the broker to be reachable (default ``localhost:5672`` with
+    ``guest`` / ``guest``). Bring one up with::
+
+        docker compose -f tests/integration/docker-compose.yml up -d
+
+    Override the endpoint via ``MRSAL_IT_HOST`` / ``MRSAL_IT_PORT`` /
+    ``MRSAL_IT_USER`` / ``MRSAL_IT_PASS`` / ``MRSAL_IT_VHOST``.
+    """
+    try:
+        session.run("poetry", "install", "--with", "dev", external=True)
+        session.run(
+            "poetry", "run", "pytest",
+            "./tests/integration",
+            "-m", "integration",
+            "-v",
+            external=True,
+        )
+        session.log("Integration tests complete.")
+    except Exception as e:
+        session.error(f"Integration tests failed: {e}")
 
 
 @nox.session(name="lint", reuse_venv=True)
