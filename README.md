@@ -129,7 +129,7 @@ RABBITMQ_CERT=/path/to/file
 RABBITMQ_KEY=/path/to/file
 ```
 
-###### Mrsal was first developed by NeoMedSys and the research group \[CRAI\](https://crai.no/) at the univeristy hospital of Oslo.
+###### Mrsal was first developed by NeoMedSys and the research group \[CRAI\](https://crai.no/) at the university hospital of Oslo.
 
 ### 2. Setup and connect
 - Example 1: Lets create a blocking connection on localhost with no TLS encryption
@@ -189,8 +189,8 @@ with MrsalBlockingAMQP(
 Now lets setup a consumer that will listen to our very important messages. If you are using scripts rather than notebooks then it's advisable to run consume and publish separately. We are going to need a callback function which is triggered upon receiving the message from the queue we subscribe to. You can use the callback function to activate something in your system.
 
 Note:
-- If you start a consumer with `callback_with_delivery_info=True` then your callback function should have at least these params `(method_frame: pika.spec.Basic.Deliver, properties: pika.spec.BasicProperties, message_param: str)`.
-- If not, then it should have at least `(message_param: str)`
+- Your callback is invoked as `callback(*callback_args, method_frame, properties, body)`. Anything you pass via `callback_args` is prepended; `method_frame`, `properties`, and `body` are always supplied by mrsal.
+- When you pass `payload_model=YourModel`, `body` is the validated model instance instead of raw bytes (see §4.5).
 - We can use pydantic BaseModel classes to enforce types in the body
 
 ```python
@@ -282,7 +282,7 @@ That simple! You have now setups for full advanced message queueing protocols th
 
 #### 4.1 Dead Letter Exchange & Retry Logic with Cycles
 
-Mrsal provides sophisticated retry mechanisms with both immediate retries and time-delayed retry cycles:
+Mrsal provides time-delayed retry cycles via a broker-managed `<queue>.retry` queue, with a terminal `<queue>.dlx` parking lot for messages that exhaust the retry budget:
 
 ```python
 mrsal = MrsalBlockingAMQP(
