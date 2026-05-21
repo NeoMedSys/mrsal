@@ -734,25 +734,44 @@ class TestExponentialBackoff:
 		assert delay == 10 * 60_000
 
 	def test_compute_delay_exponential_doubles_each_cycle(self, mock_consumer):
-		"""Each cycle should roughly double until clamped at cap (± jitter)."""
-		# With base=1m and cap=60m: 1, 2, 4, 8, 16, 32, 60, 60, ...
+		"""Each cycle should double until clamped at cap. Jitter is patched
+		to 1.0 so the assertion is exact -- the jitter band itself is
+		exercised separately in ``test_compute_delay_jitter_within_band``."""
+		# With base=1m and cap=60m: 1, 2, 4, 8, 16, 32, 60 (capped), 60, ...
 		expected_minutes = [1, 2, 4, 8, 16, 32, 60, 60]
-		for cycle, base_min in enumerate(expected_minutes):
-			delay_ms = mock_consumer._compute_retry_delay_ms(
-				cycle_count=cycle, base_min=1, backoff="exponential", cap_min=60
-			)
-			# ±20% jitter window.
-			assert 0.8 * base_min * 60_000 <= delay_ms <= 1.2 * base_min * 60_000, (
-				f"cycle {cycle}: expected ~{base_min}m, got {delay_ms / 60_000:.2f}m"
-			)
+		with patch('mrsal.superclass.random.uniform', return_value=1.0):
+			for cycle, base_min in enumerate(expected_minutes):
+				delay_ms = mock_consumer._compute_retry_delay_ms(
+					cycle_count=cycle, base_min=1, backoff="exponential", cap_min=60
+				)
+				assert delay_ms == base_min * 60_000, (
+					f"cycle {cycle}: expected {base_min}m, got {delay_ms / 60_000:.2f}m"
+				)
 
-	def test_compute_delay_clamps_at_cap(self, mock_consumer):
-		"""Very large cycle_count must not exceed cap + jitter."""
-		delay_ms = mock_consumer._compute_retry_delay_ms(
-			cycle_count=20, base_min=10, backoff="exponential", cap_min=30
-		)
-		# 10 * 2**20 minutes would be ~73 years; cap at 30m with ≤20% jitter.
-		assert delay_ms <= 1.2 * 30 * 60_000
+	def test_compute_delay_jitter_within_band(self, mock_consumer):
+		"""Jitter must stay within ±20% of the deterministic value. Sampled
+		across many calls because the value is random."""
+		samples = [
+			mock_consumer._compute_retry_delay_ms(
+				cycle_count=0, base_min=10, backoff="exponential", cap_min=60
+			)
+			for _ in range(200)
+		]
+		# base=10m, cycle=0 → 10m ±20% = [8m, 12m]
+		assert all(0.8 * 10 * 60_000 <= s <= 1.2 * 10 * 60_000 for s in samples)
+
+	def test_compute_delay_clamps_at_cap_post_jitter(self, mock_consumer):
+		"""Post-jitter value must never exceed the cap in ms. Without the
+		post-jitter clamp, a saturated cycle (raw_min == cap_min) could
+		produce delay = cap * 1.2, which the broker's queue TTL would
+		silently shorten -- creating a logged/observed mismatch."""
+		# Force jitter to its maximum so we hit the over-cap path.
+		with patch('mrsal.superclass.random.uniform', return_value=1.2):
+			delay_ms = mock_consumer._compute_retry_delay_ms(
+				cycle_count=10,  # saturated: 10 * 2**10 >> cap
+				base_min=10, backoff="exponential", cap_min=30,
+			)
+		assert delay_ms == 30 * 60_000
 
 	def test_exponential_mode_stamps_per_message_expiration(self, mock_consumer):
 		"""When cycling in exponential mode, the publish properties must carry

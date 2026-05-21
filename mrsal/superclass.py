@@ -276,8 +276,13 @@ class Mrsal:
 			return base_min * 60_000
 		safe_cycle = min(cycle_count, 64)
 		raw_min = min(base_min * (2 ** safe_cycle), cap_min)
+		cap_ms = cap_min * 60_000
 		jittered = raw_min * 60_000 * random.uniform(0.8, 1.2)
-		return int(jittered)
+		# Clamp post-jitter: the queue's x-message-ttl is exactly ``cap_ms``,
+		# and RabbitMQ honors the shorter of queue-TTL vs message-TTL. Without
+		# this clamp, a saturated cycle could log a next_delay_ms 20% above
+		# the cap that the broker would silently shorten.
+		return min(int(jittered), cap_ms)
 
 	def _setup_exchange_and_queue(self,
 								exchange_name: str, queue_name: str, exchange_type: str,
