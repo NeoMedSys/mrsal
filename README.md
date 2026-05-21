@@ -1,8 +1,30 @@
 # MRSAL AMQP
-[![Release](https://img.shields.io/badge/release-3.8.4-blue.svg)](https://pypi.org/project/mrsal/) 
+[![Release](https://img.shields.io/badge/release-3.9.0-blue.svg)](https://pypi.org/project/mrsal/) 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%7C3.11%7C3.12-blue.svg)](https://www.python.org/downloads/)
 [![Mrsal Workflow](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml/badge.svg?branch=main)](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml)
 [![Coverage](https://neomedsys.github.io/mrsal/reports/badges/coverage-badge.svg)](https://neomedsys.github.io/mrsal/reports/coverage/htmlcov/)
+
+## Breaking changes in 3.9.0
+
+- **DLX retry cycles now use exponential backoff by default**
+  (`retry_backoff="exponential"`). Per-cycle delay grows as
+  `retry_cycle_interval * 2**cycle_count` minutes (with ±20% jitter), clamped
+  at `retry_backoff_max` (default 60m). The previous flat-interval behaviour
+  is still available with `retry_backoff="fixed"`.
+- **Topology change requires deleting the `.retry` queue on upgrade.** In
+  exponential mode the `.retry` queue is declared with
+  `x-message-ttl = retry_backoff_max * 60_000` (1h by default) instead of
+  `retry_cycle_interval * 60_000` (10m by default). RabbitMQ will reject the
+  redeclare with `inequivalent arg 'x-message-ttl'`, raising
+  `MrsalAbortedSetup`. **Before redeploying, delete each `<queue>.retry`
+  queue on the broker** (e.g. `rabbitmqctl delete_queue <queue>.retry`).
+  The same applies if you switch `retry_backoff` modes later.
+- **`max_retry_time_limit` default raised from 60m to 480m (8h)** so the
+  longer per-cycle delays still have room to actually retry. If you depended
+  on the 1h budget, pass `max_retry_time_limit=60` explicitly.
+- **Internal `_log_dlx_result` signature changed.** Second positional arg is
+  now `next_delay_ms: int | None` instead of `retry_cycle_interval: int`.
+  Subclasses that overrode the method need to update.
 
 ## Breaking changes in 3.8.0
 

@@ -578,17 +578,19 @@ class TestDLXRetryHeaders:
 		)
 		assert should_continue is False
 
-	def test_cycling_publish_targets_retry_binding(self, mock_consumer):
+	def test_cycling_publish_targets_retry_binding_fixed_mode(self, mock_consumer):
 		"""Cycling DLX publish must route to the ``<dlx_routing>.retry`` binding
 		so the broker-side TTL on the ``.retry`` queue drives the delay.
 		Regression for the silent-drop bug (#84): the previous implementation
 		published to the terminal ``.dlx`` binding with a per-message TTL,
-		which RabbitMQ then expired without a dead-letter target."""
+		which RabbitMQ then expired without a dead-letter target. In fixed
+		mode no per-message ``expiration`` is set -- the queue's
+		``x-message-ttl`` provides the wait."""
 		mock_properties = MagicMock()
 		mock_properties.headers = None
 		mock_properties.content_type = 'application/json'
 
-		target_exchange, target_routing, dlx_properties, _ = mock_consumer._build_dlx_retry_properties(
+		target_exchange, target_routing, dlx_properties, _, should_cycle, next_delay_ms = mock_consumer._build_dlx_retry_properties(
 			properties=mock_properties,
 			processing_error="boom",
 			original_exchange="orders_exchange",
@@ -597,12 +599,15 @@ class TestDLXRetryHeaders:
 			retry_cycle_interval=1,
 			max_retry_time_limit=60,
 			dlx_exchange_name=None,
+			retry_backoff="fixed",
 		)
 
 		assert target_exchange == "orders_exchange.dlx"
 		assert target_routing == "new_order.retry"
-		# Per-message expiration is gone -- queue-level TTL handles the delay now.
-		assert 'expiration' not in dlx_properties
+		assert should_cycle is True
+		assert next_delay_ms is None
+		# Fixed mode: queue-level TTL drives the delay, no per-message expiration.
+		assert 'expiration_ms' not in dlx_properties
 		# Routing-back-to-original lives in queue args, not headers.
 		assert 'x-dead-letter-exchange' not in dlx_properties['headers']
 		assert 'x-dead-letter-routing-key' not in dlx_properties['headers']
@@ -623,7 +628,7 @@ class TestDLXRetryHeaders:
 		}
 		mock_properties.content_type = 'application/json'
 
-		target_exchange, target_routing, dlx_properties, _ = mock_consumer._build_dlx_retry_properties(
+		target_exchange, target_routing, dlx_properties, _, should_cycle, next_delay_ms = mock_consumer._build_dlx_retry_properties(
 			properties=mock_properties,
 			processing_error="boom",
 			original_exchange="orders_exchange",
@@ -636,13 +641,17 @@ class TestDLXRetryHeaders:
 
 		assert target_exchange == "orders_exchange.dlx"
 		assert target_routing == "new_order"
-		assert 'expiration' not in dlx_properties
+		assert should_cycle is False
+		assert next_delay_ms is None
+		assert 'expiration_ms' not in dlx_properties
 		assert dlx_properties['headers']['x-retry-exhausted'] is True
 
-	def test_retry_queue_declared_with_ttl_and_dead_letter_args(self, mock_consumer):
+	def test_retry_queue_declared_with_ttl_and_dead_letter_args_fixed_mode(self, mock_consumer):
 		"""Setup must declare ``<queue>.retry`` with queue-level TTL + DLX args
 		pointing back to the original exchange. RabbitMQ does not honor those
-		keys in message headers, only in queue arguments."""
+		keys in message headers, only in queue arguments.
+
+		In fixed mode the TTL equals ``retry_cycle_interval``."""
 		# Capture queue declarations made during setup.
 		declared_queues: list[dict] = []
 		mock_consumer._declare_exchange = MagicMock()
@@ -660,6 +669,7 @@ class TestDLXRetryHeaders:
 			enable_retry_cycles=True,
 			retry_cycle_interval=5,
 			use_quorum_queues=False,
+			retry_backoff="fixed",
 		)
 
 		retry_decls = [q for q in declared_queues if q['queue'] == 'orders_queue.retry']
@@ -691,6 +701,169 @@ class TestDLXRetryHeaders:
 
 		retry_decls = [q for q in declared_queues if q['queue'].endswith('.retry')]
 		assert retry_decls == []
+
+
+class TestExponentialBackoff:
+	"""Exponential backoff for DLX retry cycles (default mode).
+
+	The .retry queue is declared with x-message-ttl = retry_backoff_max
+	(the cap), and each republish stamps a per-message ``expiration`` (ms
+	as a string) computed from cycle_count. RabbitMQ honors the shorter
+	of queue-TTL vs message-TTL, so the per-message value always wins."""
+
+	@pytest.fixture
+	def mock_consumer(self):
+		consumer = MrsalBlockingAMQP(
+			host="localhost",
+			port=5672,
+			credentials=("user", "password"),
+			virtual_host="testboi",
+			dlx_enable=True,
+		)
+		consumer._connection = MagicMock()
+		consumer._channel = MagicMock()
+		consumer._consumer_channel = consumer._channel
+		consumer._connection.channel.return_value = consumer._channel
+		return consumer
+
+	def test_compute_delay_fixed_mode_returns_base(self, mock_consumer):
+		"""Fixed mode ignores cycle_count and cap; delay equals base interval."""
+		delay = mock_consumer._compute_retry_delay_ms(
+			cycle_count=4, base_min=10, backoff="fixed", cap_min=60
+		)
+		assert delay == 10 * 60_000
+
+	def test_compute_delay_exponential_doubles_each_cycle(self, mock_consumer):
+		"""Each cycle should double until clamped at cap. Jitter is patched
+		to 1.0 so the assertion is exact -- the jitter band itself is
+		exercised separately in ``test_compute_delay_jitter_within_band``."""
+		# With base=1m and cap=60m: 1, 2, 4, 8, 16, 32, 60 (capped), 60, ...
+		expected_minutes = [1, 2, 4, 8, 16, 32, 60, 60]
+		with patch('mrsal.superclass.random.uniform', return_value=1.0):
+			for cycle, base_min in enumerate(expected_minutes):
+				delay_ms = mock_consumer._compute_retry_delay_ms(
+					cycle_count=cycle, base_min=1, backoff="exponential", cap_min=60
+				)
+				assert delay_ms == base_min * 60_000, (
+					f"cycle {cycle}: expected {base_min}m, got {delay_ms / 60_000:.2f}m"
+				)
+
+	def test_compute_delay_jitter_within_band(self, mock_consumer):
+		"""Jitter must stay within ±20% of the deterministic value. Sampled
+		across many calls because the value is random."""
+		samples = [
+			mock_consumer._compute_retry_delay_ms(
+				cycle_count=0, base_min=10, backoff="exponential", cap_min=60
+			)
+			for _ in range(200)
+		]
+		# base=10m, cycle=0 → 10m ±20% = [8m, 12m]
+		assert all(0.8 * 10 * 60_000 <= s <= 1.2 * 10 * 60_000 for s in samples)
+
+	def test_compute_delay_clamps_at_cap_post_jitter(self, mock_consumer):
+		"""Post-jitter value must never exceed the cap in ms. Without the
+		post-jitter clamp, a saturated cycle (raw_min == cap_min) could
+		produce delay = cap * 1.2, which the broker's queue TTL would
+		silently shorten -- creating a logged/observed mismatch."""
+		# Force jitter to its maximum so we hit the over-cap path.
+		with patch('mrsal.superclass.random.uniform', return_value=1.2):
+			delay_ms = mock_consumer._compute_retry_delay_ms(
+				cycle_count=10,  # saturated: 10 * 2**10 >> cap
+				base_min=10, backoff="exponential", cap_min=30,
+			)
+		assert delay_ms == 30 * 60_000
+
+	def test_exponential_mode_stamps_per_message_expiration(self, mock_consumer):
+		"""When cycling in exponential mode, the publish properties must carry
+		an integer-ms ``expiration_ms`` within the jittered range. The library
+		layer (pika str, aio-pika timedelta) converts it for the wire."""
+		mock_properties = MagicMock()
+		mock_properties.headers = {
+			'x-cycle-count': 2,
+			'x-first-failure': '2024-01-01T10:00:00Z',
+			'x-total-elapsed': 1000,
+		}
+		mock_properties.content_type = 'application/json'
+
+		_, target_routing, dlx_properties, _, should_cycle, next_delay_ms = mock_consumer._build_dlx_retry_properties(
+			properties=mock_properties,
+			processing_error="boom",
+			original_exchange="orders_exchange",
+			original_routing_key="new_order",
+			enable_retry_cycles=True,
+			retry_cycle_interval=1,
+			max_retry_time_limit=120,
+			dlx_exchange_name=None,
+			retry_backoff="exponential",
+			retry_backoff_max=60,
+		)
+
+		assert target_routing == "new_order.retry"
+		assert should_cycle is True
+		assert 'expiration_ms' in dlx_properties
+		assert isinstance(dlx_properties['expiration_ms'], int)
+		# cycle_count=2 → base * 4 = 4m, ±20%
+		assert 0.8 * 4 * 60_000 <= dlx_properties['expiration_ms'] <= 1.2 * 4 * 60_000
+		assert next_delay_ms == dlx_properties['expiration_ms']
+
+	def test_exponential_mode_no_expiration_when_exhausted(self, mock_consumer):
+		"""On the terminal ``.dlx`` binding (retry budget spent), no per-message
+		``expiration_ms`` may be set -- the message must stay parked indefinitely
+		for manual review, not expire and get dropped."""
+		mock_properties = MagicMock()
+		mock_properties.headers = {
+			'x-cycle-count': 10,
+			'x-first-failure': '2024-01-01T10:00:00Z',
+			'x-total-elapsed': 10_000_000,
+		}
+		mock_properties.content_type = 'application/json'
+
+		_, target_routing, dlx_properties, _, should_cycle, next_delay_ms = mock_consumer._build_dlx_retry_properties(
+			properties=mock_properties,
+			processing_error="boom",
+			original_exchange="orders_exchange",
+			original_routing_key="new_order",
+			enable_retry_cycles=True,
+			retry_cycle_interval=1,
+			max_retry_time_limit=1,
+			dlx_exchange_name=None,
+			retry_backoff="exponential",
+			retry_backoff_max=60,
+		)
+
+		assert target_routing == "new_order"
+		assert should_cycle is False
+		assert next_delay_ms is None
+		assert 'expiration_ms' not in dlx_properties
+
+	def test_retry_queue_uses_cap_as_ttl_in_exponential_mode(self, mock_consumer):
+		"""In exponential mode the queue's ``x-message-ttl`` must be the cap
+		so the per-message expiration (always shorter) wins."""
+		declared_queues: list[dict] = []
+		mock_consumer._declare_exchange = MagicMock()
+		mock_consumer._declare_queue = MagicMock(
+			side_effect=lambda **kwargs: declared_queues.append(kwargs)
+		)
+		mock_consumer._declare_queue_binding = MagicMock()
+
+		mock_consumer._setup_exchange_and_queue(
+			exchange_name="orders_exchange",
+			queue_name="orders_queue",
+			exchange_type="direct",
+			routing_key="new_order",
+			dlx_enable=True,
+			enable_retry_cycles=True,
+			retry_cycle_interval=5,
+			use_quorum_queues=False,
+			retry_backoff="exponential",
+			retry_backoff_max=45,
+		)
+
+		retry_decls = [q for q in declared_queues if q['queue'] == 'orders_queue.retry']
+		assert len(retry_decls) == 1
+		# TTL must be the cap (45m), NOT the base interval (5m), so per-message
+		# expiration always wins.
+		assert retry_decls[0]['arguments']['x-message-ttl'] == 45 * 60 * 1000
 
 
 class TestRetryCyclePreconditions:
@@ -1054,6 +1227,7 @@ class TestAsyncRetryQueueSetup:
 			enable_retry_cycles=True,
 			retry_cycle_interval=5,
 			use_quorum_queues=False,
+			retry_backoff="fixed",
 		)
 
 		retry_decls = [q for q in declared if q['queue_name'] == 'orders_queue.retry']

@@ -119,6 +119,8 @@ class TestPassiveDeclarationAndQueueSettings:
 			lazy_queue=None,
 			enable_retry_cycles=True,  # start_consumer default
 			retry_cycle_interval=10,   # start_consumer default
+			retry_backoff="exponential",  # start_consumer default
+			retry_backoff_max=60,         # start_consumer default
 			channel=ANY
 		)
 
