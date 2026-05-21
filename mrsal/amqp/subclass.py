@@ -17,7 +17,7 @@ from pika.exceptions import (
 		)
 from aio_pika import connect_robust, Message
 from dataclasses import field
-from typing import Any, Callable, Sequence, Type
+from typing import Any, Callable, Literal, Sequence, Type
 from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, retry_if_exception_type, before_sleep_log
 from pydantic import ConfigDict, ValidationError
 from pydantic.dataclasses import dataclass
@@ -223,6 +223,7 @@ class MrsalBlockingAMQP(Mrsal):
 					enable_retry_cycles, runtime_config['retry_cycle_interval'],
 					runtime_config['max_retry_time_limit'], runtime_config['dlx_exchange_name'],
 					runtime_config['dlx_routing_key'],
+					runtime_config['retry_backoff'], runtime_config['retry_backoff_max'],
 				)
 			elif dlx_enable:
 				log.warning(f"Message {msg_id} sent to dead letter exchange after {current_retry} retries")
@@ -266,6 +267,8 @@ class MrsalBlockingAMQP(Mrsal):
 			enable_retry_cycles: bool = True,
 			retry_cycle_interval: int = config.DEFAULT_RETRY_CYCLE_INTERVAL_MIN,
 			max_retry_time_limit: int = config.DEFAULT_MAX_RETRY_TIME_LIMIT_MIN,
+			retry_backoff: Literal["fixed", "exponential"] = config.DEFAULT_RETRY_BACKOFF,
+			retry_backoff_max: int = config.DEFAULT_RETRY_BACKOFF_MAX_MIN,
 			max_queue_length: int | None = None,
 			max_queue_length_bytes: int | None = None,
 			queue_overflow: str | None = None,
@@ -298,8 +301,14 @@ class MrsalBlockingAMQP(Mrsal):
 		:param str dlx_routing_key: Custom DLX routing key
 		:param bool use_quorum_queues: Use quorum queues for durability
 		:param bool enable_retry_cycles: Enable DLX retry cycles
-		:param int retry_cycle_interval: Minutes between retry cycles
+		:param int retry_cycle_interval: Minutes between retry cycles (base for exponential)
 		:param int max_retry_time_limit: Minutes total before permanent DLX
+		:param str retry_backoff: "fixed" (flat queue-TTL interval) or "exponential"
+			(per-message ``base * 2**cycle`` clamped at ``retry_backoff_max`` with ±20% jitter).
+			Default "exponential". Switching modes on a running deployment requires deleting
+			the existing ``<queue>.retry`` queue (the ``x-message-ttl`` arg becomes inequivalent).
+		:param int retry_backoff_max: Per-cycle ceiling in minutes for exponential mode.
+			Ignored when ``retry_backoff="fixed"``. Default 60.
 		:param int max_queue_length: Maximum number of messages in queue
 		:param int max_queue_length_bytes: Maximum queue size in bytes
 		:param str queue_overflow: "drop-head" or "reject-publish"
@@ -354,6 +363,8 @@ class MrsalBlockingAMQP(Mrsal):
 					lazy_queue=lazy_queue,
 					enable_retry_cycles=enable_retry_cycles,
 					retry_cycle_interval=retry_cycle_interval,
+					retry_backoff=retry_backoff,
+					retry_backoff_max=retry_backoff_max,
 					channel=self._consumer_channel
 			)
 			
@@ -370,6 +381,8 @@ class MrsalBlockingAMQP(Mrsal):
 			'enable_retry_cycles': enable_retry_cycles,
 			'retry_cycle_interval': retry_cycle_interval,
 			'max_retry_time_limit': max_retry_time_limit,
+			'retry_backoff': retry_backoff,
+			'retry_backoff_max': retry_backoff_max,
 			'exchange_name': exchange_name,
 			'routing_key': routing_key,
 			'dlx_exchange_name': dlx_exchange_name,
@@ -386,6 +399,7 @@ class MrsalBlockingAMQP(Mrsal):
 					retry cycles: {enable_retry_cycles}
 					retry interval: {retry_cycle_interval}
 					max retry time: {max_retry_time_limit}
+					retry backoff: {retry_backoff} (cap: {retry_backoff_max}m)
 					DLX name: {dlx_exchange_name}
 				""")
 
@@ -583,7 +597,9 @@ class MrsalBlockingAMQP(Mrsal):
 			original_exchange: str, original_routing_key: str,
 			enable_retry_cycles: bool, retry_cycle_interval: int,
 			max_retry_time_limit: int, dlx_exchange_name: str | None,
-			dlx_routing_key: str | None = None):
+			dlx_routing_key: str | None = None,
+			retry_backoff: Literal["fixed", "exponential"] = config.DEFAULT_RETRY_BACKOFF,
+			retry_backoff_max: int = config.DEFAULT_RETRY_BACKOFF_MAX_MIN):
 		"""Publish message to DLX with retry cycle headers.
 
 		At-least-once delivery for DLX: the publish uses ``confirm_delivery()``
@@ -606,6 +622,8 @@ class MrsalBlockingAMQP(Mrsal):
 				max_retry_time_limit=max_retry_time_limit,
 				dlx_exchange_name=dlx_exchange_name,
 				dlx_routing_key=dlx_routing_key,
+				retry_backoff=retry_backoff,
+				retry_backoff_max=retry_backoff_max,
 			)
 			
 			# Acknowledge original message
@@ -805,6 +823,8 @@ class MrsalAsyncAMQP(Mrsal):
 		enable_retry_cycles = runtime_config['enable_retry_cycles']
 		retry_cycle_interval = runtime_config['retry_cycle_interval']
 		max_retry_time_limit = runtime_config['max_retry_time_limit']
+		retry_backoff = runtime_config['retry_backoff']
+		retry_backoff_max = runtime_config['retry_backoff_max']
 		exchange_name = runtime_config['exchange_name']
 		routing_key = runtime_config['routing_key']
 		dlx_exchange_name = runtime_config['dlx_exchange_name']
@@ -866,6 +886,7 @@ class MrsalAsyncAMQP(Mrsal):
 					exchange_name, routing_key, enable_retry_cycles,
 					retry_cycle_interval, max_retry_time_limit, dlx_exchange_name,
 					dlx_routing_key,
+					retry_backoff, retry_backoff_max,
 				)
 			elif dlx_enable:
 				await message.reject(requeue=False)
@@ -923,6 +944,8 @@ class MrsalAsyncAMQP(Mrsal):
 			enable_retry_cycles: bool = True,
 			retry_cycle_interval: int = config.DEFAULT_RETRY_CYCLE_INTERVAL_MIN,
 			max_retry_time_limit: int = config.DEFAULT_MAX_RETRY_TIME_LIMIT_MIN,
+			retry_backoff: Literal["fixed", "exponential"] = config.DEFAULT_RETRY_BACKOFF,
+			retry_backoff_max: int = config.DEFAULT_RETRY_BACKOFF_MAX_MIN,
 			max_queue_length: int | None = None,
 			max_queue_length_bytes: int | None = None,
 			queue_overflow: str | None = None,
@@ -956,6 +979,12 @@ class MrsalAsyncAMQP(Mrsal):
 			validated model instance in place of ``message.body``.
 		:param bool dlx_enable: Whether to route failed messages to a dead-letter exchange
 		:param bool enable_retry_cycles: Whether to apply retry cycle headers when publishing to DLX
+		:param str retry_backoff: "fixed" (flat queue-TTL interval) or "exponential"
+			(per-message ``base * 2**cycle`` clamped at ``retry_backoff_max`` with ±20% jitter).
+			Default "exponential". Switching modes on a running deployment requires deleting
+			the existing ``<queue>.retry`` queue (the ``x-message-ttl`` arg becomes inequivalent).
+		:param int retry_backoff_max: Per-cycle ceiling in minutes for exponential mode.
+			Ignored when ``retry_backoff="fixed"``. Default 60.
 		:param int max_concurrent_tasks: When set, up to N messages are processed concurrently as
 			``asyncio`` tasks bounded by a semaphore. When ``None`` (default), messages are processed
 			sequentially -- one ``await callback(...)`` at a time -- matching prior behaviour. Note that
@@ -1006,7 +1035,9 @@ class MrsalAsyncAMQP(Mrsal):
 					single_active_consumer=single_active_consumer,
 					lazy_queue=lazy_queue,
 					enable_retry_cycles=enable_retry_cycles,
-					retry_cycle_interval=retry_cycle_interval
+					retry_cycle_interval=retry_cycle_interval,
+					retry_backoff=retry_backoff,
+					retry_backoff_max=retry_backoff_max,
 					)
 
 			if not self.auto_declare_ok:
@@ -1035,6 +1066,8 @@ class MrsalAsyncAMQP(Mrsal):
 			'enable_retry_cycles': enable_retry_cycles,
 			'retry_cycle_interval': retry_cycle_interval,
 			'max_retry_time_limit': max_retry_time_limit,
+			'retry_backoff': retry_backoff,
+			'retry_backoff_max': retry_backoff_max,
 			'exchange_name': exchange_name,
 			'routing_key': routing_key,
 			'dlx_exchange_name': dlx_exchange_name,
@@ -1123,7 +1156,9 @@ class MrsalAsyncAMQP(Mrsal):
 												original_exchange: str, original_routing_key: str,
 												enable_retry_cycles: bool, retry_cycle_interval: int,
 												max_retry_time_limit: int, dlx_exchange_name: str | None,
-												dlx_routing_key: str | None = None):
+												dlx_routing_key: str | None = None,
+												retry_backoff: Literal["fixed", "exponential"] = config.DEFAULT_RETRY_BACKOFF,
+												retry_backoff_max: int = config.DEFAULT_RETRY_BACKOFF_MAX_MIN):
 		"""Async publish message to DLX with retry cycle headers.
 
 		At-least-once delivery for DLX: the publish uses publisher confirms on
@@ -1145,6 +1180,8 @@ class MrsalAsyncAMQP(Mrsal):
 				max_retry_time_limit=max_retry_time_limit,
 				dlx_exchange_name=dlx_exchange_name,
 				dlx_routing_key=dlx_routing_key,
+				retry_backoff=retry_backoff,
+				retry_backoff_max=retry_backoff_max,
 			)
 			
 			# Acknowledge original message
@@ -1175,7 +1212,10 @@ class MrsalAsyncAMQP(Mrsal):
 		)
 
 		if 'expiration' in properties:
-			message.expiration = int(properties['expiration'])
+			# AMQP expiration is milliseconds. pika accepts it as a string ms
+			# directly; aio-pika's setter treats numeric values as seconds and
+			# multiplies by 1000 internally, so divide ms → s for that path.
+			message.expiration = int(properties['expiration']) / 1000
 
 		await self._ensure_dlx_publish_channel()
 		exchange = await self._dlx_publish_channel.get_exchange(dlx_exchange)

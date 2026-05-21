@@ -15,7 +15,15 @@ class ValidateTLS(BaseModel):
 # DLX retry-cycle defaults. Sourced here so the consumer entry points and
 # the setup paths stay in sync — they used to duplicate the literal 10 / 60.
 DEFAULT_RETRY_CYCLE_INTERVAL_MIN: int = 10
-DEFAULT_MAX_RETRY_TIME_LIMIT_MIN: int = 60
+DEFAULT_MAX_RETRY_TIME_LIMIT_MIN: int = 8 * 60  # 8 hours
+
+# Backoff growth for DLX retry cycles. "exponential" computes a per-message
+# expiration of base * 2**cycle_count (clamped at DEFAULT_RETRY_BACKOFF_MAX_MIN)
+# with ±20% jitter; "fixed" keeps the original queue-TTL-driven flat interval.
+# The .retry queue's x-message-ttl is set to the cap so the per-message
+# expiration always wins (RabbitMQ honors the shorter of the two).
+DEFAULT_RETRY_BACKOFF: str = "exponential"
+DEFAULT_RETRY_BACKOFF_MAX_MIN: int = 60  # 1 hour
 
 # Naming convention for the two-queue retry topology. The same suffix is
 # applied to both the DLX exchange name and the .dlx queue name (and similarly
