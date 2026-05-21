@@ -590,7 +590,7 @@ class TestDLXRetryHeaders:
 		mock_properties.headers = None
 		mock_properties.content_type = 'application/json'
 
-		target_exchange, target_routing, dlx_properties, _ = mock_consumer._build_dlx_retry_properties(
+		target_exchange, target_routing, dlx_properties, _, should_cycle, next_delay_ms = mock_consumer._build_dlx_retry_properties(
 			properties=mock_properties,
 			processing_error="boom",
 			original_exchange="orders_exchange",
@@ -604,8 +604,10 @@ class TestDLXRetryHeaders:
 
 		assert target_exchange == "orders_exchange.dlx"
 		assert target_routing == "new_order.retry"
+		assert should_cycle is True
+		assert next_delay_ms is None
 		# Fixed mode: queue-level TTL drives the delay, no per-message expiration.
-		assert 'expiration' not in dlx_properties
+		assert 'expiration_ms' not in dlx_properties
 		# Routing-back-to-original lives in queue args, not headers.
 		assert 'x-dead-letter-exchange' not in dlx_properties['headers']
 		assert 'x-dead-letter-routing-key' not in dlx_properties['headers']
@@ -626,7 +628,7 @@ class TestDLXRetryHeaders:
 		}
 		mock_properties.content_type = 'application/json'
 
-		target_exchange, target_routing, dlx_properties, _ = mock_consumer._build_dlx_retry_properties(
+		target_exchange, target_routing, dlx_properties, _, should_cycle, next_delay_ms = mock_consumer._build_dlx_retry_properties(
 			properties=mock_properties,
 			processing_error="boom",
 			original_exchange="orders_exchange",
@@ -639,7 +641,9 @@ class TestDLXRetryHeaders:
 
 		assert target_exchange == "orders_exchange.dlx"
 		assert target_routing == "new_order"
-		assert 'expiration' not in dlx_properties
+		assert should_cycle is False
+		assert next_delay_ms is None
+		assert 'expiration_ms' not in dlx_properties
 		assert dlx_properties['headers']['x-retry-exhausted'] is True
 
 	def test_retry_queue_declared_with_ttl_and_dead_letter_args_fixed_mode(self, mock_consumer):
@@ -752,8 +756,8 @@ class TestExponentialBackoff:
 
 	def test_exponential_mode_stamps_per_message_expiration(self, mock_consumer):
 		"""When cycling in exponential mode, the publish properties must carry
-		an ``expiration`` string (ms) within the jittered range. RabbitMQ
-		expects ``expiration`` as a string per AMQP-0-9-1."""
+		an integer-ms ``expiration_ms`` within the jittered range. The library
+		layer (pika str, aio-pika timedelta) converts it for the wire."""
 		mock_properties = MagicMock()
 		mock_properties.headers = {
 			'x-cycle-count': 2,
@@ -762,7 +766,7 @@ class TestExponentialBackoff:
 		}
 		mock_properties.content_type = 'application/json'
 
-		_, target_routing, dlx_properties, retry_info = mock_consumer._build_dlx_retry_properties(
+		_, target_routing, dlx_properties, _, should_cycle, next_delay_ms = mock_consumer._build_dlx_retry_properties(
 			properties=mock_properties,
 			processing_error="boom",
 			original_exchange="orders_exchange",
@@ -776,16 +780,16 @@ class TestExponentialBackoff:
 		)
 
 		assert target_routing == "new_order.retry"
-		assert 'expiration' in dlx_properties
-		assert isinstance(dlx_properties['expiration'], str)
+		assert should_cycle is True
+		assert 'expiration_ms' in dlx_properties
+		assert isinstance(dlx_properties['expiration_ms'], int)
 		# cycle_count=2 → base * 4 = 4m, ±20%
-		expiration_ms = int(dlx_properties['expiration'])
-		assert 0.8 * 4 * 60_000 <= expiration_ms <= 1.2 * 4 * 60_000
-		assert retry_info['next_delay_ms'] == expiration_ms
+		assert 0.8 * 4 * 60_000 <= dlx_properties['expiration_ms'] <= 1.2 * 4 * 60_000
+		assert next_delay_ms == dlx_properties['expiration_ms']
 
 	def test_exponential_mode_no_expiration_when_exhausted(self, mock_consumer):
 		"""On the terminal ``.dlx`` binding (retry budget spent), no per-message
-		``expiration`` may be set -- the message must stay parked indefinitely
+		``expiration_ms`` may be set -- the message must stay parked indefinitely
 		for manual review, not expire and get dropped."""
 		mock_properties = MagicMock()
 		mock_properties.headers = {
@@ -795,7 +799,7 @@ class TestExponentialBackoff:
 		}
 		mock_properties.content_type = 'application/json'
 
-		_, target_routing, dlx_properties, _ = mock_consumer._build_dlx_retry_properties(
+		_, target_routing, dlx_properties, _, should_cycle, next_delay_ms = mock_consumer._build_dlx_retry_properties(
 			properties=mock_properties,
 			processing_error="boom",
 			original_exchange="orders_exchange",
@@ -809,7 +813,9 @@ class TestExponentialBackoff:
 		)
 
 		assert target_routing == "new_order"
-		assert 'expiration' not in dlx_properties
+		assert should_cycle is False
+		assert next_delay_ms is None
+		assert 'expiration_ms' not in dlx_properties
 
 	def test_retry_queue_uses_cap_as_ttl_in_exponential_mode(self, mock_consumer):
 		"""In exponential mode the queue's ``x-message-ttl`` must be the cap

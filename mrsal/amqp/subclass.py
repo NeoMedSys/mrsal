@@ -4,6 +4,7 @@ import pika
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from functools import partial
 from mrsal.exceptions import MrsalAbortedSetup, MrsalNoAsyncioLoopError
 from logging import WARNING
@@ -301,14 +302,21 @@ class MrsalBlockingAMQP(Mrsal):
 		:param str dlx_routing_key: Custom DLX routing key
 		:param bool use_quorum_queues: Use quorum queues for durability
 		:param bool enable_retry_cycles: Enable DLX retry cycles
-		:param int retry_cycle_interval: Minutes between retry cycles (base for exponential)
-		:param int max_retry_time_limit: Minutes total before permanent DLX
+		:param int retry_cycle_interval: Minutes between retry cycles. In ``"exponential"``
+			mode this is the base for ``base * 2**cycle`` growth. Default:
+			``config.DEFAULT_RETRY_CYCLE_INTERVAL_MIN`` (10).
+		:param int max_retry_time_limit: Minutes of cumulative cycle time before the
+			message is parked in the terminal ``.dlx`` queue. Default:
+			``config.DEFAULT_MAX_RETRY_TIME_LIMIT_MIN`` (480, i.e. 8h — raised from 60
+			in 3.9.0 to give exponential delays room to actually retry).
 		:param str retry_backoff: "fixed" (flat queue-TTL interval) or "exponential"
 			(per-message ``base * 2**cycle`` clamped at ``retry_backoff_max`` with ±20% jitter).
-			Default "exponential". Switching modes on a running deployment requires deleting
-			the existing ``<queue>.retry`` queue (the ``x-message-ttl`` arg becomes inequivalent).
+			Default: ``config.DEFAULT_RETRY_BACKOFF`` ("exponential"). Switching modes on a
+			running deployment requires deleting the existing ``<queue>.retry`` queue
+			(the ``x-message-ttl`` arg becomes inequivalent).
 		:param int retry_backoff_max: Per-cycle ceiling in minutes for exponential mode.
-			Ignored when ``retry_backoff="fixed"``. Default 60.
+			Must be >= ``retry_cycle_interval``. Ignored when ``retry_backoff="fixed"``.
+			Default: ``config.DEFAULT_RETRY_BACKOFF_MAX_MIN`` (60).
 		:param int max_queue_length: Maximum number of messages in queue
 		:param int max_queue_length_bytes: Maximum queue size in bytes
 		:param str queue_overflow: "drop-head" or "reject-publish"
@@ -334,6 +342,8 @@ class MrsalBlockingAMQP(Mrsal):
 				routing_key=routing_key,
 				retry_cycle_interval=retry_cycle_interval,
 				auto_declare=auto_declare,
+				retry_backoff=retry_backoff,
+				retry_backoff_max=retry_backoff_max,
 			)
 
 		if threaded:
@@ -647,11 +657,14 @@ class MrsalBlockingAMQP(Mrsal):
 		failed. The caller is responsible for nacking the original message on
 		failure.
 		"""
+		# AMQP wire format for `expiration` is a string of milliseconds; pika
+		# forwards `BasicProperties.expiration` verbatim, so format here.
+		expiration_ms = properties.get('expiration_ms')
 		pika_properties = pika.BasicProperties(
 			headers=properties.get('headers'),
 			delivery_mode=properties.get('delivery_mode', 2),
 			content_type=properties.get('content_type', 'application/json'),
-			expiration=properties.get('expiration')
+			expiration=str(expiration_ms) if expiration_ms is not None else None
 		)
 
 		self._ensure_dlx_publish_channel()
@@ -1007,6 +1020,8 @@ class MrsalAsyncAMQP(Mrsal):
 				routing_key=routing_key,
 				retry_cycle_interval=retry_cycle_interval,
 				auto_declare=auto_declare,
+				retry_backoff=retry_backoff,
+				retry_backoff_max=retry_backoff_max,
 			)
 
 		try:
@@ -1211,11 +1226,12 @@ class MrsalAsyncAMQP(Mrsal):
 			delivery_mode=properties.get('delivery_mode', 2)
 		)
 
-		if 'expiration' in properties:
-			# AMQP expiration is milliseconds. pika accepts it as a string ms
-			# directly; aio-pika's setter treats numeric values as seconds and
-			# multiplies by 1000 internally, so divide ms → s for that path.
-			message.expiration = int(properties['expiration']) / 1000
+		# aio-pika accepts ``expiration`` as a ``timedelta`` and converts it to
+		# AMQP wire-format ms internally. Using timedelta keeps the unit
+		# explicit and sidesteps the seconds-vs-ms ambiguity of numeric inputs.
+		expiration_ms = properties.get('expiration_ms')
+		if expiration_ms is not None:
+			message.expiration = timedelta(milliseconds=expiration_ms)
 
 		await self._ensure_dlx_publish_channel()
 		exchange = await self._dlx_publish_channel.get_exchange(dlx_exchange)

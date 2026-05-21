@@ -134,6 +134,8 @@ class Mrsal:
 		routing_key: str | None,
 		retry_cycle_interval: int,
 		auto_declare: bool,
+		retry_backoff: str = config.DEFAULT_RETRY_BACKOFF,
+		retry_backoff_max: int = config.DEFAULT_RETRY_BACKOFF_MAX_MIN,
 	) -> None:
 		"""Reject ``enable_retry_cycles=True`` configurations that would silently drop messages.
 
@@ -160,6 +162,31 @@ class Mrsal:
 				f"retry_cycle_interval must be > 0 (got {retry_cycle_interval}); "
 				"use enable_retry_cycles=False to opt out of cycling."
 			)
+		if retry_backoff not in ("fixed", "exponential"):
+			# Python doesn't enforce Literal at runtime; a typo here would
+			# silently fall into the else-branch in _compute_retry_delay_ms
+			# and apply exponential math regardless of the operator's intent.
+			raise MrsalAbortedSetup(
+				f"retry_backoff must be 'fixed' or 'exponential' (got {retry_backoff!r})."
+			)
+		if retry_backoff == "exponential":
+			if retry_backoff_max <= 0:
+				# Mirrors the retry_cycle_interval check: a non-positive cap
+				# would set x-message-ttl <= 0 on the .retry queue, which the
+				# broker either rejects or treats as immediate dead-lettering.
+				raise MrsalAbortedSetup(
+					f"retry_backoff_max must be > 0 (got {retry_backoff_max}); "
+					"use retry_backoff='fixed' to opt out of exponential backoff."
+				)
+			if retry_backoff_max < retry_cycle_interval:
+				# When cap < base the first cycle already saturates the cap,
+				# defeating the point of exponential growth and making the
+				# clamp invisible. Almost certainly a config mistake.
+				raise MrsalAbortedSetup(
+					f"retry_backoff_max ({retry_backoff_max}m) must be >= "
+					f"retry_cycle_interval ({retry_cycle_interval}m); otherwise "
+					"the first cycle already saturates the cap."
+				)
 		if exchange_type is None:
 			if auto_declare:
 				raise MrsalAbortedSetup(
@@ -197,8 +224,12 @@ class Mrsal:
 		use_quorum_queues: bool,
 		retry_backoff: Literal["fixed", "exponential"] = config.DEFAULT_RETRY_BACKOFF,
 		retry_backoff_max: int = config.DEFAULT_RETRY_BACKOFF_MAX_MIN,
-	) -> dict:
+	) -> tuple[dict, int]:
 		"""Build the ``x-arguments`` dict for the ``.retry`` queue declaration.
+
+		Returns ``(args, ttl_min)``. ``ttl_min`` is the queue TTL in minutes,
+		surfaced so the sync and async setup paths can log it without
+		recomputing the fixed/exponential branch.
 
 		Shared by the sync and async setup paths to keep the two code paths
 		from drifting. ``x-message-ttl`` + ``x-dead-letter-exchange`` +
@@ -218,7 +249,7 @@ class Mrsal:
 		if use_quorum_queues:
 			args['x-queue-type'] = 'quorum'
 			args['x-quorum-initial-group-size'] = 3
-		return args
+		return args, ttl_min
 
 	@staticmethod
 	def _compute_retry_delay_ms(
@@ -235,10 +266,16 @@ class Mrsal:
 		``cap_min``, then multiplied by ±20% jitter to avoid synchronized
 		retries when many messages fail at once. For ``"fixed"`` the base
 		interval is returned unchanged (queue TTL drives the delay).
+
+		``cycle_count`` is clamped to 64 before exponentiation. The cap kicks
+		in within ~10 cycles for any realistic base/cap pair, so 64 is
+		comfortably past saturation and prevents pathological big-int work
+		if a corrupt or hostile publisher injects a huge ``x-cycle-count``.
 		"""
 		if backoff == "fixed":
 			return base_min * 60_000
-		raw_min = min(base_min * (2 ** cycle_count), cap_min)
+		safe_cycle = min(cycle_count, 64)
+		raw_min = min(base_min * (2 ** safe_cycle), cap_min)
 		jittered = raw_min * 60_000 * random.uniform(0.8, 1.2)
 		return int(jittered)
 
@@ -325,7 +362,7 @@ class Mrsal:
 					# the queue exists triggers RabbitMQ's "inequivalent arg" error;
 					# delete <queue>.retry before redeploying with a new interval.
 					retry_queue_name = f"{queue_name}{config.RETRY_SUFFIX}"
-					retry_queue_args = self._build_retry_queue_args(
+					retry_queue_args, ttl_min = self._build_retry_queue_args(
 						exchange_name=exchange_name,
 						routing_key=routing_key,
 						retry_cycle_interval=retry_cycle_interval,
@@ -351,8 +388,7 @@ class Mrsal:
 								channel=channel
 								)
 						if self.verbose:
-							ttl_log = retry_backoff_max if retry_backoff == "exponential" else retry_cycle_interval
-							log.info(f"Retry queue {retry_queue_name} declared (backoff={retry_backoff}, queue TTL={ttl_log}m, dead-letters back to {exchange_name}/{routing_key})")
+							log.info(f"Retry queue {retry_queue_name} declared (backoff={retry_backoff}, queue TTL={ttl_min}m, dead-letters back to {exchange_name}/{routing_key})")
 					except MrsalSetupError as e:
 						# Fail loud: cycling publishes target the .retry binding, so a
 						# missing/inconsistent .retry queue silently drops cycled
@@ -513,7 +549,7 @@ class Mrsal:
 					# the queue exists triggers RabbitMQ's "inequivalent arg" error;
 					# delete <queue>.retry before redeploying with a new interval.
 					retry_queue_name = f"{queue_name}{config.RETRY_SUFFIX}"
-					retry_queue_args = self._build_retry_queue_args(
+					retry_queue_args, ttl_min = self._build_retry_queue_args(
 						exchange_name=exchange_name,
 						routing_key=routing_key,
 						retry_cycle_interval=retry_cycle_interval,
@@ -538,8 +574,7 @@ class Mrsal:
 								arguments=None
 								)
 						if self.verbose:
-							ttl_log = retry_backoff_max if retry_backoff == "exponential" else retry_cycle_interval
-							log.info(f"Retry queue {retry_queue_name} declared (backoff={retry_backoff}, queue TTL={ttl_log}m, dead-letters back to {exchange_name}/{routing_key})")
+							log.info(f"Retry queue {retry_queue_name} declared (backoff={retry_backoff}, queue TTL={ttl_min}m, dead-letters back to {exchange_name}/{routing_key})")
 					except MrsalSetupError as e:
 						raise MrsalAbortedSetup(
 							f"Retry queue {retry_queue_name} setup failed: {e}. "
@@ -919,22 +954,26 @@ class Mrsal:
 									dlx_routing_key: str | None = None,
 									retry_backoff: Literal["fixed", "exponential"] = config.DEFAULT_RETRY_BACKOFF,
 									retry_backoff_max: int = config.DEFAULT_RETRY_BACKOFF_MAX_MIN,
-									) -> tuple[str, str, dict, dict]:
+									) -> tuple[str, str, dict, dict, bool, int | None]:
 		"""Build DLX target and properties for retry cycle publishing.
 
-		Returns (target_exchange, target_routing_key, properties, retry_info).
+		Returns ``(target_exchange, target_routing_key, properties, retry_info,
+		should_cycle, next_delay_ms)``. ``should_cycle`` and ``next_delay_ms``
+		are returned explicitly so callers don't need to re-derive them; this
+		avoids mutating ``retry_info`` for cross-method communication and
+		removes a redundant ``_should_continue_retry_cycles`` call at the
+		handler layer.
+
 		When ``should_cycle`` is True, target is the ``.retry`` queue binding
-		(``<dlx_routing>.retry``) so the broker-side TTL on that queue drives
-		the delay. When False, target is the terminal ``.dlx`` queue binding
-		and the message stays parked for manual review.
+		(``<dlx_routing>.retry``). When False, target is the terminal ``.dlx``
+		queue binding and the message stays parked for manual review.
 
-		For ``retry_backoff="exponential"`` a per-message ``expiration`` (ms
-		as a string, per AMQP) is added so each cycle waits longer than the
-		last. The queue's ``x-message-ttl`` is set to the cap, so the shorter
-		per-message value always wins.
-
-		``retry_info['next_delay_ms']`` is populated when ``should_cycle``
-		so the caller can log the actual delay rather than the base interval.
+		For ``retry_backoff="exponential"`` ``properties['expiration_ms']`` is
+		set to an integer millisecond delay. Each ``_publish_to_dlx``
+		implementation is responsible for formatting that value for its
+		underlying library (pika expects a string of ms; aio-pika accepts
+		``timedelta``). Keeping the unit explicit in the key avoids the layer
+		violation of choosing a wire format here.
 		"""
 		retry_info = self._get_retry_cycle_info(properties)
 		should_cycle = self._should_continue_retry_cycles(retry_info, enable_retry_cycles, max_retry_time_limit)
@@ -950,7 +989,7 @@ class Mrsal:
 			processing_error, should_cycle
 		)
 
-		target_properties = {
+		target_properties: dict = {
 			'headers': enhanced_headers,
 			'delivery_mode': 2,
 			'content_type': getattr(properties, 'content_type', 'application/json')
@@ -964,12 +1003,9 @@ class Mrsal:
 				backoff=retry_backoff,
 				cap_min=retry_backoff_max,
 			)
-			# AMQP requires `expiration` as a string of milliseconds. pika and
-			# aio-pika both forward it verbatim into BasicProperties.
-			target_properties['expiration'] = str(next_delay_ms)
-		retry_info['next_delay_ms'] = next_delay_ms
+			target_properties['expiration_ms'] = next_delay_ms
 
-		return target_exchange, target_routing, target_properties, retry_info
+		return target_exchange, target_routing, target_properties, retry_info, should_cycle, next_delay_ms
 
 	def _log_dlx_result(self, retry_info: dict, next_delay_ms: int | None, should_cycle: bool) -> None:
 		"""Log the result of a DLX retry cycle publish."""
@@ -990,7 +1026,7 @@ class Mrsal:
 			retry_backoff: Literal["fixed", "exponential"] = config.DEFAULT_RETRY_BACKOFF,
 			retry_backoff_max: int = config.DEFAULT_RETRY_BACKOFF_MAX_MIN):
 		"""Base method for DLX handling with retry cycles (sync)."""
-		target_exchange, target_routing, target_properties, retry_info = self._build_dlx_retry_properties(
+		target_exchange, target_routing, target_properties, retry_info, should_cycle, next_delay_ms = self._build_dlx_retry_properties(
 			properties=properties,
 			processing_error=processing_error,
 			original_exchange=original_exchange,
@@ -1004,8 +1040,7 @@ class Mrsal:
 			retry_backoff_max=retry_backoff_max,
 		)
 		self._publish_to_dlx(target_exchange, target_routing, body, target_properties)
-		should_cycle = self._should_continue_retry_cycles(retry_info, enable_retry_cycles, max_retry_time_limit)
-		self._log_dlx_result(retry_info, retry_info.get('next_delay_ms'), should_cycle)
+		self._log_dlx_result(retry_info, next_delay_ms, should_cycle)
 
 	async def _handle_dlx_with_retry_cycle_async(
 			self, message, properties, processing_error: str,
@@ -1016,7 +1051,7 @@ class Mrsal:
 			retry_backoff: Literal["fixed", "exponential"] = config.DEFAULT_RETRY_BACKOFF,
 			retry_backoff_max: int = config.DEFAULT_RETRY_BACKOFF_MAX_MIN):
 		"""Base method for DLX handling with retry cycles (async)."""
-		target_exchange, target_routing, target_properties, retry_info = self._build_dlx_retry_properties(
+		target_exchange, target_routing, target_properties, retry_info, should_cycle, next_delay_ms = self._build_dlx_retry_properties(
 			properties=properties,
 			processing_error=processing_error,
 			original_exchange=original_exchange,
@@ -1030,8 +1065,7 @@ class Mrsal:
 			retry_backoff_max=retry_backoff_max,
 		)
 		await self._publish_to_dlx(target_exchange, target_routing, message.body, target_properties)
-		should_cycle = self._should_continue_retry_cycles(retry_info, enable_retry_cycles, max_retry_time_limit)
-		self._log_dlx_result(retry_info, retry_info.get('next_delay_ms'), should_cycle)
+		self._log_dlx_result(retry_info, next_delay_ms, should_cycle)
 
 	def _publish_to_dlx(self, dlx_exchange: str, routing_key: str, body: bytes, properties: dict):
 		"""Abstract method - implemented by subclasses."""
