@@ -14,7 +14,8 @@ from pika.exceptions import (
 		StreamLostError,
 		ConnectionClosedByBroker,
 		NackError,
-		UnroutableError
+		UnroutableError,
+		ConnectionWrongStateError,
 		)
 from aio_pika import connect_robust, Message
 from dataclasses import field
@@ -156,10 +157,30 @@ class MrsalBlockingAMQP(Mrsal):
 	def _schedule_threadsafe(self, func: Callable, threaded: bool, *args, **kwargs) -> None:
 		"""
 		Executes an AMQP operation safely based on the threading mode.
+
+		In threaded mode the worker may finish *after* the broker has reset the
+		connection (e.g. heartbeat starvation under long callbacks). Calling
+		add_callback_threadsafe on a closed BlockingConnection raises
+		ConnectionWrongStateError and kills the worker thread. The op (typically
+		basic_ack/nack) cannot succeed against a dead connection anyway, so we
+		drop it and let the consumer retry pick up the redelivered message.
 		"""
 		if threaded:
+			conn = self._connection
+			if conn is None or not conn.is_open:
+				log.warning(
+					f"Skipping {getattr(func, '__name__', func)!r}: connection is closed; "
+					"the broker will redeliver on reconnect."
+				)
+				return
 			cb = partial(func, *args, **kwargs)
-			self._connection.add_callback_threadsafe(cb)
+			try:
+				conn.add_callback_threadsafe(cb)
+			except ConnectionWrongStateError as e:
+				log.warning(
+					f"Could not schedule {getattr(func, '__name__', func)!r} on closed connection: {e}; "
+					"the broker will redeliver on reconnect."
+				)
 		else:
 			func(*args, **kwargs)
 
