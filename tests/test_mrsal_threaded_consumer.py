@@ -117,6 +117,26 @@ def test_schedule_threadsafe_behavior(mock_consumer):
 	mock_consumer._connection.add_callback_threadsafe.assert_not_called()
 	mock_func.assert_called_once_with(arg1)
 
+def test_schedule_threadsafe_skips_when_connection_closed(mock_consumer):
+	"""Scheduling on a closed connection must not raise — broker will redeliver."""
+	mock_consumer._connection.is_open = False
+	mock_func = MagicMock()
+
+	mock_consumer._schedule_threadsafe(mock_func, True, "tag")
+
+	mock_consumer._connection.add_callback_threadsafe.assert_not_called()
+	mock_func.assert_not_called()
+
+def test_schedule_threadsafe_swallows_wrong_state_error(mock_consumer):
+	"""If pika raises ConnectionWrongStateError despite is_open, we still recover."""
+	from pika.exceptions import ConnectionWrongStateError
+	mock_consumer._connection.is_open = True
+	mock_consumer._connection.add_callback_threadsafe.side_effect = ConnectionWrongStateError("closed")
+	mock_func = MagicMock()
+
+	# Must not raise.
+	mock_consumer._schedule_threadsafe(mock_func, True, "tag")
+
 def test_worker_logic_acks_threadsafe(mock_consumer):
 	"""
 	Test that the worker logic (_process_single_message) correctly
