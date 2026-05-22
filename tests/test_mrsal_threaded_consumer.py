@@ -137,6 +137,8 @@ def test_schedule_threadsafe_swallows_wrong_state_error(mock_consumer):
 	# Must not raise.
 	mock_consumer._schedule_threadsafe(mock_func, True, "tag")
 
+	mock_consumer._connection.add_callback_threadsafe.assert_called_once()
+
 def test_worker_logic_acks_threadsafe(mock_consumer):
 	"""
 	Test that the worker logic (_process_single_message) correctly
