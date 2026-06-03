@@ -3,7 +3,11 @@ from mrsal.basemodels import MrsalProtocol
 import pika
 import json
 import logging
+import time
+import threading
+import queue
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import timedelta
 from functools import partial
 from mrsal.exceptions import MrsalAbortedSetup, MrsalNoAsyncioLoopError
@@ -30,42 +34,19 @@ from mrsal import config
 log = logging.getLogger(__name__)
 
 @dataclass
-class MrsalBlockingAMQP(Mrsal):
-	"""
-	:param int blocked_connection_timeout: blocked_connection_timeout
-		is the timeout, in seconds,
-		for the connection to remain blocked; if the timeout expires,
-			the connection will be torn down during connection tuning.
+class MrsalBlockingBase(Mrsal):
+	"""Shared blocking-connection lifecycle for the sync consumer and publisher.
+
+	Owns the pika ``BlockingConnection`` setup/teardown and the context-manager
+	protocol so that the consumer (``MrsalBlockingAMQP``) and the publisher
+	(``MrsalBlockingPublisher``) reuse it without one inheriting the other's
+	surface.
+
+	:param int blocked_connection_timeout: timeout, in seconds, for the
+		connection to remain blocked; if it expires the connection is torn down
+		during connection tuning.
 	"""
 	blocked_connection_timeout: int = 60  # sec
-	_consumer_channel: Any = field(init=False, default=None)
-	_dlx_publish_channel: Any = field(init=False, default=None)
-
-	def close(self) -> None:
-		"""Close channels and connection cleanly.
-
-		Each close is wrapped: a failure on one handle must not leak the next.
-		"""
-		if self._dlx_publish_channel is not None and self._dlx_publish_channel.is_open:
-			try:
-				self._dlx_publish_channel.close()
-			except Exception:
-				log.debug("DLX publish channel close raised; ignoring.", exc_info=True)
-		self._dlx_publish_channel = None
-
-		if self._consumer_channel is not None and self._consumer_channel.is_open:
-			try:
-				self._consumer_channel.close()
-			except Exception:
-				log.debug("Consumer channel close raised; ignoring.", exc_info=True)
-		self._consumer_channel = None
-
-		if self._connection is not None and self._connection.is_open:
-			try:
-				self._connection.close()
-			except Exception:
-				log.debug("Connection close raised; ignoring.", exc_info=True)
-		self._connection = None
 
 	def __enter__(self):
 		return self
@@ -73,6 +54,13 @@ class MrsalBlockingAMQP(Mrsal):
 	def __exit__(self, exc_type, exc_val, exc_tb):
 		self.close()
 		return False
+
+	def close(self) -> None:
+		"""Release channels and the connection.
+
+		Subclasses must implement this; ``__exit__`` relies on it.
+		"""
+		raise NotImplementedError
 
 	def _ensure_connection(self) -> None:
 		"""Idempotent: only connects if not already connected."""
@@ -85,31 +73,14 @@ class MrsalBlockingAMQP(Mrsal):
 					pass
 			self.setup_blocking_connection()
 
-	def _ensure_dlx_publish_channel(self) -> None:
-		"""Lazily open a dedicated channel with publisher confirms for DLX writes.
-
-		Why: ``confirm_delivery()`` makes ``basic_publish`` raise on broker
-		rejection or unroutable destination (``NackError`` / ``UnroutableError``)
-		instead of returning silently. Without it a dropped DLX publish would
-		succeed-on-the-wire and the caller would ack the original message,
-		causing silent message loss.
-
-		Kept separate from the consumer channel so confirms semantics don't
-		affect the consume path. Not safe for concurrent callers; the consume
-		loop serializes DLX publishes today.
-		"""
-		self._ensure_connection()
-		if self._dlx_publish_channel is not None and self._dlx_publish_channel.is_open:
-			return
-		if self._dlx_publish_channel is not None:
+	def _close_connection(self) -> None:
+		"""Close just the underlying connection, swallowing close errors."""
+		if self._connection is not None and self._connection.is_open:
 			try:
-				self._dlx_publish_channel.close()
+				self._connection.close()
 			except Exception:
-				log.debug("Stale DLX publish channel close raised; ignoring.", exc_info=True)
-			self._dlx_publish_channel = None
-		channel = self._connection.channel()
-		channel.confirm_delivery()
-		self._dlx_publish_channel = channel
+				log.debug("Connection close raised; ignoring.", exc_info=True)
+		self._connection = None
 
 	def setup_blocking_connection(self) -> None:
 		"""We can use setup_blocking_connection for establishing a connection to RabbitMQ server specifying connection parameters.
@@ -153,6 +124,64 @@ class MrsalBlockingAMQP(Mrsal):
 		except Exception as e:
 			log.error(f"Unexpected error caught: {e}")
 			raise
+
+
+@dataclass
+class MrsalBlockingAMQP(MrsalBlockingBase):
+	"""Blocking RabbitMQ consumer (and legacy per-call publisher).
+
+	For high-throughput publishing prefer ``MrsalBlockingPublisher`` /
+	``MrsalBlockingPublisherPool``, which keep the connection and channel warm.
+	"""
+	_consumer_channel: Any = field(init=False, default=None)
+	_dlx_publish_channel: Any = field(init=False, default=None)
+
+	def close(self) -> None:
+		"""Close channels and connection cleanly.
+
+		Each close is wrapped: a failure on one handle must not leak the next.
+		"""
+		if self._dlx_publish_channel is not None and self._dlx_publish_channel.is_open:
+			try:
+				self._dlx_publish_channel.close()
+			except Exception:
+				log.debug("DLX publish channel close raised; ignoring.", exc_info=True)
+		self._dlx_publish_channel = None
+
+		if self._consumer_channel is not None and self._consumer_channel.is_open:
+			try:
+				self._consumer_channel.close()
+			except Exception:
+				log.debug("Consumer channel close raised; ignoring.", exc_info=True)
+		self._consumer_channel = None
+
+		self._close_connection()
+
+	def _ensure_dlx_publish_channel(self) -> None:
+		"""Lazily open a dedicated channel with publisher confirms for DLX writes.
+
+		Why: ``confirm_delivery()`` makes ``basic_publish`` raise on broker
+		rejection or unroutable destination (``NackError`` / ``UnroutableError``)
+		instead of returning silently. Without it a dropped DLX publish would
+		succeed-on-the-wire and the caller would ack the original message,
+		causing silent message loss.
+
+		Kept separate from the consumer channel so confirms semantics don't
+		affect the consume path. Not safe for concurrent callers; the consume
+		loop serializes DLX publishes today.
+		"""
+		self._ensure_connection()
+		if self._dlx_publish_channel is not None and self._dlx_publish_channel.is_open:
+			return
+		if self._dlx_publish_channel is not None:
+			try:
+				self._dlx_publish_channel.close()
+			except Exception:
+				log.debug("Stale DLX publish channel close raised; ignoring.", exc_info=True)
+			self._dlx_publish_channel = None
+		channel = self._connection.channel()
+		channel.confirm_delivery()
+		self._dlx_publish_channel = channel
 
 	def _schedule_threadsafe(self, func: Callable, threaded: bool, *args, **kwargs) -> None:
 		"""
@@ -495,8 +524,7 @@ class MrsalBlockingAMQP(Mrsal):
 		:raises NackError: raised when a message published in publisher-acknowledgements mode is Nack'ed by the broker. See `BlockingChannel.confirm_delivery`.
 		"""
 
-		if not isinstance(message, (str, bytes)):
-			raise MrsalAbortedSetup('Your message body needs to be string or bytes or serialized dict')
+		self._validate_message_body(message)
 		# connect and use only blocking
 		self._ensure_connection()
 		ch = self._connection.channel()
@@ -584,8 +612,7 @@ class MrsalBlockingAMQP(Mrsal):
 			for inbound_app_id, mrsal_protocol in mrsal_protocol_collection.items():
 				protocol = MrsalProtocol(**mrsal_protocol)
 
-				if not isinstance(protocol.message, (str, bytes)):
-					raise MrsalAbortedSetup('Your message body needs to be string or bytes or serialized dict')
+				self._validate_message_body(protocol.message)
 
 				if auto_declare:
 					self._setup_exchange_and_queue(
@@ -1257,3 +1284,245 @@ class MrsalAsyncAMQP(Mrsal):
 		await self._ensure_dlx_publish_channel()
 		exchange = await self._dlx_publish_channel.get_exchange(dlx_exchange)
 		await exchange.publish(message, routing_key=routing_key, mandatory=True)
+
+
+# How many times publish() retries across a dropped connection/channel before
+# giving up, and how long it waits between attempts. Mirrors the tenacity
+# policy on MrsalBlockingAMQP.publish_message (3 attempts, fixed 2s).
+_PUBLISH_ATTEMPTS = 3
+_PUBLISH_RETRY_WAIT_SEC = 2
+
+# Broker rejected the message under publisher confirms (unroutable / nacked):
+# terminal, retrying won't change the outcome.
+_TERMINAL_PUBLISH_ERRORS = (UnroutableError, NackError)
+# Connection or channel died mid-publish: reconnect and retry.
+_RETRIABLE_PUBLISH_ERRORS = (
+	AMQPConnectionError,
+	ChannelClosedByBroker,
+	ConnectionClosedByBroker,
+	StreamLostError,
+	ConnectionWrongStateError,
+)
+
+
+@dataclass
+class MrsalBlockingPublisher(MrsalBlockingBase):
+	"""Long-lived blocking publisher: one reused connection + channel.
+
+	Two efficiencies over ``MrsalBlockingAMQP.publish_message`` -- which opens
+	and closes a channel on every call (and whose callers typically open and
+	close a whole connection per publish):
+
+	  * channel reuse -- a single confirm-enabled channel is kept open across
+	    publishes instead of being opened and closed each time.
+	  * topology cache -- the passive ``Exchange.Declare`` / ``Queue.Declare``
+	    round-trips run only the first time a given target is published to on a
+	    connection, not on every publish.
+
+	Publishes are sent with ``mandatory=True`` under publisher confirms, so an
+	unroutable target raises ``UnroutableError`` rather than being silently
+	dropped.
+
+	NOT thread-safe: pika's BlockingConnection is owned by a single thread. Use
+	one instance per thread, or let ``MrsalBlockingPublisherPool`` hand out one
+	instance per concurrent caller.
+	"""
+	_publish_channel: Any = field(init=False, default=None)
+	_declared_topology: Any = field(init=False, default_factory=set)
+	_topology_conn: Any = field(init=False, default=None)
+
+	def _ensure_publish_channel(self) -> None:
+		"""Open (or reopen) the persistent confirm-enabled publish channel.
+
+		Reconnects the underlying connection if it dropped. When a *new*
+		connection is established the topology cache is cleared, because the
+		freshly opened connection has verified nothing yet.
+		"""
+		self._ensure_connection()
+		if self._connection is not self._topology_conn:
+			# Reconnected (or first connect): nothing verified on this socket yet.
+			self._declared_topology.clear()
+			self._topology_conn = self._connection
+			self._publish_channel = None
+		if self._publish_channel is not None and self._publish_channel.is_open:
+			return
+		channel = self._connection.channel()
+		# Confirms make basic_publish raise NackError/UnroutableError instead of
+		# silently dropping -- callers rely on that signal.
+		channel.confirm_delivery()
+		self._publish_channel = channel
+
+	def _reset_publish_channel(self) -> None:
+		"""Drop the channel so the next publish reopens it."""
+		if self._publish_channel is not None:
+			try:
+				if self._publish_channel.is_open:
+					self._publish_channel.close()
+			except Exception:
+				log.debug("Publish channel close raised during reset; ignoring.", exc_info=True)
+		self._publish_channel = None
+
+	def publish(
+		self,
+		exchange_name: str,
+		routing_key: str,
+		message: str | bytes,
+		exchange_type: str,
+		queue_name: str,
+		auto_declare: bool = True,
+		passive: bool = True,
+		prop: pika.BasicProperties | None = None,
+	) -> None:
+		"""Publish on the reused channel, declaring topology at most once per target.
+
+		Same arguments as ``MrsalBlockingAMQP.publish_message``. Sent with
+		``mandatory=True`` under publisher confirms, so an unroutable target
+		raises ``UnroutableError`` rather than being silently dropped. On a
+		dropped connection/channel the publish is retried after reconnecting;
+		terminal broker rejections (``NackError`` / ``UnroutableError``) and a
+		failed topology declaration are raised so the caller decides what to do.
+		"""
+		self._validate_message_body(message)
+
+		topology_key = (exchange_name, exchange_type, queue_name, routing_key, passive)
+		last_exc: Exception | None = None
+		for attempt in range(1, _PUBLISH_ATTEMPTS + 1):
+			try:
+				self._ensure_publish_channel()
+
+				if auto_declare and topology_key not in self._declared_topology:
+					if None in (exchange_name, queue_name, exchange_type, routing_key):
+						raise TypeError('Make sure that you are passing in all the necessary args for auto_declare')
+					self._setup_exchange_and_queue(
+						exchange_name=exchange_name,
+						queue_name=queue_name,
+						exchange_type=exchange_type,
+						routing_key=routing_key,
+						passive=passive,
+						channel=self._publish_channel,
+					)
+					# auto_declare_ok is the success flag for both passive checks
+					# and active declares; _setup_exchange_and_queue swallows the
+					# broker error, so guard on it (and only cache on success) for
+					# both modes -- a failed passive 404 also closed the channel.
+					if not self.auto_declare_ok:
+						self._reset_publish_channel()
+						raise MrsalAbortedSetup(
+							f"Topology declaration failed for exchange {exchange_name} / queue {queue_name}; refusing to publish."
+						)
+					self._declared_topology.add(topology_key)
+
+				self._publish_channel.basic_publish(
+					exchange=exchange_name, routing_key=routing_key, body=message,
+					properties=prop, mandatory=True,
+				)
+				if self.verbose:
+					log.info(f"Message published to exchange {exchange_name} with routing key {routing_key}")
+				return
+
+			except _TERMINAL_PUBLISH_ERRORS as e:
+				# Confirm-mode rejection: terminal, retrying won't help. The
+				# channel stays usable for the next caller.
+				log.error(f"Broker rejected publish to {exchange_name}/{routing_key}: {e}")
+				raise
+			except _RETRIABLE_PUBLISH_ERRORS as e:
+				# Connection or channel died. Drop the channel and reconnect on
+				# the next attempt. The topology cache is left intact: declared
+				# exchanges/queues are broker-side state that outlives the
+				# channel, and a genuine reconnect clears the cache anyway via
+				# _ensure_publish_channel.
+				last_exc = e
+				self._reset_publish_channel()
+				log.warning(f"Publish attempt {attempt}/{_PUBLISH_ATTEMPTS} to {exchange_name}/{routing_key} failed: {e}")
+				if attempt < _PUBLISH_ATTEMPTS:
+					time.sleep(_PUBLISH_RETRY_WAIT_SEC)
+		assert last_exc is not None
+		raise last_exc
+
+	def close(self) -> None:
+		"""Close the publish channel, then the connection."""
+		self._reset_publish_channel()
+		self._declared_topology.clear()
+		self._topology_conn = None
+		self._close_connection()
+
+
+class MrsalBlockingPublisherPool:
+	"""Thread-safe pool of warm ``MrsalBlockingPublisher`` connections.
+
+	Each publisher is checked out to exactly one thread at a time, which is the
+	safe way to share pika's non-thread-safe BlockingConnection across a thread
+	pool (e.g. FastAPI's sync-route worker threads). Connections are kept warm
+	between checkouts, removing the per-publish TLS/AMQP handshake.
+
+	Revalidation is lazy: ``MrsalBlockingPublisher.publish`` reconnects on use,
+	so a connection that dropped while idle is transparently reopened on its
+	next checkout.
+	"""
+
+	def __init__(self, size: int = 4, **publisher_kwargs: Any) -> None:
+		if size < 1:
+			raise ValueError("Pool size must be >= 1")
+		self._size = size
+		self._publisher_kwargs = publisher_kwargs
+		self._idle: queue.Queue = queue.Queue(maxsize=size)
+		self._lock = threading.Lock()
+		self._created = 0
+		self._closed = False
+
+	def _checkout(self, timeout: float | None) -> MrsalBlockingPublisher:
+		with self._lock:
+			if self._closed:
+				raise RuntimeError("Pool is closed")
+			# Grow lazily up to size; only create when nothing is idle so warm
+			# connections are reused in preference to opening new ones.
+			if self._created < self._size and self._idle.empty():
+				pub = MrsalBlockingPublisher(**self._publisher_kwargs)
+				self._created += 1
+				return pub
+		return self._idle.get(timeout=timeout)
+
+	def _checkin(self, pub: "MrsalBlockingPublisher") -> None:
+		if self._closed:
+			try:
+				pub.close()
+			except Exception:
+				log.debug("Publisher close on checkin raised; ignoring.", exc_info=True)
+			return
+		self._idle.put(pub)
+
+	@contextmanager
+	def acquire(self, timeout: float | None = None):
+		"""Borrow a publisher for the duration of the ``with`` block.
+
+		When the pool is saturated this blocks for a free connection; with the
+		default ``timeout=None`` it blocks indefinitely, so pass a timeout
+		(``queue.Empty`` is raised on expiry) if callers must not stall. Do not
+		acquire re-entrantly from within an ``acquire`` block on a size-bounded
+		pool -- a handler holding one publisher while waiting for another can
+		deadlock the pool.
+		"""
+		pub = self._checkout(timeout)
+		try:
+			yield pub
+		finally:
+			self._checkin(pub)
+
+	def close_all(self) -> None:
+		"""Stop new checkouts and close idle publishers. Idempotent.
+
+		Only currently-idle publishers are closed here; any checked out by
+		another thread are closed when returned (see ``_checkin``), so an
+		in-flight publish is never closed out from under it.
+		"""
+		with self._lock:
+			self._closed = True
+		while True:
+			try:
+				pub = self._idle.get_nowait()
+			except queue.Empty:
+				break
+			try:
+				pub.close()
+			except Exception:
+				log.debug("Publisher close raised during close_all; ignoring.", exc_info=True)
