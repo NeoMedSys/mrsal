@@ -1,8 +1,19 @@
 # MRSAL AMQP
-[![Release](https://img.shields.io/badge/release-3.9.1-blue.svg)](https://pypi.org/project/mrsal/) 
+[![Release](https://img.shields.io/badge/release-3.10.0-blue.svg)](https://pypi.org/project/mrsal/) 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%7C3.11%7C3.12-blue.svg)](https://www.python.org/downloads/)
 [![Mrsal Workflow](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml/badge.svg?branch=main)](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml)
 [![Coverage](https://neomedsys.github.io/mrsal/reports/badges/coverage-badge.svg)](https://neomedsys.github.io/mrsal/reports/coverage/htmlcov/)
+
+## New in 3.10.0
+
+- **Reusable / pooled blocking publishers** (additive, no breaking changes).
+  `MrsalBlockingPublisher` keeps one connection and one confirm-enabled channel
+  warm across publishes, and caches declared topology so the passive
+  `Exchange.Declare` / `Queue.Declare` round-trips run only once per target
+  instead of on every publish. `MrsalBlockingPublisherPool` hands out one
+  publisher per concurrent caller so the non-thread-safe pika connection is
+  never shared. Existing `MrsalBlockingAMQP.publish_message` is unchanged. See
+  [§2.2](#22-reusable-publishers--connection-pooling).
 
 ## Breaking changes in 3.9.0
 
@@ -206,7 +217,77 @@ with MrsalBlockingAMQP(
 # Connection is automatically closed here
 ```
 
-#### 2.2 Consume
+#### 2.2 Reusable publishers & connection pooling
+
+The context-manager pattern above opens a fresh connection (TCP + TLS + AMQP
+handshake) for every send, and `publish_message` re-runs a passive
+`Exchange.Declare` / `Queue.Declare` on each call. For services that publish
+frequently — or per HTTP request — that handshake-and-declare churn adds up.
+
+`MrsalBlockingPublisher` keeps the connection and a confirm-enabled channel warm
+across publishes, and declares each target's topology only once:
+
+```python
+from mrsal.amqp.subclass import MrsalBlockingPublisher
+
+publisher = MrsalBlockingPublisher(
+    host=RABBITMQ_DOMAIN,
+    port=int(RABBITMQ_PORT),
+    credentials=(RABBITMQ_USER, RABBITMQ_PASSWORD),
+    virtual_host=RABBITMQ_VHOST,
+    ssl=False,
+)
+
+# First call declares/verifies the topology; later calls skip straight to
+# basic_publish on the same warm channel. Publisher confirms stay on, so an
+# unroutable target still raises (UnroutableError / NackError).
+publisher.publish(exchange_name='zoomer_x',
+                  exchange_type='direct',
+                  queue_name='zoomer_q',
+                  routing_key='zoomer_key',
+                  message=message_body,
+                  prop=prop)
+# ... reuse `publisher` for the lifetime of the service, then:
+publisher.close()
+```
+
+A `MrsalBlockingPublisher` is **not** thread-safe — pika's blocking connection
+is owned by a single thread. For concurrent callers (e.g. a sync web framework
+running route handlers in a thread pool), use `MrsalBlockingPublisherPool`,
+which hands out one warm publisher per concurrent caller and returns it to the
+pool afterwards:
+
+```python
+from mrsal.amqp.subclass import MrsalBlockingPublisherPool
+
+pool = MrsalBlockingPublisherPool(
+    size=4,                       # max concurrent connections kept warm
+    host=RABBITMQ_DOMAIN,
+    port=int(RABBITMQ_PORT),
+    credentials=(RABBITMQ_USER, RABBITMQ_PASSWORD),
+    virtual_host=RABBITMQ_VHOST,
+    ssl=False,
+)
+
+# Borrow for the duration of the block; the connection is returned (kept warm)
+# on exit. `acquire()` blocks when the pool is saturated — pass timeout=<sec>
+# to raise queue.Empty instead of waiting indefinitely.
+with pool.acquire() as publisher:
+    publisher.publish(exchange_name='zoomer_x',
+                      exchange_type='direct',
+                      queue_name='zoomer_q',
+                      routing_key='zoomer_key',
+                      message=message_body,
+                      prop=prop)
+
+# On shutdown:
+pool.close_all()
+```
+
+A connection that drops while idle is transparently reopened on its next use
+(the topology cache is cleared on reconnect so the new connection re-verifies).
+
+#### 2.3 Consume
 
 Now lets setup a consumer that will listen to our very important messages. If you are using scripts rather than notebooks then it's advisable to run consume and publish separately. We are going to need a callback function which is triggered upon receiving the message from the queue we subscribe to. You can use the callback function to activate something in your system.
 

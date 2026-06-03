@@ -74,6 +74,12 @@ class Mrsal:
 			self.tls_dict = {cert: (env_var if env_var != '' else None) for cert, env_var in tls_dict.items()}
 			config.ValidateTLS(**self.tls_dict)
 
+	@staticmethod
+	def _validate_message_body(message: Any) -> None:
+		"""Reject message bodies that pika cannot publish as-is."""
+		if not isinstance(message, (str, bytes)):
+			raise MrsalAbortedSetup('Your message body needs to be string or bytes or serialized dict')
+
 	def _build_queue_args(
 		self,
 		*,
