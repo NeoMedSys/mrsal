@@ -55,6 +55,13 @@ class MrsalBlockingBase(Mrsal):
 		self.close()
 		return False
 
+	def close(self) -> None:
+		"""Release channels and the connection.
+
+		Subclasses must implement this; ``__exit__`` relies on it.
+		"""
+		raise NotImplementedError
+
 	def _ensure_connection(self) -> None:
 		"""Idempotent: only connects if not already connected."""
 		if self._connection is None or not self._connection.is_open:
