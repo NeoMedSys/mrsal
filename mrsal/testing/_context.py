@@ -14,7 +14,9 @@ rejected rather than silently ignored.
 """
 import json
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import Any
+
+import pika
 
 from mrsal import config
 from mrsal.testing._broker import InMemoryBroker
@@ -25,9 +27,6 @@ from mrsal.testing._sync import (
 	props_to_fields,
 )
 from mrsal.testing._async import InMemoryIncomingMessage, InMemoryRobustConnection
-
-if TYPE_CHECKING:
-	import pika
 
 log = logging.getLogger(__name__)
 
@@ -193,7 +192,7 @@ class TestMrsalBroker(_BaseTestBroker):
 
 	def publish(self, message: Any, *, exchange: str | None = None,
 				routing_key: str | None = None, queue: str | None = None,
-				properties: "pika.BasicProperties | None" = None,
+				properties: pika.BasicProperties | None = None,
 				headers: dict | None = None) -> None:
 		"""Publish a message and run any registered handler it routes to."""
 		self._enqueue_publish(
@@ -249,7 +248,7 @@ class TestMrsalAsyncBroker(_BaseTestBroker):
 
 	async def publish(self, message: Any, *, exchange: str | None = None,
 					routing_key: str | None = None, queue: str | None = None,
-					properties: "pika.BasicProperties | None" = None,
+					properties: pika.BasicProperties | None = None,
 					headers: dict | None = None) -> None:
 		self._enqueue_publish(
 			message, exchange=exchange, routing_key=routing_key,
