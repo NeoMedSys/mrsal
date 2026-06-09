@@ -9,6 +9,11 @@ on:
     types: [published]
   pull_request:
   workflow_dispatch:
+  schedule:
+    # Nightly real-broker fidelity check at 03:00 UTC. The unit suite mocks /
+    # uses the in-memory broker; this catches drift between that model and a
+    # live RabbitMQ.
+    - cron: '0 3 * * *'
 
 jobs:
   test:
@@ -50,6 +55,35 @@ jobs:
           poetry run nox -s setup tests
       - name: Commit to GH
         uses: stefanzweifel/git-auto-commit-action@v4
+
+  integration:
+    runs-on: ubuntu-latest
+    # Real-broker check. Runs on the nightly schedule and on manual dispatch,
+    # not on every PR/push, so the fast unit path stays fast.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Set up poetry
+        uses: abatilo/actions-poetry@v2
+        with:
+          poetry-version: '1.8.0'
+      - name: Install dependencies
+        run: |
+          poetry install --no-cache --no-root
+      - name: Start RabbitMQ
+        # Reuses the same compose definition developers run locally; --wait
+        # blocks until the broker's healthcheck passes. Tests default to
+        # MRSAL_IT_PORT=5673, which the compose file maps.
+        run: docker compose -f tests/integration/docker-compose.yml up -d --wait
+      - name: Run integration tests
+        run: poetry run nox -s integration
+      - name: Stop RabbitMQ
+        if: always()
+        run: docker compose -f tests/integration/docker-compose.yml down -v
 
   publish_to_pypi:
     runs-on: ubuntu-latest

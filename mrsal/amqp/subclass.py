@@ -374,6 +374,78 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 		:param bool lazy_queue: Store messages on disk to save memory
 		:param int max_workers: Maximum number of threads in the pool when threaded=True. Defaults to prefetch_count.
 		"""
+		runtime_config = self._prepare_consumer(
+			queue_name=queue_name,
+			callback=callback,
+			callback_args=callback_args,
+			auto_ack=auto_ack,
+			auto_declare=auto_declare,
+			exchange_name=exchange_name,
+			exchange_type=exchange_type,
+			routing_key=routing_key,
+			payload_model=payload_model,
+			dlx_enable=dlx_enable,
+			dlx_exchange_name=dlx_exchange_name,
+			dlx_routing_key=dlx_routing_key,
+			use_quorum_queues=use_quorum_queues,
+			enable_retry_cycles=enable_retry_cycles,
+			retry_cycle_interval=retry_cycle_interval,
+			max_retry_time_limit=max_retry_time_limit,
+			retry_backoff=retry_backoff,
+			retry_backoff_max=retry_backoff_max,
+			max_queue_length=max_queue_length,
+			max_queue_length_bytes=max_queue_length_bytes,
+			queue_overflow=queue_overflow,
+			single_active_consumer=single_active_consumer,
+			lazy_queue=lazy_queue,
+			threaded=threaded,
+		)
+		self._run_consume_loop(
+			queue_name=queue_name,
+			auto_ack=auto_ack,
+			inactivity_timeout=inactivity_timeout,
+			runtime_config=runtime_config,
+			threaded=threaded,
+			max_workers=max_workers,
+		)
+
+	def _prepare_consumer(
+			self,
+			*,
+			queue_name: str,
+			callback: Callable | None,
+			callback_args: Sequence[str | int | float | bool] | None,
+			auto_ack: bool,
+			auto_declare: bool,
+			exchange_name: str | None,
+			exchange_type: str | None,
+			routing_key: str | None,
+			payload_model: Type | None,
+			dlx_enable: bool,
+			dlx_exchange_name: str | None,
+			dlx_routing_key: str | None,
+			use_quorum_queues: bool,
+			enable_retry_cycles: bool,
+			retry_cycle_interval: int,
+			max_retry_time_limit: int,
+			retry_backoff: Literal["fixed", "exponential"],
+			retry_backoff_max: int,
+			max_queue_length: int | None,
+			max_queue_length_bytes: int | None,
+			queue_overflow: str | None,
+			single_active_consumer: bool | None,
+			lazy_queue: bool | None,
+			threaded: bool,
+	) -> dict:
+		"""Validate config, open the consumer channel, declare topology, and
+		return the per-message ``runtime_config``.
+
+		Split out of ``start_consumer`` so the setup and the blocking consume
+		loop can be driven separately: the in-memory test broker
+		(``mrsal.testing``) calls this to register a consumer and then delivers
+		messages by hand, without entering ``_run_consume_loop``. Behaviour for
+		the normal ``start_consumer`` path is unchanged.
+		"""
 		if auto_ack and dlx_enable:
 			raise MrsalAbortedSetup(
 				'auto_ack=True is incompatible with dlx_enable=True: once the broker has acked '
@@ -396,9 +468,6 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 				retry_backoff_max=retry_backoff_max,
 			)
 
-		if threaded:
-			max_workers = max_workers or self.prefetch_count
-
 		self._ensure_connection()
 		self._consumer_channel = self._connection.channel()
 		self._consumer_channel.basic_qos(prefetch_count=self.prefetch_count)
@@ -408,26 +477,26 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 				raise TypeError('Make sure that you are passing in all the necessary args for auto_declare')
 
 			self._setup_exchange_and_queue(
-					exchange_name=exchange_name,
-					queue_name=queue_name,
-					exchange_type=exchange_type,
-					routing_key=routing_key,
-					dlx_enable=dlx_enable,
-					dlx_exchange_name=dlx_exchange_name,
-					dlx_routing_key=dlx_routing_key,
-					use_quorum_queues=use_quorum_queues,
-					max_queue_length=max_queue_length,
-					max_queue_length_bytes=max_queue_length_bytes,
-					queue_overflow=queue_overflow,
-					single_active_consumer=single_active_consumer,
-					lazy_queue=lazy_queue,
-					enable_retry_cycles=enable_retry_cycles,
-					retry_cycle_interval=retry_cycle_interval,
-					retry_backoff=retry_backoff,
-					retry_backoff_max=retry_backoff_max,
-					channel=self._consumer_channel
+				exchange_name=exchange_name,
+				queue_name=queue_name,
+				exchange_type=exchange_type,
+				routing_key=routing_key,
+				dlx_enable=dlx_enable,
+				dlx_exchange_name=dlx_exchange_name,
+				dlx_routing_key=dlx_routing_key,
+				use_quorum_queues=use_quorum_queues,
+				max_queue_length=max_queue_length,
+				max_queue_length_bytes=max_queue_length_bytes,
+				queue_overflow=queue_overflow,
+				single_active_consumer=single_active_consumer,
+				lazy_queue=lazy_queue,
+				enable_retry_cycles=enable_retry_cycles,
+				retry_cycle_interval=retry_cycle_interval,
+				retry_backoff=retry_backoff,
+				retry_backoff_max=retry_backoff_max,
+				channel=self._consumer_channel
 			)
-			
+
 			if not self.auto_declare_ok:
 				raise MrsalAbortedSetup('Auto declaration failed')
 
@@ -449,18 +518,33 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 			'dlx_routing_key': dlx_routing_key,
 			'queue_name': queue_name,
 		}
+		return runtime_config
+
+	def _run_consume_loop(
+			self,
+			*,
+			queue_name: str,
+			auto_ack: bool,
+			inactivity_timeout: int | None,
+			runtime_config: dict,
+			threaded: bool,
+			max_workers: int | None,
+	) -> None:
+		"""Drive the blocking ``consume`` loop using a prepared ``runtime_config``."""
+		if threaded:
+			max_workers = max_workers or self.prefetch_count
 
 		log.info(f"""
 				Straight out of the swamps -- consumer boi listening with config:
 					auto_ack: {auto_ack}
 					threaded: {threaded}
 					max_workers: {max_workers}
-					DLX: {dlx_enable}
-					retry cycles: {enable_retry_cycles}
-					retry interval: {retry_cycle_interval}
-					max retry time: {max_retry_time_limit}
-					retry backoff: {retry_backoff} (cap: {retry_backoff_max}m)
-					DLX name: {dlx_exchange_name}
+					DLX: {runtime_config['dlx_enable']}
+					retry cycles: {runtime_config['enable_retry_cycles']}
+					retry interval: {runtime_config['retry_cycle_interval']}
+					max retry time: {runtime_config['max_retry_time_limit']}
+					retry backoff: {runtime_config['retry_backoff']} (cap: {runtime_config['retry_backoff_max']}m)
+					DLX name: {runtime_config['dlx_exchange_name']}
 				""")
 
 		executor = ThreadPoolExecutor(max_workers=max_workers) if threaded else None
@@ -1056,6 +1140,77 @@ class MrsalAsyncAMQP(Mrsal):
 			the timeout fires, remaining tasks are cancelled and the consumer returns; messages
 			handled by cancelled tasks will be redelivered by the broker.
 		"""
+		queue, runtime_config = await self._prepare_consumer_async(
+			queue_name=queue_name,
+			callback=callback,
+			callback_args=callback_args,
+			auto_ack=auto_ack,
+			auto_declare=auto_declare,
+			exchange_name=exchange_name,
+			exchange_type=exchange_type,
+			routing_key=routing_key,
+			payload_model=payload_model,
+			dlx_enable=dlx_enable,
+			dlx_exchange_name=dlx_exchange_name,
+			dlx_routing_key=dlx_routing_key,
+			use_quorum_queues=use_quorum_queues,
+			enable_retry_cycles=enable_retry_cycles,
+			retry_cycle_interval=retry_cycle_interval,
+			max_retry_time_limit=max_retry_time_limit,
+			retry_backoff=retry_backoff,
+			retry_backoff_max=retry_backoff_max,
+			max_queue_length=max_queue_length,
+			max_queue_length_bytes=max_queue_length_bytes,
+			queue_overflow=queue_overflow,
+			single_active_consumer=single_active_consumer,
+			lazy_queue=lazy_queue,
+			max_concurrent_tasks=max_concurrent_tasks,
+		)
+		await self._run_consume_loop_async(
+			queue=queue,
+			runtime_config=runtime_config,
+			auto_ack=auto_ack,
+			max_concurrent_tasks=max_concurrent_tasks,
+			drain_timeout=drain_timeout,
+		)
+
+	async def _prepare_consumer_async(
+			self,
+			*,
+			queue_name: str,
+			callback: Callable | None,
+			callback_args: Sequence[str | int | float | bool] | None,
+			auto_ack: bool,
+			auto_declare: bool,
+			exchange_name: str | None,
+			exchange_type: str | None,
+			routing_key: str | None,
+			payload_model: Type | None,
+			dlx_enable: bool,
+			dlx_exchange_name: str | None,
+			dlx_routing_key: str | None,
+			use_quorum_queues: bool,
+			enable_retry_cycles: bool,
+			retry_cycle_interval: int,
+			max_retry_time_limit: int,
+			retry_backoff: Literal["fixed", "exponential"],
+			retry_backoff_max: int,
+			max_queue_length: int | None,
+			max_queue_length_bytes: int | None,
+			queue_overflow: str | None,
+			single_active_consumer: bool | None,
+			lazy_queue: bool | None,
+			max_concurrent_tasks: int | None,
+	) -> tuple[Any, dict]:
+		"""Validate config, ensure the async connection/channel, declare topology,
+		and return ``(queue, runtime_config)``.
+
+		Split out of ``start_consumer`` so the setup and the consume loop can be
+		driven separately: the in-memory test broker (``mrsal.testing``) calls
+		this to register a consumer and then delivers messages by hand, without
+		entering ``_run_consume_loop_async``. Behaviour for the normal
+		``start_consumer`` path is unchanged.
+		"""
 		if auto_ack and dlx_enable:
 			raise MrsalAbortedSetup(
 				'auto_ack=True is incompatible with dlx_enable=True: once the broker has acked '
@@ -1106,6 +1261,15 @@ class MrsalAsyncAMQP(Mrsal):
 			if not self.auto_declare_ok:
 				await self.close()
 				raise MrsalAbortedSetup('Auto declaration failed during setup.')
+		else:
+			# The async consume loop needs the declared aio_pika queue object to
+			# open its iterator; without auto_declare there is no queue to return.
+			# Fail with a clear message instead of a later UnboundLocalError.
+			raise MrsalAbortedSetup(
+				'The async consumer requires auto_declare=True: it needs the declared '
+				'aio_pika queue object to open the consume iterator. Declaring topology '
+				'out of band (auto_declare=False) is not supported on the async path.'
+			)
 
 		# Log consumer configuration
 		consumer_config = {
@@ -1137,7 +1301,18 @@ class MrsalAsyncAMQP(Mrsal):
 			'dlx_routing_key': dlx_routing_key,
 			'queue_name': queue_name,
 		}
+		return queue, runtime_config
 
+	async def _run_consume_loop_async(
+			self,
+			*,
+			queue: Any,
+			runtime_config: dict,
+			auto_ack: bool,
+			max_concurrent_tasks: int | None,
+			drain_timeout: float | None,
+	) -> None:
+		"""Drive the async consume loop using a prepared ``queue``/``runtime_config``."""
 		# Lifecycle primitives are created here (not in __init__) because asyncio.Event
 		# needs to bind to a running loop; start_consumer is the first point we have one.
 		# Lazy creation also preserves a stop() that arrived during tenacity exponential

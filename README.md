@@ -1,8 +1,21 @@
 # MRSAL AMQP
-[![Release](https://img.shields.io/badge/release-3.10.0-blue.svg)](https://pypi.org/project/mrsal/) 
+[![Release](https://img.shields.io/badge/release-3.11.0-blue.svg)](https://pypi.org/project/mrsal/) 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%7C3.11%7C3.12-blue.svg)](https://www.python.org/downloads/)
 [![Mrsal Workflow](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml/badge.svg?branch=main)](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml)
 [![Coverage](https://neomedsys.github.io/mrsal/reports/badges/coverage-badge.svg)](https://neomedsys.github.io/mrsal/reports/coverage/htmlcov/)
+
+## New in 3.11.0
+
+- **In-memory test broker** (additive, no breaking changes). `mrsal.testing`
+  ships `TestMrsalBroker` / `TestMrsalAsyncBroker` to unit-test consumers and
+  publishers without a live RabbitMQ. It runs mrsal's real validate → callback →
+  ack/DLX code against an in-process broker — routing, DLX topology and retry
+  cycles included — so tests exercise actual behaviour instead of mocks and run
+  in milliseconds. Time is modeled: `br.advance(minutes=...)` fires the `.retry`
+  queue TTL to drive retry cycles deterministically. Internally, `start_consumer`
+  was split into a setup step and the consume loop (`_prepare_consumer` /
+  `_run_consume_loop`); the public API is unchanged. See
+  [§5](#5-testing-handlers-without-rabbitmq).
 
 ## New in 3.10.0
 
@@ -590,5 +603,95 @@ mrsal.start_consumer(
 ```
 
 **Note!** There are many parameters and settings that you can use to set up a more sophisticated communication protocol in both blocking or async connection with pydantic BaseModels to enforce data types in the expected payload.
+
+---
+
+### 5. Testing handlers without RabbitMQ
+
+`mrsal.testing` ships an in-memory broker so you can unit-test consumers and
+publishers without a live RabbitMQ. It runs mrsal's real validate → callback →
+ack/DLX code against an in-process broker (routing, DLX topology and retry
+cycles included), so the tests exercise actual behaviour instead of mocks, and
+they run in milliseconds with no infrastructure.
+
+`TestMrsalBroker` wraps a `MrsalBlockingAMQP` instance, swaps its connection for
+the in-memory one, and delivers each published message straight to your handler —
+no background thread, so assertions are deterministic.
+
+```python
+from pydantic.dataclasses import dataclass
+
+from mrsal.amqp.subclass import MrsalBlockingAMQP
+from mrsal.testing import TestMrsalBroker
+
+
+@dataclass
+class OrderEvent:
+    order_id: str
+    amount: float
+
+
+def test_order_handler():
+    seen = []
+
+    def handle_order(method_frame, properties, body):
+        seen.append(body)  # body is the validated OrderEvent
+
+    consumer = MrsalBlockingAMQP(
+        host="localhost", port=5672, credentials=("guest", "guest"), virtual_host="/",
+    )
+    with TestMrsalBroker(consumer) as br:
+        br.register_consumer(
+            queue_name="orders",
+            exchange_name="orders.exchange",
+            exchange_type="direct",
+            routing_key="orders.new",
+            callback=handle_order,
+            payload_model=OrderEvent,
+        )
+        br.publish(
+            {"order_id": "abc", "amount": 10.0},
+            exchange="orders.exchange",
+            routing_key="orders.new",
+        )
+
+    assert seen[0].order_id == "abc"
+    assert br.message_count("orders") == 0  # processed and acked
+```
+
+A payload that fails validation (or a callback that raises) routes through the
+real DLX path. Time is modeled, not real — call `br.advance(minutes=...)` to fire
+the `.retry` queue's TTL and drive the retry cycle deterministically.
+
+> **Note on retry exhaustion.** `advance()` fires `.retry` queue TTLs (re-delivery),
+> but mrsal computes retry-*budget* exhaustion (`max_retry_time_limit`) from real
+> wall-clock time, so advancing the modeled clock re-cycles a message without ever
+> exhausting it. To assert that a message lands in the **terminal** `.dlx` queue,
+> force it with a low `max_retry_time_limit` (e.g. `0`) rather than advancing the
+> clock and waiting for exhaustion.
+
+```python
+def test_invalid_payload_parks_in_dlx():
+    consumer = MrsalBlockingAMQP(
+        host="localhost", port=5672, credentials=("guest", "guest"), virtual_host="/",
+    )
+    with TestMrsalBroker(consumer) as br:
+        br.register_consumer(
+            queue_name="orders",
+            exchange_name="orders.exchange",
+            exchange_type="direct",
+            routing_key="orders.new",
+            callback=lambda *a: None,
+            payload_model=OrderEvent,
+            max_retry_time_limit=0,   # first failure parks straight in .dlx
+        )
+        br.publish({"bad": "data"}, exchange="orders.exchange", routing_key="orders.new")
+
+    assert br.message_count("orders.dlx") == 1
+```
+
+The async consumer has a parallel harness, `TestMrsalAsyncBroker`, with
+`await br.register_consumer(...)`, `await br.publish(...)` and
+`await br.advance(...)`.
 
 ---
