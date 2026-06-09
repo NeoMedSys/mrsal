@@ -26,9 +26,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Set up poetry
-        uses: abatilo/actions-poetry@v2
-        with:
-          poetry-version: '1.8.0'
+        run: pipx install poetry==1.8.0
       - name: Install dependencies
         run: |
           poetry install --no-cache --no-root
@@ -68,9 +66,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Set up poetry
-        uses: abatilo/actions-poetry@v2
-        with:
-          poetry-version: '1.8.0'
+        run: pipx install poetry==1.8.0
       - name: Install dependencies
         run: |
           poetry install --no-cache --no-root
@@ -95,9 +91,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Set up poetry
-        uses: abatilo/actions-poetry@v2
-        with:
-          poetry-version: '1.8.0'
+        run: pipx install poetry==1.8.0
       - name: Install dependencies
         run: |
           poetry install --no-cache --no-root
@@ -129,9 +123,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Set up poetry
-        uses: abatilo/actions-poetry@v2
-        with:
-          poetry-version: '1.8.0'
+        run: pipx install poetry==1.8.0
       - name: Install dependencies
         run: |
           poetry install --no-cache --no-root
@@ -153,9 +145,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Setup poetry
-        uses: abatilo/actions-poetry@v2
-        with:
-          poetry-version: '1.8.2'
+        run: pipx install poetry==1.8.2
       - name: Install Dependencies
         run: |
           poetry lock --no-update
