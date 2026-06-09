@@ -9,11 +9,18 @@ on:
     types: [published]
   pull_request:
   workflow_dispatch:
+  schedule:
+    # Nightly real-broker fidelity check at 03:00 UTC. The unit suite mocks /
+    # uses the in-memory broker; this catches drift between that model and a
+    # live RabbitMQ.
+    - cron: '0 3 * * *'
 
 jobs:
   test:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v3
       - name: Set up Python
@@ -21,9 +28,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Set up poetry
-        uses: abatilo/actions-poetry@v2
-        with:
-          poetry-version: '1.8.0'
+        run: pipx install poetry==1.8.0
       - name: Install dependencies
         run: |
           poetry install --no-cache --no-root
@@ -48,8 +53,51 @@ jobs:
       - name: Run tests
         run: |
           poetry run nox -s setup tests
-      - name: Commit to GH
-        uses: stefanzweifel/git-auto-commit-action@v4
+      - name: Commit README badge to the PR branch
+        # Same-repo PRs only: fork PRs get a read-only token and no writable
+        # branch, so skip (matches the prior third-party action's behaviour).
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin "${{ github.head_ref }}"
+          git checkout -B "${{ github.head_ref }}" "origin/${{ github.head_ref }}"
+          msg="s/release-[0-9]+\.[0-9]+\.[0-9]+(-[ab][0-9]+)?/release-$(poetry version -s)/g"
+          sed -i -E "$msg" ./README.md
+          if [ -n "$(git status --porcelain)" ]; then
+            git add README.md
+            git commit -m "chore: sync release version badge in README"
+            git push origin "HEAD:${{ github.head_ref }}"
+          else
+            echo "README badge already in sync"
+          fi
+
+  integration:
+    runs-on: ubuntu-latest
+    # Real-broker check. Runs on the nightly schedule and on manual dispatch,
+    # not on every PR/push, so the fast unit path stays fast.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Set up poetry
+        run: pipx install poetry==1.8.0
+      - name: Install dependencies
+        run: |
+          poetry install --no-cache --no-root
+      - name: Start RabbitMQ
+        # Reuses the same compose definition developers run locally; --wait
+        # blocks until the broker's healthcheck passes. Tests default to
+        # MRSAL_IT_PORT=5673, which the compose file maps.
+        run: docker compose -f tests/integration/docker-compose.yml up -d --wait
+      - name: Run integration tests
+        run: poetry run nox -s integration
+      - name: Stop RabbitMQ
+        if: always()
+        run: docker compose -f tests/integration/docker-compose.yml down -v
 
   publish_to_pypi:
     runs-on: ubuntu-latest
@@ -61,9 +109,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Set up poetry
-        uses: abatilo/actions-poetry@v2
-        with:
-          poetry-version: '1.8.0'
+        run: pipx install poetry==1.8.0
       - name: Install dependencies
         run: |
           poetry install --no-cache --no-root
@@ -95,9 +141,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Set up poetry
-        uses: abatilo/actions-poetry@v2
-        with:
-          poetry-version: '1.8.0'
+        run: pipx install poetry==1.8.0
       - name: Install dependencies
         run: |
           poetry install --no-cache --no-root
@@ -112,6 +156,8 @@ jobs:
   doc_building:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v3
       - name: Setup python
@@ -119,9 +165,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Setup poetry
-        uses: abatilo/actions-poetry@v2
-        with:
-          poetry-version: '1.8.2'
+        run: pipx install poetry==1.8.2
       - name: Install Dependencies
         run: |
           poetry lock --no-update
@@ -146,8 +190,14 @@ jobs:
         run: |
           poetry run sphinx-build -b html ./docs ./docs/_build/html
       - name: Publish Docs to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./docs/_build/html
-          publish_branch: gh-pages
+        run: |
+          cd ./docs/_build/html
+          touch .nojekyll
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -qm "docs: deploy ${{ github.sha }}"
+          git push -f \
+            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" \
+            gh-pages:gh-pages
