@@ -14,9 +14,7 @@ rejected rather than silently ignored.
 """
 import json
 import logging
-from typing import Any
-
-import pika
+from typing import TYPE_CHECKING, Any
 
 from mrsal import config
 from mrsal.testing._broker import InMemoryBroker
@@ -27,6 +25,9 @@ from mrsal.testing._sync import (
 	props_to_fields,
 )
 from mrsal.testing._async import InMemoryIncomingMessage, InMemoryRobustConnection
+
+if TYPE_CHECKING:
+	import pika
 
 log = logging.getLogger(__name__)
 
