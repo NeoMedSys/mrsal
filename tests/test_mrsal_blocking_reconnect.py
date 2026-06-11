@@ -9,7 +9,6 @@ still *driven* by tenacity; broker topology is treated as durable
 """
 import logging
 
-import pytest
 from unittest.mock import Mock, MagicMock, patch
 from pika.exceptions import StreamLostError
 from tenacity import wait_fixed
