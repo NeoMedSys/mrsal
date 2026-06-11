@@ -109,6 +109,10 @@ class _BaseTestBroker:
 		for attr in ("_consumer_channel", "_channel", "_dlx_publish_channel"):
 			if hasattr(self.consumer, attr):
 				setattr(self.consumer, attr, None)
+		# Drop declared-state tracking so it doesn't retain a reference to the
+		# discarded in-memory connection (sync consumer only).
+		if hasattr(self.consumer, "_reset_declared_state"):
+			self.consumer._reset_declared_state()
 
 	# registration helpers ---------------------------------------------------
 
