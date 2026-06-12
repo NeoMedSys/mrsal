@@ -135,6 +135,26 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 	"""
 	_consumer_channel: Any = field(init=False, default=None)
 	_dlx_publish_channel: Any = field(init=False, default=None)
+	# Declared-state tracking so a reconnect's recovery is explicit and logged
+	# rather than only an accidental side effect of tenacity re-running
+	# start_consumer. Mirrors MrsalBlockingPublisher._declared_topology /
+	# _topology_conn:
+	#   _declared_topology -- the full _setup_exchange_and_queue kwargs for the
+	#     primary topology (DLX/retry included, since dlx_enable/enable_retry_cycles
+	#     are part of it), so the record is faithful enough to re-declare from.
+	#     None when nothing was declared here (auto_declare=False).
+	#   _active_qos -- the prefetch applied to the consumer channel.
+	#   _topology_conn -- pins the tracking to the connection it was declared on;
+	#     a reconnect (new connection identity) clears stale state and is logged.
+	_declared_topology: dict | None = field(init=False, default=None)
+	_active_qos: int | None = field(init=False, default=None)
+	_topology_conn: Any = field(init=False, default=None)
+
+	def _reset_declared_state(self) -> None:
+		"""Drop all tracked declared state (topology + QoS)."""
+		self._declared_topology = None
+		self._active_qos = None
+		self._topology_conn = None
 
 	def close(self) -> None:
 		"""Close channels and connection cleanly.
@@ -155,6 +175,7 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 				log.debug("Consumer channel close raised; ignoring.", exc_info=True)
 		self._consumer_channel = None
 
+		self._reset_declared_state()
 		self._close_connection()
 
 	def _ensure_dlx_publish_channel(self) -> None:
@@ -469,14 +490,26 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 			)
 
 		self._ensure_connection()
+		# A reconnect hands back a fresh connection object; tracking pinned to the
+		# old one is stale, so drop it before re-recording against this connection.
+		# _topology_conn is None only on the first connect, so a non-None mismatch
+		# is a genuine reconnect (driven by tenacity re-running start_consumer).
+		reconnected = self._topology_conn is not None and self._connection is not self._topology_conn
+		if self._connection is not self._topology_conn:
+			self._reset_declared_state()
+			self._topology_conn = self._connection
 		self._consumer_channel = self._connection.channel()
 		self._consumer_channel.basic_qos(prefetch_count=self.prefetch_count)
+		self._active_qos = self.prefetch_count
 
 		if auto_declare:
 			if None in (exchange_name, queue_name, exchange_type, routing_key):
 				raise TypeError('Make sure that you are passing in all the necessary args for auto_declare')
 
-			self._setup_exchange_and_queue(
+			# Hold the full declaration kwargs so the recorded topology is faithful
+			# enough to re-declare from (DLX/retry included, via dlx_enable /
+			# enable_retry_cycles), rather than a lossy name-only snapshot.
+			topology_kwargs = dict(
 				exchange_name=exchange_name,
 				queue_name=queue_name,
 				exchange_type=exchange_type,
@@ -494,11 +527,22 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 				retry_cycle_interval=retry_cycle_interval,
 				retry_backoff=retry_backoff,
 				retry_backoff_max=retry_backoff_max,
-				channel=self._consumer_channel
 			)
+			self._setup_exchange_and_queue(**topology_kwargs, channel=self._consumer_channel)
 
 			if not self.auto_declare_ok:
 				raise MrsalAbortedSetup('Auto declaration failed')
+
+			self._declared_topology = topology_kwargs
+
+		if reconnected:
+			log.info(
+				"Reconnect recovery for consumer on queue %r: re-applied QoS "
+				"(prefetch=%s) and %s.",
+				queue_name, self._active_qos,
+				"re-declared topology" if self._declared_topology is not None
+				else "left operator-declared topology in place (auto_declare=False)",
+			)
 
 		runtime_config = {
 			'callback': callback,
