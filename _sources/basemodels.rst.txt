@@ -1,0 +1,7 @@
+basemodels module
+=================
+
+.. automodule:: basemodels
+   :members:
+   :undoc-members:
+   :show-inheritance:
