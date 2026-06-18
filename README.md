@@ -1,8 +1,20 @@
 # MRSAL AMQP
-[![Release](https://img.shields.io/badge/release-3.12.0-blue.svg)](https://pypi.org/project/mrsal/) 
+[![Release](https://img.shields.io/badge/release-3.13.0-blue.svg)](https://pypi.org/project/mrsal/) 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%7C3.11%7C3.12-blue.svg)](https://www.python.org/downloads/)
 [![Mrsal Workflow](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml/badge.svg?branch=main)](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml)
 [![Coverage](https://neomedsys.github.io/mrsal/reports/badges/coverage-badge.svg)](https://neomedsys.github.io/mrsal/reports/coverage/htmlcov/)
+
+## New in 3.13.0
+
+- **Structured logging + logger injection** (additive, no breaking changes). The
+  consume/publish lifecycle now attaches discrete fields (`msg_id`, `queue`,
+  `routing_key`, `retry`, `outcome`, `duration_ms`, …) via stdlib `logging`'s
+  `extra={...}` instead of burying them in prose, so a backend (Loki, ELK,
+  Datadog, …) can filter/group without regex-parsing. Route mrsal's records
+  through your own logger with `mrsal.set_logger(...)` (and
+  `MrsalBlockingPublisherPool.set_logger(...)` cascades to its publishers). mrsal
+  installs no formatter/handler and adds no logging dependency — the host owns
+  formatting. See [§4.7](#47-structured-logging--logger-injection).
 
 ## New in 3.12.0
 
@@ -679,6 +691,70 @@ def on_dlx_final(queue_name):
 
 mrsal.set_metrics_hooks(MetricsHooks(on_consume=on_consume, on_dlx_final=on_dlx_final))
 start_http_server(8000)  # expose /metrics — mrsal is a library, you own exposition
+```
+
+#### 4.7 Structured logging & logger injection
+
+mrsal logs the consume/publish lifecycle through stdlib `logging`, attaching the
+fields a backend would filter on as **discrete key/value pairs** via `extra={...}`
+— not buried in the prose message. The prose message is unchanged, so existing
+logs stay human-readable; mrsal installs **no** formatter or handler and pulls in
+**no** logging dependency. Your application owns formatting and shipping (Loki,
+ELK, Datadog, CloudWatch, … all consume discrete fields).
+
+**Inject your logger.** By default each record uses that module's
+`logging.getLogger(__name__)`. Route them through your own configured logger with
+`set_logger`; pass `None` to revert. `MrsalBlockingPublisherPool.set_logger(...)`
+cascades to every publisher it hands out, exactly like `set_metrics_hooks`.
+
+```python
+import logging
+mrsal.set_logger(logging.getLogger("myapp.amqp"))
+```
+
+**Field schema.** Each consumed message emits a record carrying:
+
+| Field | Meaning |
+| --- | --- |
+| `msg_id` / `app_id` | message-id / app-id from the AMQP properties |
+| `queue` | queue the delivery came from |
+| `routing_key` | delivery routing key |
+| `retry` | current retry depth (`x-delivery-count`, or the retry-cycle count on DLX records) |
+| `outcome` | `processed` · `validation_failed` · `callback_failed` · `dlx` · `dropped` · `retry` |
+| `duration_ms` | receipt→record wall-clock (see note below) |
+
+Publish records carry `exchange`, `routing_key`, and `outcome` (`published` /
+`failed`). Retry-cycle disposition records (the `.retry` republish and the
+terminal `.dlx` park) carry `queue`, `retry`, and `outcome` (`retry` / `dlx`) but
+not `msg_id` / `routing_key` / `duration_ms` — that path has no delivery handle.
+
+> **`duration_ms` is not the handler duration.** It is receipt-to-this-record
+> wall-clock, so it differs from the `on_consume` metrics hook (which times
+> validation+callback only). Use the hook for handler timing; use `duration_ms`
+> for "how long until this message reached its outcome."
+
+**Example — host-side JSON formatter + a LogQL query** (one example backend; the
+fields work with any). The library only attaches the fields; this formatter lives
+in *your* app:
+
+```python
+import json, logging
+
+class JsonFormatter(logging.Formatter):
+    FIELDS = ("msg_id", "app_id", "queue", "routing_key", "retry", "outcome", "duration_ms")
+    def format(self, record):
+        payload = {"level": record.levelname, "msg": record.getMessage()}
+        payload.update({f: getattr(record, f) for f in self.FIELDS if hasattr(record, f)})
+        return json.dumps(payload)
+
+handler = logging.StreamHandler()
+handler.setFormatter(JsonFormatter())
+logging.getLogger("mrsal").addHandler(handler)  # or your injected logger
+```
+
+```logql
+# rate of messages parked in a DLX, by queue
+sum by (queue) (rate({app="myapp"} | json | outcome="dlx" [5m]))
 ```
 
 ---

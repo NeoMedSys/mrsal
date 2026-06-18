@@ -34,6 +34,45 @@ from mrsal import config
 
 log = logging.getLogger(__name__)
 
+
+def _consume_log_extra(*, msg_id, app_id, queue, routing_key, retry, outcome, start_ts):
+	"""Build the structured field set attached to a consume-lifecycle log record.
+
+	Passed as the stdlib ``logging`` ``extra={...}`` so a backend can filter on
+	discrete fields instead of regex-parsing the prose message. ``outcome`` is
+	one of ``processed`` / ``validation_failed`` / ``callback_failed`` / ``dlx``
+	/ ``dropped``.
+
+	``duration_ms`` is receipt-to-this-record wall-clock (delivery received ->
+	log call), **not** the handler duration -- so it is not the same number as
+	the ``on_consume`` metrics hook (which times validation+callback only). It
+	also brackets the disposition slightly differently across paths: the sync
+	terminal records are emitted before the ack/nack is scheduled, while the
+	async ones are emitted after ``message.ack()``/``reject()`` is awaited.
+	"""
+	return {
+			'msg_id': msg_id,
+			'app_id': app_id,
+			'queue': queue,
+			'routing_key': routing_key,
+			'retry': retry,
+			'outcome': outcome,
+			'duration_ms': round((time.monotonic() - start_ts) * 1000, 2),
+			}
+
+
+def _publish_log_extra(*, exchange, routing_key, outcome):
+	"""Build the structured field set attached to a publish log record.
+
+	``outcome`` is ``published`` or ``failed``.
+	"""
+	return {
+			'exchange': exchange,
+			'routing_key': routing_key,
+			'outcome': outcome,
+			}
+
+
 @dataclass
 class MrsalBlockingBase(Mrsal):
 	"""Shared blocking-connection lifecycle for the sync consumer and publisher.
@@ -65,22 +104,24 @@ class MrsalBlockingBase(Mrsal):
 
 	def _ensure_connection(self) -> None:
 		"""Idempotent: only connects if not already connected."""
+		_log = self._logger or log
 		if self._connection is None or not self._connection.is_open:
 			# Close stale connection to avoid leaking TCP sockets
 			if self._connection is not None:
 				try:
 					self._connection.close()
 				except Exception:
-					log.debug("Stale connection close raised during cleanup; ignoring.", exc_info=True)
+					_log.debug("Stale connection close raised during cleanup; ignoring.", exc_info=True)
 			self.setup_blocking_connection()
 
 	def _close_connection(self) -> None:
 		"""Close just the underlying connection, swallowing close errors."""
+		_log = self._logger or log
 		if self._connection is not None and self._connection.is_open:
 			try:
 				self._connection.close()
 			except Exception:
-				log.debug("Connection close raised; ignoring.", exc_info=True)
+				_log.debug("Connection close raised; ignoring.", exc_info=True)
 		self._connection = None
 
 	def setup_blocking_connection(self) -> None:
@@ -94,6 +135,7 @@ class MrsalBlockingBase(Mrsal):
 		context : Dict[str, str]
 			context is the structured map with information regarding the SSL options for connecting with rabbit server via TLS.
 		"""
+		_log = self._logger or log
 		connection_info = f"""
 							Mrsal connection parameters:
 							host={self.host},
@@ -103,7 +145,7 @@ class MrsalBlockingBase(Mrsal):
 							ssl={self.ssl}
 							"""
 		if self.verbose:
-			log.info(f"Establishing connection to RabbitMQ on {connection_info}")
+			_log.info(f"Establishing connection to RabbitMQ on {connection_info}")
 		credentials = pika.PlainCredentials(*self.credentials)
 		try:
 			self._connection = pika.BlockingConnection(
@@ -118,12 +160,12 @@ class MrsalBlockingBase(Mrsal):
 				)
 			)
 
-			log.info(f"Boom! Connection established with RabbitMQ on {connection_info}")
+			_log.info(f"Boom! Connection established with RabbitMQ on {connection_info}")
 		except (AMQPConnectionError, ChannelClosedByBroker, ConnectionClosedByBroker, StreamLostError) as e:
-			log.error(f"I tried to connect with the RabbitMQ server but failed with: {e}")
+			_log.error(f"I tried to connect with the RabbitMQ server but failed with: {e}")
 			raise
 		except Exception as e:
-			log.error(f"Unexpected error caught: {e}")
+			_log.error(f"Unexpected error caught: {e}")
 			raise
 
 
@@ -162,18 +204,19 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 
 		Each close is wrapped: a failure on one handle must not leak the next.
 		"""
+		_log = self._logger or log
 		if self._dlx_publish_channel is not None and self._dlx_publish_channel.is_open:
 			try:
 				self._dlx_publish_channel.close()
 			except Exception:
-				log.debug("DLX publish channel close raised; ignoring.", exc_info=True)
+				_log.debug("DLX publish channel close raised; ignoring.", exc_info=True)
 		self._dlx_publish_channel = None
 
 		if self._consumer_channel is not None and self._consumer_channel.is_open:
 			try:
 				self._consumer_channel.close()
 			except Exception:
-				log.debug("Consumer channel close raised; ignoring.", exc_info=True)
+				_log.debug("Consumer channel close raised; ignoring.", exc_info=True)
 		self._consumer_channel = None
 
 		self._reset_declared_state()
@@ -192,6 +235,7 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 		affect the consume path. Not safe for concurrent callers; the consume
 		loop serializes DLX publishes today.
 		"""
+		_log = self._logger or log
 		self._ensure_connection()
 		if self._dlx_publish_channel is not None and self._dlx_publish_channel.is_open:
 			return
@@ -199,7 +243,7 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 			try:
 				self._dlx_publish_channel.close()
 			except Exception:
-				log.debug("Stale DLX publish channel close raised; ignoring.", exc_info=True)
+				_log.debug("Stale DLX publish channel close raised; ignoring.", exc_info=True)
 			self._dlx_publish_channel = None
 		channel = self._connection.channel()
 		channel.confirm_delivery()
@@ -216,10 +260,11 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 		basic_ack/nack) cannot succeed against a dead connection anyway, so we
 		drop it and let the consumer retry pick up the redelivered message.
 		"""
+		_log = self._logger or log
 		if threaded:
 			conn = self._connection
 			if conn is None or not conn.is_open:
-				log.warning(
+				_log.warning(
 					f"Skipping {getattr(func, '__name__', func)!r}: connection is closed; "
 					"the broker will redeliver on reconnect."
 				)
@@ -228,25 +273,26 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 			try:
 				conn.add_callback_threadsafe(cb)
 			except ConnectionWrongStateError as e:
-				log.warning(
+				_log.warning(
 					f"Could not schedule {getattr(func, '__name__', func)!r} on closed connection: {e}; "
 					"the broker will redeliver on reconnect."
 				)
 		else:
 			func(*args, **kwargs)
 
-	@staticmethod
-	def _handle_worker_exception(future) -> None:
+	def _handle_worker_exception(self, future) -> None:
 		"""Callback for ThreadPoolExecutor futures to surface worker exceptions."""
+		_log = self._logger or log
 		exc = future.exception()
 		if exc is not None:
-			log.error(f"Worker thread raised an unhandled exception: {exc}", exc_info=exc)
+			_log.error(f"Worker thread raised an unhandled exception: {exc}", exc_info=exc)
 
 	def _process_single_message(self, method_frame, properties, body, runtime_config: dict) -> None:
 		"""
 		Worker method to process a single message. 
 		Accepts a config dict to avoid an explosion of arguments.
 		"""
+		_log = self._logger or log
 		auto_ack = runtime_config['auto_ack']
 		threaded = runtime_config['threaded']
 		callback = runtime_config['callback']
@@ -260,9 +306,17 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 		delivery_tag = method_frame.delivery_tag
 		
 		current_retry = properties.headers.get('x-delivery-count', 0) if properties and properties.headers else 0
-		
+		queue_name = runtime_config['queue_name']
+		routing_key = method_frame.routing_key
+		start_ts = time.monotonic()
+
+		def fields(outcome):
+			return _consume_log_extra(
+				msg_id=msg_id, app_id=app_id, queue=queue_name, routing_key=routing_key,
+				retry=current_retry, outcome=outcome, start_ts=start_ts)
+
 		if self.verbose:
-			log.info(f"Processing message {msg_id} from {app_id} (Retry: {current_retry})")
+			_log.info(f"Processing message {msg_id} from {app_id} (Retry: {current_retry})")
 
 		should_process = True
 		failure_reason: str | None = None
@@ -274,7 +328,7 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 				try:
 					callback_body = self.validate_payload(payload=body, model=payload_model)
 				except (ValidationError, json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
-					log.error(f"Payload validation failed for {msg_id}: {e}")
+					_log.error(f"Payload validation failed for {msg_id}: {e}", extra=fields('validation_failed'))
 					should_process = False
 					failure_reason = f"payload validation: {e!r}"
 
@@ -285,7 +339,7 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 					else:
 						callback(method_frame, properties, callback_body)
 				except Exception as e:
-					log.error(f"Callback processing failed for message {msg_id}: {e}")
+					_log.error(f"Callback processing failed for message {msg_id}: {e}", extra=fields('callback_failed'))
 					should_process = False
 					failure_reason = f"callback: {e!r}"
 
@@ -306,16 +360,16 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 						runtime_config['queue_name'],
 					)
 				elif dlx_enable:
-					log.warning(f"Message {msg_id} sent to dead letter exchange after {current_retry} retries")
+					_log.warning(f"Message {msg_id} sent to dead letter exchange after {current_retry} retries", extra=fields('dlx'))
 					self._schedule_threadsafe(self._consumer_channel.basic_nack, threaded, delivery_tag=delivery_tag, requeue=False)
 				else:
-					log.warning(f"No dead letter exchange declared for {runtime_config['queue_name']}, proceeding to drop the message -- reflect on your life choices! byebye")
+					_log.warning(f"No dead letter exchange declared for {queue_name}, proceeding to drop the message -- reflect on your life choices! byebye", extra=fields('dropped'))
 					if self.verbose:
-						log.info(f"Dropped message content: {body}")
+						_log.info(f"Dropped message content: {body}")
 					self._schedule_threadsafe(self._consumer_channel.basic_nack, threaded, delivery_tag=delivery_tag, requeue=False)
 
 			elif not auto_ack and should_process:
-				log.info(f'Message ({msg_id}) from {app_id} received and properly processed -- now dance the funky chicken')
+				_log.info(f'Message ({msg_id}) from {app_id} received and properly processed -- now dance the funky chicken', extra=fields('processed'))
 				self._schedule_threadsafe(self._consumer_channel.basic_ack, threaded, delivery_tag=delivery_tag)
 
 	@retry(
@@ -475,6 +529,7 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 		messages by hand, without entering ``_run_consume_loop``. Behaviour for
 		the normal ``start_consumer`` path is unchanged.
 		"""
+		_log = self._logger or log
 		if auto_ack and dlx_enable:
 			raise MrsalAbortedSetup(
 				'auto_ack=True is incompatible with dlx_enable=True: once the broker has acked '
@@ -544,7 +599,7 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 			self._declared_topology = topology_kwargs
 
 		if reconnected:
-			log.info(
+			_log.info(
 				"Reconnect recovery for consumer on queue %r: re-applied QoS "
 				"(prefetch=%s) and %s.",
 				queue_name, self._active_qos,
@@ -583,10 +638,11 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 			max_workers: int | None,
 	) -> None:
 		"""Drive the blocking ``consume`` loop using a prepared ``runtime_config``."""
+		_log = self._logger or log
 		if threaded:
 			max_workers = max_workers or self.prefetch_count
 
-		log.info(f"""
+		_log.info(f"""
 				Straight out of the swamps -- consumer boi listening with config:
 					auto_ack: {auto_ack}
 					threaded: {threaded}
@@ -607,16 +663,16 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 
 				if method_frame:
 					if threaded:
-						log.info("Threaded processes started to ensure heartbeat during long processes -- sauber!")
+						_log.info("Threaded processes started to ensure heartbeat during long processes -- sauber!")
 						future = executor.submit(self._process_single_message, method_frame, properties, body, runtime_config)
 						future.add_done_callback(self._handle_worker_exception)
 					else:
 						self._process_single_message(method_frame, properties, body, runtime_config)
 		except (AMQPConnectionError, ConnectionClosedByBroker, StreamLostError) as e:
-			log.error(f"Ooooooopsie! I caught a connection error while consuming messaiges: {e}")
+			_log.error(f"Ooooooopsie! I caught a connection error while consuming messaiges: {e}")
 			raise
 		except Exception as e:
-			log.error(f'Oh lordy lord! I failed consuming ze messaj with: {e}')
+			_log.error(f'Oh lordy lord! I failed consuming ze messaj with: {e}')
 			raise
 		finally:
 			if executor is not None:
@@ -660,6 +716,7 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 		:raises NackError: raised when a message published in publisher-acknowledgements mode is Nack'ed by the broker. See `BlockingChannel.confirm_delivery`.
 		"""
 
+		_log = self._logger or log
 		self._validate_message_body(message)
 		# connect and use only blocking
 		self._ensure_connection()
@@ -686,23 +743,27 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 					# Publish the message by serializing it in json dump
 					# NOTE! we are not dumping a json anymore here! This allows for more flexibility
 					ch.basic_publish(exchange=exchange_name, routing_key=routing_key, body=message, properties=prop)
-					log.info(f"Message published to exchange {exchange_name} with routing key {routing_key}")
+					_log.info(f"Message published to exchange {exchange_name} with routing key {routing_key}", extra=_publish_log_extra(
+						exchange=exchange_name, routing_key=routing_key, outcome='published'))
 					outcome.ok = True
 
 				except UnroutableError as e:
-					log.error(f"Producer could not publish message:{message!r} to the exchange {exchange_name} with a routing key {routing_key}: {e}", exc_info=True)
+					_log.error(f"Producer could not publish message:{message!r} to the exchange {exchange_name} with a routing key {routing_key}: {e}", exc_info=True, extra=_publish_log_extra(
+						exchange=exchange_name, routing_key=routing_key, outcome='failed'))
 					raise
 				except NackError as e:
-					log.error(f"Message NACKed by broker: {e}")
+					_log.error(f"Message NACKed by broker: {e}", extra=_publish_log_extra(
+						exchange=exchange_name, routing_key=routing_key, outcome='failed'))
 					raise
 				except Exception as e:
-					log.error(f"Unexpected error while publishing message: {e}")
+					_log.error(f"Unexpected error while publishing message: {e}", extra=_publish_log_extra(
+						exchange=exchange_name, routing_key=routing_key, outcome='failed'))
 					raise
 			finally:
 				try:
 					ch.close()
 				except Exception:
-					log.debug("Publish channel close raised during cleanup; ignoring.", exc_info=True)
+					_log.debug("Publish channel close raised during cleanup; ignoring.", exc_info=True)
 
 	def publish_messages(
 		self,
@@ -763,6 +824,7 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 		Split out of ``publish_messages`` so the ``on_publish`` metric fires once
 		per logical call rather than once per retry attempt.
 		"""
+		_log = self._logger or log
 		self._ensure_connection()
 		ch = self._connection.channel()
 		# Required for the NackError/UnroutableError retry on this method to actually fire;
@@ -793,22 +855,26 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 							body=protocol.message,
 							properties=prop
 							)
-					log.info(f"Message for inbound app {inbound_app_id} published to exchange {protocol.exchange_name} with routing key {protocol.routing_key}")
+					_log.info(f"Message for inbound app {inbound_app_id} published to exchange {protocol.exchange_name} with routing key {protocol.routing_key}", extra=_publish_log_extra(
+						exchange=protocol.exchange_name, routing_key=protocol.routing_key, outcome='published'))
 
 				except UnroutableError as e:
-					log.error(f"Producer could not publish message:{protocol.message!r} to the exchange {protocol.exchange_name} with a routing key {protocol.routing_key}: {e}", exc_info=True)
+					_log.error(f"Producer could not publish message:{protocol.message!r} to the exchange {protocol.exchange_name} with a routing key {protocol.routing_key}: {e}", exc_info=True, extra=_publish_log_extra(
+						exchange=protocol.exchange_name, routing_key=protocol.routing_key, outcome='failed'))
 					raise
 				except NackError as e:
-					log.error(f"Message NACKed by broker: {e}")
+					_log.error(f"Message NACKed by broker: {e}", extra=_publish_log_extra(
+						exchange=protocol.exchange_name, routing_key=protocol.routing_key, outcome='failed'))
 					raise
 				except Exception as e:
-					log.error(f"Unexpected error while publishing message: {e}")
+					_log.error(f"Unexpected error while publishing message: {e}", extra=_publish_log_extra(
+						exchange=protocol.exchange_name, routing_key=protocol.routing_key, outcome='failed'))
 					raise
 		finally:
 			try:
 				ch.close()
 			except Exception:
-				log.debug("Publish channel close raised during cleanup; ignoring.", exc_info=True)
+				_log.debug("Publish channel close raised during cleanup; ignoring.", exc_info=True)
 
 	def _publish_to_dlx_with_retry_cycle(
 			self,
@@ -828,6 +894,7 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 		between the confirmed DLX publish and the original ack, the message
 		will be redelivered and re-published to DLX. Consumers must be idempotent.
 		"""
+		_log = self._logger or log
 		try:
 			# Use common logic from superclass
 			self._handle_dlx_with_retry_cycle_sync(
@@ -853,7 +920,7 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 		except Exception as e:
 			msg_id = properties.message_id if hasattr(properties, 'message_id') else 'unknown'
 			app_id = properties.app_id if hasattr(properties, 'app_id') else 'unknown'
-			log.error(f"Failed to send message to DLX: {e} | message_id={msg_id} app_id={app_id} delivery_tag={method_frame.delivery_tag} exchange={original_exchange} routing_key={original_routing_key}")
+			_log.error(f"Failed to send message to DLX: {e} | message_id={msg_id} app_id={app_id} delivery_tag={method_frame.delivery_tag} exchange={original_exchange} routing_key={original_routing_key}")
 			self._consumer_channel.basic_nack(delivery_tag=method_frame.delivery_tag, requeue=False)
 
 	def _publish_to_dlx(self, dlx_exchange: str, routing_key: str, body: bytes, properties: dict):
@@ -916,38 +983,40 @@ class MrsalAsyncAMQP(Mrsal):
 		it preserves a stop request that arrives during a tenacity retry
 		backoff, which would otherwise be silently dropped.
 		"""
+		_log = self._logger or log
 		if self._stop_event is not None:
 			self._stop_event.set()
 		if self._consumer_iterator is not None:
 			try:
 				await self._consumer_iterator.close()
 			except Exception:
-				log.debug("Consumer iterator close raised; ignoring.", exc_info=True)
+				_log.debug("Consumer iterator close raised; ignoring.", exc_info=True)
 
 	async def close(self) -> None:
 		"""Close channels and connection cleanly.
 
 		Each close is wrapped: a failure on one handle must not leak the next.
 		"""
+		_log = self._logger or log
 		if self._dlx_publish_channel is not None and not self._dlx_publish_channel.is_closed:
 			try:
 				await self._dlx_publish_channel.close()
 			except Exception:
-				log.debug("DLX publish channel close raised; ignoring.", exc_info=True)
+				_log.debug("DLX publish channel close raised; ignoring.", exc_info=True)
 		self._dlx_publish_channel = None
 
 		if self._channel is not None and not self._channel.is_closed:
 			try:
 				await self._channel.close()
 			except Exception:
-				log.debug("Consumer channel close raised; ignoring.", exc_info=True)
+				_log.debug("Consumer channel close raised; ignoring.", exc_info=True)
 		self._channel = None
 
 		if self._connection is not None and not self._connection.is_closed:
 			try:
 				await self._connection.close()
 			except Exception:
-				log.debug("Connection close raised; ignoring.", exc_info=True)
+				_log.debug("Connection close raised; ignoring.", exc_info=True)
 		self._connection = None
 
 	async def __aenter__(self):
@@ -959,12 +1028,13 @@ class MrsalAsyncAMQP(Mrsal):
 
 	async def _ensure_async_connection(self) -> None:
 		"""Idempotent: only connects if not already connected. Closes stale connections."""
+		_log = self._logger or log
 		if self._connection is None or self._connection.is_closed:
 			if self._connection is not None:
 				try:
 					await self._connection.close()
 				except Exception:
-					log.debug("Stale connection close raised; ignoring.", exc_info=True)
+					_log.debug("Stale connection close raised; ignoring.", exc_info=True)
 				self._connection = None
 			await self.setup_async_connection()
 
@@ -973,11 +1043,12 @@ class MrsalAsyncAMQP(Mrsal):
 
 		Not safe for concurrent callers; start_consumer is the only call site.
 		"""
+		_log = self._logger or log
 		if self._channel is not None and not self._channel.is_closed:
 			try:
 				await self._channel.close()
 			except Exception:
-				log.debug("Stale channel close raised; ignoring.", exc_info=True)
+				_log.debug("Stale channel close raised; ignoring.", exc_info=True)
 			self._channel = None
 		channel = await self._connection.channel()
 		try:
@@ -1000,6 +1071,7 @@ class MrsalAsyncAMQP(Mrsal):
 		affect the consume path. Not safe for concurrent callers; the consume
 		loop serializes DLX publishes today.
 		"""
+		_log = self._logger or log
 		await self._ensure_async_connection()
 		if self._dlx_publish_channel is not None and not self._dlx_publish_channel.is_closed:
 			return
@@ -1007,13 +1079,14 @@ class MrsalAsyncAMQP(Mrsal):
 			try:
 				await self._dlx_publish_channel.close()
 			except Exception:
-				log.debug("Stale DLX publish channel close raised; ignoring.", exc_info=True)
+				_log.debug("Stale DLX publish channel close raised; ignoring.", exc_info=True)
 			self._dlx_publish_channel = None
 		self._dlx_publish_channel = await self._connection.channel(publisher_confirms=True)
 
 	async def setup_async_connection(self):
 		"""Setup an asynchronous connection to RabbitMQ using aio-pika."""
-		log.info(f"Establishing async connection to RabbitMQ on {self.host}:{self.port}")
+		_log = self._logger or log
+		_log.info(f"Establishing async connection to RabbitMQ on {self.host}:{self.port}")
 		try:
 			self._connection = await connect_robust(
 				host=self.host,
@@ -1025,12 +1098,12 @@ class MrsalAsyncAMQP(Mrsal):
 				ssl_context=self.get_ssl_context(),
 				heartbeat=self.heartbeat
 			)
-			log.info("Async connection established successfully.")
+			_log.info("Async connection established successfully.")
 		except (AMQPConnectionError, StreamLostError, ChannelClosedByBroker, ConnectionClosedByBroker) as e:
-			log.error(f"Error establishing async connection: {e}", exc_info=True)
+			_log.error(f"Error establishing async connection: {e}", exc_info=True)
 			raise
 		except Exception as e:
-			log.error(f'Oh my lordy lord! I caugth an unexpected exception while trying to connect: {e}', exc_info=True)
+			_log.error(f'Oh my lordy lord! I caugth an unexpected exception while trying to connect: {e}', exc_info=True)
 			raise
 
 	async def _handle_message(self, message, runtime_config: dict) -> None:
@@ -1039,6 +1112,7 @@ class MrsalAsyncAMQP(Mrsal):
 		Shared by the sequential and concurrent paths in ``start_consumer`` so
 		the failure/ack policy stays in one place regardless of dispatch mode.
 		"""
+		_log = self._logger or log
 		callback = runtime_config['callback']
 		callback_args = runtime_config['callback_args']
 		auto_ack = runtime_config['auto_ack']
@@ -1060,7 +1134,7 @@ class MrsalAsyncAMQP(Mrsal):
 		properties = config.AioPikaAttributes.from_message(message)
 
 		if self.verbose:
-			log.info(f"""
+			_log.info(f"""
 						Message received with:
 						- Redelivery: {message.redelivered}
 						- Exchange: {message.exchange}
@@ -1070,6 +1144,13 @@ class MrsalAsyncAMQP(Mrsal):
 						""")
 
 		current_retry = message.headers.get('x-delivery-count', 0) if message.headers else 0
+		start_ts = time.monotonic()
+
+		def fields(outcome):
+			return _consume_log_extra(
+				msg_id=msg_id, app_id=app_id, queue=queue_name, routing_key=message.routing_key,
+				retry=current_retry, outcome=outcome, start_ts=start_ts)
+
 		should_process = True
 		failure_reason: str | None = None
 		# When payload_model is set, the validated instance replaces message.body in the callback.
@@ -1080,7 +1161,7 @@ class MrsalAsyncAMQP(Mrsal):
 				try:
 					callback_body = self.validate_payload(payload=message.body, model=payload_model)
 				except (ValidationError, json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
-					log.error(f"Payload validation failed: {e}", exc_info=True)
+					_log.error(f"Payload validation failed: {e}", exc_info=True, extra=fields('validation_failed'))
 					should_process = False
 					failure_reason = f"payload validation: {e!r}"
 
@@ -1091,7 +1172,7 @@ class MrsalAsyncAMQP(Mrsal):
 					else:
 						await callback(message, properties, callback_body)
 				except Exception as e:
-					log.error(f"Splæt! Error processing message with callback: {e}", exc_info=True)
+					_log.error(f"Splæt! Error processing message with callback: {e}", exc_info=True, extra=fields('callback_failed'))
 					should_process = False
 					failure_reason = f"callback: {e!r}"
 
@@ -1102,10 +1183,10 @@ class MrsalAsyncAMQP(Mrsal):
 			# auto_ack=True: broker already acked; skip DLX (caller opted out of accountability)
 			if auto_ack:
 				if not should_process:
-					log.warning(
+					_log.warning(
 						f"Message {msg_id} dropped (auto_ack=True): {failure_reason} | "
-						f"app_id={app_id} routing_key={message.routing_key}"
-					)
+						f"app_id={app_id} routing_key={message.routing_key}",
+						extra=fields('dropped'))
 				return
 
 			if not should_process:
@@ -1120,16 +1201,16 @@ class MrsalAsyncAMQP(Mrsal):
 					)
 				elif dlx_enable:
 					await message.reject(requeue=False)
-					log.warning(f"Message {msg_id} sent to dead letter exchange after {current_retry} retries")
+					_log.warning(f"Message {msg_id} sent to dead letter exchange after {current_retry} retries", extra=fields('dlx'))
 				else:
 					await message.reject(requeue=False)
-					log.warning(f"No dead letter exchange for {queue_name} declared, proceeding to drop the message -- Ponder you life choices! byebye")
+					_log.warning(f"No dead letter exchange for {queue_name} declared, proceeding to drop the message -- Ponder you life choices! byebye", extra=fields('dropped'))
 					if self.verbose:
-						log.info(f"Dropped message content: {message.body}")
+						_log.info(f"Dropped message content: {message.body}")
 				return
 
 			await message.ack()
-			log.info(f'Young grasshopper! Message ({msg_id}) from {app_id} received and properly processed.')
+			_log.info(f'Young grasshopper! Message ({msg_id}) from {app_id} received and properly processed.', extra=fields('processed'))
 
 	async def _handle_message_with_release(self, message, runtime_config: dict,
 										semaphore: asyncio.Semaphore) -> None:
@@ -1139,10 +1220,11 @@ class MrsalAsyncAMQP(Mrsal):
 		permit or kill the parent loop. Errors are logged; the iterator keeps
 		moving.
 		"""
+		_log = self._logger or log
 		try:
 			await self._handle_message(message, runtime_config)
 		except Exception:
-			log.exception("Unhandled error processing message in concurrent task")
+			_log.exception("Unhandled error processing message in concurrent task")
 		finally:
 			semaphore.release()
 
@@ -1296,6 +1378,7 @@ class MrsalAsyncAMQP(Mrsal):
 		entering ``_run_consume_loop_async``. Behaviour for the normal
 		``start_consumer`` path is unchanged.
 		"""
+		_log = self._logger or log
 		if auto_ack and dlx_enable:
 			raise MrsalAbortedSetup(
 				'auto_ack=True is incompatible with dlx_enable=True: once the broker has acked '
@@ -1367,7 +1450,7 @@ class MrsalAsyncAMQP(Mrsal):
 			"max_concurrent_tasks": max_concurrent_tasks,
 		}
 
-		log.info(f"Straight out of the swamps -- consumer boi listening with config: {consumer_config}")
+		_log.info(f"Straight out of the swamps -- consumer boi listening with config: {consumer_config}")
 
 		runtime_config = {
 			'callback': callback,
@@ -1403,6 +1486,7 @@ class MrsalAsyncAMQP(Mrsal):
 		# Lazy creation also preserves a stop() that arrived during tenacity exponential
 		# backoff: if the previous attempt set the event and is being retried, we keep
 		# the set state instead of clobbering it with a fresh unset Event.
+		_log = self._logger or log
 		if self._stop_event is None:
 			self._stop_event = asyncio.Event()
 		if self._inflight_tasks is None:
@@ -1457,7 +1541,7 @@ class MrsalAsyncAMQP(Mrsal):
 				# gather() swallows individual task exceptions (already logged inside
 				# _handle_message_with_release).
 				pending = list(self._inflight_tasks)
-				log.info(f"Draining {len(pending)} in-flight message task(s) before exit")
+				_log.info(f"Draining {len(pending)} in-flight message task(s) before exit")
 				drain_coro = asyncio.gather(*pending, return_exceptions=True)
 				if drain_timeout is None:
 					await drain_coro
@@ -1466,7 +1550,7 @@ class MrsalAsyncAMQP(Mrsal):
 						await asyncio.wait_for(drain_coro, timeout=drain_timeout)
 					except asyncio.TimeoutError:
 						still_pending = [t for t in pending if not t.done()]
-						log.warning(
+						_log.warning(
 							f"Drain timeout after {drain_timeout}s: cancelling "
 							f"{len(still_pending)} unfinished task(s); their messages "
 							f"will be redelivered by the broker."
@@ -1491,6 +1575,7 @@ class MrsalAsyncAMQP(Mrsal):
 		between the confirmed DLX publish and the original ack, the message
 		will be redelivered and re-published to DLX. Consumers must be idempotent.
 		"""
+		_log = self._logger or log
 		try:
 			# Use common logic from superclass
 			await self._handle_dlx_with_retry_cycle_async(
@@ -1515,7 +1600,7 @@ class MrsalAsyncAMQP(Mrsal):
 		except Exception as e:
 			msg_id = properties.message_id if hasattr(properties, 'message_id') else 'unknown'
 			app_id = properties.app_id if hasattr(properties, 'app_id') else 'unknown'
-			log.error(f"Failed to send message to DLX: {e} | message_id={msg_id} app_id={app_id} delivery_tag={message.delivery_tag} exchange={original_exchange} routing_key={original_routing_key}")
+			_log.error(f"Failed to send message to DLX: {e} | message_id={msg_id} app_id={app_id} delivery_tag={message.delivery_tag} exchange={original_exchange} routing_key={original_routing_key}")
 			await message.reject(requeue=False)
 
 	async def _publish_to_dlx(self, dlx_exchange: str, routing_key: str, body: bytes, properties: dict):
@@ -1616,12 +1701,13 @@ class MrsalBlockingPublisher(MrsalBlockingBase):
 
 	def _reset_publish_channel(self) -> None:
 		"""Drop the channel so the next publish reopens it."""
+		_log = self._logger or log
 		if self._publish_channel is not None:
 			try:
 				if self._publish_channel.is_open:
 					self._publish_channel.close()
 			except Exception:
-				log.debug("Publish channel close raised during reset; ignoring.", exc_info=True)
+				_log.debug("Publish channel close raised during reset; ignoring.", exc_info=True)
 		self._publish_channel = None
 
 	def publish(
@@ -1644,6 +1730,7 @@ class MrsalBlockingPublisher(MrsalBlockingBase):
 		terminal broker rejections (``NackError`` / ``UnroutableError``) and a
 		failed topology declaration are raised so the caller decides what to do.
 		"""
+		_log = self._logger or log
 		self._validate_message_body(message)
 
 		# on_publish spans all retry attempts; success flips True only on a
@@ -1682,14 +1769,16 @@ class MrsalBlockingPublisher(MrsalBlockingBase):
 						properties=prop, mandatory=True,
 					)
 					if self.verbose:
-						log.info(f"Message published to exchange {exchange_name} with routing key {routing_key}")
+						_log.info(f"Message published to exchange {exchange_name} with routing key {routing_key}", extra=_publish_log_extra(
+							exchange=exchange_name, routing_key=routing_key, outcome='published'))
 					outcome.ok = True
 					return
 
 				except _TERMINAL_PUBLISH_ERRORS as e:
 					# Confirm-mode rejection: terminal, retrying won't help. The
 					# channel stays usable for the next caller.
-					log.error(f"Broker rejected publish to {exchange_name}/{routing_key}: {e}")
+					_log.error(f"Broker rejected publish to {exchange_name}/{routing_key}: {e}", extra=_publish_log_extra(
+						exchange=exchange_name, routing_key=routing_key, outcome='failed'))
 					raise
 				except _RETRIABLE_PUBLISH_ERRORS as e:
 					# Connection or channel died. Drop the channel and reconnect on
@@ -1699,7 +1788,7 @@ class MrsalBlockingPublisher(MrsalBlockingBase):
 					# _ensure_publish_channel.
 					last_exc = e
 					self._reset_publish_channel()
-					log.warning(f"Publish attempt {attempt}/{_PUBLISH_ATTEMPTS} to {exchange_name}/{routing_key} failed: {e}")
+					_log.warning(f"Publish attempt {attempt}/{_PUBLISH_ATTEMPTS} to {exchange_name}/{routing_key} failed: {e}")
 					if attempt < _PUBLISH_ATTEMPTS:
 						time.sleep(_PUBLISH_RETRY_WAIT_SEC)
 			assert last_exc is not None
@@ -1736,6 +1825,7 @@ class MrsalBlockingPublisherPool:
 		self._created = 0
 		self._closed = False
 		self._metrics_hooks: MetricsHooks | None = None
+		self._logger: logging.Logger | None = None
 
 	def set_metrics_hooks(self, hooks: MetricsHooks | None) -> None:
 		"""Install metrics hooks for every publisher the pool hands out.
@@ -1745,6 +1835,15 @@ class MrsalBlockingPublisherPool:
 		See ``mrsal.metrics.MetricsHooks``.
 		"""
 		self._metrics_hooks = hooks
+
+	def set_logger(self, logger: logging.Logger | None) -> None:
+		"""Install a logger for every publisher the pool hands out.
+
+		Stored on the pool and (re)applied to each publisher on checkout, so
+		both already-warm and not-yet-created publishers route through the same
+		logger. Mirrors ``set_metrics_hooks``; see ``Mrsal.set_logger``.
+		"""
+		self._logger = logger
 
 	def _checkout(self, timeout: float | None) -> MrsalBlockingPublisher:
 		with self._lock:
@@ -1759,11 +1858,12 @@ class MrsalBlockingPublisherPool:
 		return self._idle.get(timeout=timeout)
 
 	def _checkin(self, pub: "MrsalBlockingPublisher") -> None:
+		_log = self._logger or log
 		if self._closed:
 			try:
 				pub.close()
 			except Exception:
-				log.debug("Publisher close on checkin raised; ignoring.", exc_info=True)
+				_log.debug("Publisher close on checkin raised; ignoring.", exc_info=True)
 			return
 		self._idle.put(pub)
 
@@ -1780,6 +1880,7 @@ class MrsalBlockingPublisherPool:
 		"""
 		pub = self._checkout(timeout)
 		pub.set_metrics_hooks(self._metrics_hooks)
+		pub.set_logger(self._logger)
 		try:
 			yield pub
 		finally:
@@ -1792,6 +1893,7 @@ class MrsalBlockingPublisherPool:
 		another thread are closed when returned (see ``_checkin``), so an
 		in-flight publish is never closed out from under it.
 		"""
+		_log = self._logger or log
 		with self._lock:
 			self._closed = True
 		while True:
@@ -1802,4 +1904,4 @@ class MrsalBlockingPublisherPool:
 			try:
 				pub.close()
 			except Exception:
-				log.debug("Publisher close raised during close_all; ignoring.", exc_info=True)
+				_log.debug("Publisher close raised during close_all; ignoring.", exc_info=True)
