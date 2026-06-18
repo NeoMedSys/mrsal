@@ -71,7 +71,7 @@ class MrsalBlockingBase(Mrsal):
 				try:
 					self._connection.close()
 				except Exception:
-					pass
+					log.debug("Stale connection close raised during cleanup; ignoring.", exc_info=True)
 			self.setup_blocking_connection()
 
 	def _close_connection(self) -> None:
@@ -702,7 +702,7 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 				try:
 					ch.close()
 				except Exception:
-					pass
+					log.debug("Publish channel close raised during cleanup; ignoring.", exc_info=True)
 
 	def publish_messages(
 		self,
@@ -808,7 +808,7 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 			try:
 				ch.close()
 			except Exception:
-				pass
+				log.debug("Publish channel close raised during cleanup; ignoring.", exc_info=True)
 
 	def _publish_to_dlx_with_retry_cycle(
 			self,
