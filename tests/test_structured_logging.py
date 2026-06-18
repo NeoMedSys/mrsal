@@ -112,6 +112,24 @@ def test_callback_failure_outcome_field():
 	assert len(handler.with_outcome("callback_failed")) == 1
 
 
+def test_no_dlx_drop_carries_outcome_dropped():
+	# Callback fails with no DLX declared -> message is dropped, logged outcome='dropped'.
+	logger, handler = _make_logger("test.mrsal.dropped")
+	consumer = MrsalBlockingAMQP(**SYNC_ARGS)
+	consumer.set_logger(logger)
+
+	def boom(mf, props, body):
+		raise RuntimeError("nope")
+
+	with TestMrsalBroker(consumer) as br:
+		_register_sync(br, boom, dlx_enable=False)
+		br.publish(b"to be dropped", exchange="ex", routing_key="rk")
+
+	dropped = handler.with_outcome("dropped")
+	assert len(dropped) == 1
+	assert dropped[0].queue == "q"
+
+
 def test_retry_cycle_disposition_carries_outcome_retry():
 	# Retry-cycle republish to the .retry queue logs outcome='retry' (m2).
 	logger, handler = _make_logger("test.mrsal.retry")
