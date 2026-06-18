@@ -7,9 +7,7 @@ and that the consume-lifecycle records carry the structured ``extra`` fields.
 """
 import logging
 
-import pytest
-
-from mrsal.amqp.subclass import MrsalBlockingAMQP, MrsalBlockingPublisher
+from mrsal.amqp.subclass import MrsalBlockingAMQP
 from mrsal.testing import TestMrsalBroker
 from pydantic import BaseModel
 
