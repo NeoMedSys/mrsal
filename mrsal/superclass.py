@@ -1,9 +1,11 @@
 # external
 import os
+import time
 import random
 import ssl
 import pika
 import logging
+from contextlib import contextmanager
 from dataclasses import field
 from datetime import datetime, timezone
 from ssl import SSLContext
@@ -19,8 +21,30 @@ import json
 # internal
 from mrsal import config
 from mrsal.exceptions import MrsalAbortedSetup, MrsalSetupError
+from mrsal.metrics import MetricsHooks, safe_invoke
 
 log = logging.getLogger(__name__)
+
+
+class _MetricOutcome:
+	"""Mutable result holder shared by the metrics context managers.
+
+	``ok`` is the success flag the hook reports. For consume, ``mark_handler_done``
+	stamps the end of the validation+callback span so the reported duration
+	excludes the ack/DLX dispatch; the stamp is only taken when timing is on, so
+	an uninstrumented delivery reads no clock.
+	"""
+
+	__slots__ = ("ok", "handler_end", "_timing")
+
+	def __init__(self, timing: bool):
+		self.ok = False
+		self.handler_end: float | None = None
+		self._timing = timing
+
+	def mark_handler_done(self) -> None:
+		if self._timing:
+			self.handler_end = time.monotonic()
 
 @dataclass
 class Mrsal:
@@ -62,6 +86,56 @@ class Mrsal:
 	_connection: Any = field(init=False, default=None)
 	_channel: Any = field(init=False, default=None)
 	auto_declare_ok: bool = field(init=False, default=False)
+	_metrics_hooks: MetricsHooks | None = field(init=False, default=None, repr=False)
+
+	def set_metrics_hooks(self, hooks: MetricsHooks | None) -> None:
+		"""Install a push-based metrics instrumentation set, or clear it with ``None``.
+
+		See ``mrsal.metrics.MetricsHooks`` for the hook shapes and the
+		fast/non-blocking/no-exceptions contract.
+		"""
+		self._metrics_hooks = hooks
+
+	@contextmanager
+	def _measure_publish(self):
+		"""Fire ``on_publish`` once on exit; the caller sets ``outcome.ok=True``.
+
+		Spans the full publish (entry to broker ack/nack, across any retries).
+		Unguarded by design (sonic parity): a hook that raises propagates and
+		supersedes any in-flight publish error. No clock is read when the hook
+		is unset.
+		"""
+		hooks = self._metrics_hooks
+		timing = hooks is not None and hooks.on_publish is not None
+		start = time.monotonic() if timing else None
+		outcome = _MetricOutcome(timing)
+		try:
+			yield outcome
+		finally:
+			if start is not None:
+				hooks.on_publish(outcome.ok, time.monotonic() - start)
+
+	@contextmanager
+	def _measure_consume(self):
+		"""Fire ``on_consume`` exactly once on exit (the per-delivery guard).
+
+		Duration spans validation + callback only -- the caller calls
+		``outcome.mark_handler_done()`` right after the handler returns, before
+		the ack/DLX dispatch, so a DLX round-trip is not folded into the handler
+		timing. Falls back to ``now()`` if the handler never returned. Hook
+		exceptions are swallowed (``safe_invoke``) so a bad hook can't kill the
+		consumer. No clock is read when the hook is unset.
+		"""
+		hooks = self._metrics_hooks
+		timing = hooks is not None and hooks.on_consume is not None
+		start = time.monotonic() if timing else None
+		outcome = _MetricOutcome(timing)
+		try:
+			yield outcome
+		finally:
+			if start is not None:
+				end = outcome.handler_end if outcome.handler_end is not None else time.monotonic()
+				safe_invoke(hooks.on_consume, outcome.ok, end - start)
 
 	def __post_init__(self) -> None:
 		if self.ssl:
@@ -1035,7 +1109,8 @@ class Mrsal:
 			max_retry_time_limit: int, dlx_exchange_name: str | None,
 			dlx_routing_key: str | None = None,
 			retry_backoff: Literal["fixed", "exponential"] = config.DEFAULT_RETRY_BACKOFF,
-			retry_backoff_max: int = config.DEFAULT_RETRY_BACKOFF_MAX_MIN):
+			retry_backoff_max: int = config.DEFAULT_RETRY_BACKOFF_MAX_MIN,
+			queue_name: str | None = None):
 		"""Base method for DLX handling with retry cycles (sync)."""
 		target_exchange, target_routing, target_properties, retry_info, should_cycle, next_delay_ms = self._build_dlx_retry_properties(
 			properties=properties,
@@ -1052,6 +1127,7 @@ class Mrsal:
 		)
 		self._publish_to_dlx(target_exchange, target_routing, body, target_properties)
 		self._log_dlx_result(retry_info, next_delay_ms, should_cycle)
+		self._emit_dlx_metrics(retry_info, should_cycle, next_delay_ms, retry_cycle_interval, queue_name)
 
 	async def _handle_dlx_with_retry_cycle_async(
 			self, message, properties, processing_error: str,
@@ -1060,7 +1136,8 @@ class Mrsal:
 			max_retry_time_limit: int, dlx_exchange_name: str | None,
 			dlx_routing_key: str | None = None,
 			retry_backoff: Literal["fixed", "exponential"] = config.DEFAULT_RETRY_BACKOFF,
-			retry_backoff_max: int = config.DEFAULT_RETRY_BACKOFF_MAX_MIN):
+			retry_backoff_max: int = config.DEFAULT_RETRY_BACKOFF_MAX_MIN,
+			queue_name: str | None = None):
 		"""Base method for DLX handling with retry cycles (async)."""
 		target_exchange, target_routing, target_properties, retry_info, should_cycle, next_delay_ms = self._build_dlx_retry_properties(
 			properties=properties,
@@ -1077,6 +1154,30 @@ class Mrsal:
 		)
 		await self._publish_to_dlx(target_exchange, target_routing, message.body, target_properties)
 		self._log_dlx_result(retry_info, next_delay_ms, should_cycle)
+		self._emit_dlx_metrics(retry_info, should_cycle, next_delay_ms, retry_cycle_interval, queue_name)
+
+	def _emit_dlx_metrics(self, retry_info: dict, should_cycle: bool, next_delay_ms: int | None,
+						retry_cycle_interval: int, queue_name: str | None) -> None:
+		"""Fire the ``on_retry`` / ``on_dlx_final`` hooks after a DLX publish.
+
+		``should_cycle`` is the same flag that chose the ``.retry`` vs terminal
+		``.dlx`` target, so it maps the publish 1:1 onto the matching hook.
+		``delay_s`` is the per-message exponential delay when set, else the flat
+		``.retry`` queue TTL (``retry_cycle_interval`` minutes).
+		"""
+		hooks = self._metrics_hooks
+		if hooks is None:
+			return
+		if should_cycle:
+			delay_s = (next_delay_ms / 1000.0) if next_delay_ms is not None else float(retry_cycle_interval * 60)
+			safe_invoke(hooks.on_retry, retry_info['cycle_count'] + 1, delay_s)
+		elif queue_name is not None:
+			safe_invoke(hooks.on_dlx_final, f"{queue_name}{config.DLX_SUFFIX}")
+		else:
+			# Every consumer path threads queue_name through; only a direct call
+			# to the private DLX helper without it lands here. Skip rather than
+			# hand on_dlx_final a None where its contract promises a queue name.
+			log.debug("on_dlx_final skipped: queue_name unavailable on this DLX path")
 
 	def _publish_to_dlx(self, dlx_exchange: str, routing_key: str, body: bytes, properties: dict):
 		"""Abstract method - implemented by subclasses."""

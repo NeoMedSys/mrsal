@@ -1,8 +1,19 @@
 # MRSAL AMQP
-[![Release](https://img.shields.io/badge/release-3.11.1-blue.svg)](https://pypi.org/project/mrsal/) 
+[![Release](https://img.shields.io/badge/release-3.12.0-blue.svg)](https://pypi.org/project/mrsal/) 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%7C3.11%7C3.12-blue.svg)](https://www.python.org/downloads/)
 [![Mrsal Workflow](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml/badge.svg?branch=main)](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml)
 [![Coverage](https://neomedsys.github.io/mrsal/reports/badges/coverage-badge.svg)](https://neomedsys.github.io/mrsal/reports/coverage/htmlcov/)
+
+## New in 3.12.0
+
+- **Push-based metrics hooks** (additive, no breaking changes). Install a set of
+  callables with `mrsal.set_metrics_hooks(MetricsHooks(...))` to instrument the
+  publish / consume / DLX hot paths — `on_publish`, `on_consume`, `on_retry`,
+  `on_dlx_final` — without parsing log lines. mrsal ships no metrics client; the
+  hook receives plain values, so you wire them to Prometheus, StatsD, or plain
+  counters. Parity with sonic's `types.MetricsHooks`. Unset hooks cost a single
+  `None` check; the core install gains no dependency. See
+  [§4.6](#46-metrics-hooks).
 
 ## New in 3.11.0
 
@@ -603,6 +614,72 @@ mrsal.start_consumer(
 ```
 
 **Note!** There are many parameters and settings that you can use to set up a more sophisticated communication protocol in both blocking or async connection with pydantic BaseModels to enforce data types in the expected payload.
+
+#### 4.6 Metrics Hooks
+
+mrsal can push operational signal to your own instrumentation without you parsing
+log lines. Install a `MetricsHooks` set and mrsal calls the hooks you provide on
+the publish / consume / DLX hot paths. This mirrors sonic's `types.MetricsHooks`.
+
+mrsal bundles **no** metrics client — each hook is a plain callable, so you wire
+it to whatever you already use (Prometheus, StatsD, or in-memory counters). The
+broker's own `rabbitmq_prometheus` plugin covers *queue-level* metrics (depth,
+rates); these hooks cover the *handler-level* signal it can't see.
+
+```python
+from mrsal.amqp.subclass import MrsalBlockingAMQP
+from mrsal.metrics import MetricsHooks
+
+mrsal = MrsalBlockingAMQP(host=..., port=5672, credentials=(...), virtual_host="/")
+
+mrsal.set_metrics_hooks(MetricsHooks(
+    # success=False on a NackError / UnroutableError / confirm timeout.
+    on_publish=lambda success, duration_s: ...,
+    # Fires once per delivery. success=False when payload validation OR the
+    # callback failed; duration_s spans validation + callback.
+    on_consume=lambda success, duration_s: ...,
+    # Fires when a failed message is republished to <queue>.retry.
+    on_retry=lambda cycle, delay_s: ...,
+    # Fires when a message is parked in the terminal <queue>.dlx.
+    on_dlx_final=lambda queue_name: ...,
+))
+```
+
+Each hook is optional — pass only the ones you want; an unset hook costs a single
+`None` check on the hot path. Pass `None` to `set_metrics_hooks` to clear the set.
+`MrsalBlockingPublisherPool.set_metrics_hooks(...)` cascades the set to every
+publisher it hands out.
+
+**Contract — fast, non-blocking, no exceptions.** Hooks run synchronously where
+the event happens, including inside the `threaded=True` executor, so a hook that
+blocks or does I/O stalls message processing — increment a counter and let a
+separate task export it. Make hooks thread-safe (e.g. `prometheus_client`
+collectors already are). On exceptions, mrsal mirrors sonic: a raise in a
+consume-path hook (`on_consume` / `on_retry` / `on_dlx_final`) is caught and
+logged so it never kills the consumer, but a raise in `on_publish` is **not**
+recovered: it propagates to the publish caller and, if the publish itself was
+already failing, *supersedes* that error. Keep `on_publish` exception-free.
+
+A worked example wiring these to `prometheus_client`:
+
+```python
+from prometheus_client import Counter, Histogram, start_http_server
+from mrsal.metrics import MetricsHooks
+
+consume_seconds = Histogram("mrsal_message_processing_seconds", "Handler wall-clock")
+consumed_total = Counter("mrsal_messages_consumed_total", "Consumed messages", ["outcome"])
+dlx_final_total = Counter("mrsal_messages_dlx_final_total", "Messages parked in terminal DLX")
+
+def on_consume(success, duration_s):
+    consume_seconds.observe(duration_s)
+    consumed_total.labels(outcome="processed" if success else "failed").inc()
+
+def on_dlx_final(queue_name):
+    dlx_final_total.inc()
+
+mrsal.set_metrics_hooks(MetricsHooks(on_consume=on_consume, on_dlx_final=on_dlx_final))
+start_http_server(8000)  # expose /metrics — mrsal is a library, you own exposition
+```
 
 ---
 

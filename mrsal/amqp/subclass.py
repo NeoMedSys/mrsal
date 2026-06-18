@@ -29,6 +29,7 @@ from pydantic import ConfigDict, ValidationError
 from pydantic.dataclasses import dataclass
 
 from mrsal.superclass import Mrsal
+from mrsal.metrics import MetricsHooks
 from mrsal import config
 
 log = logging.getLogger(__name__)
@@ -70,7 +71,7 @@ class MrsalBlockingBase(Mrsal):
 				try:
 					self._connection.close()
 				except Exception:
-					pass
+					log.debug("Stale connection close raised during cleanup; ignoring.", exc_info=True)
 			self.setup_blocking_connection()
 
 	def _close_connection(self) -> None:
@@ -267,48 +268,55 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 		failure_reason: str | None = None
 		# When payload_model is set, the validated instance replaces body in the callback.
 		callback_body = body
-		if payload_model:
-			try:
-				callback_body = self.validate_payload(payload=body, model=payload_model)
-			except (ValidationError, json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
-				log.error(f"Payload validation failed for {msg_id}: {e}")
-				should_process = False
-				failure_reason = f"payload validation: {e!r}"
 
-		if callback and should_process:
-			try:
-				if callback_args:
-					callback(*callback_args, method_frame, properties, callback_body)
+		with self._measure_consume() as outcome:
+			if payload_model:
+				try:
+					callback_body = self.validate_payload(payload=body, model=payload_model)
+				except (ValidationError, json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
+					log.error(f"Payload validation failed for {msg_id}: {e}")
+					should_process = False
+					failure_reason = f"payload validation: {e!r}"
+
+			if callback and should_process:
+				try:
+					if callback_args:
+						callback(*callback_args, method_frame, properties, callback_body)
+					else:
+						callback(method_frame, properties, callback_body)
+				except Exception as e:
+					log.error(f"Callback processing failed for message {msg_id}: {e}")
+					should_process = False
+					failure_reason = f"callback: {e!r}"
+
+			# End of the validation+callback span the on_consume duration measures.
+			outcome.ok = should_process
+			outcome.mark_handler_done()
+
+			if not should_process and not auto_ack:
+				if dlx_enable and enable_retry_cycles:
+					self._schedule_threadsafe(
+						self._publish_to_dlx_with_retry_cycle, threaded,
+						method_frame, properties, body, failure_reason or "Callback failed",
+						runtime_config['exchange_name'], runtime_config['routing_key'],
+						enable_retry_cycles, runtime_config['retry_cycle_interval'],
+						runtime_config['max_retry_time_limit'], runtime_config['dlx_exchange_name'],
+						runtime_config['dlx_routing_key'],
+						runtime_config['retry_backoff'], runtime_config['retry_backoff_max'],
+						runtime_config['queue_name'],
+					)
+				elif dlx_enable:
+					log.warning(f"Message {msg_id} sent to dead letter exchange after {current_retry} retries")
+					self._schedule_threadsafe(self._consumer_channel.basic_nack, threaded, delivery_tag=delivery_tag, requeue=False)
 				else:
-					callback(method_frame, properties, callback_body)
-			except Exception as e:
-				log.error(f"Callback processing failed for message {msg_id}: {e}")
-				should_process = False
-				failure_reason = f"callback: {e!r}"
+					log.warning(f"No dead letter exchange declared for {runtime_config['queue_name']}, proceeding to drop the message -- reflect on your life choices! byebye")
+					if self.verbose:
+						log.info(f"Dropped message content: {body}")
+					self._schedule_threadsafe(self._consumer_channel.basic_nack, threaded, delivery_tag=delivery_tag, requeue=False)
 
-		if not should_process and not auto_ack:
-			if dlx_enable and enable_retry_cycles:
-				self._schedule_threadsafe(
-					self._publish_to_dlx_with_retry_cycle, threaded,
-					method_frame, properties, body, failure_reason or "Callback failed",
-					runtime_config['exchange_name'], runtime_config['routing_key'],
-					enable_retry_cycles, runtime_config['retry_cycle_interval'],
-					runtime_config['max_retry_time_limit'], runtime_config['dlx_exchange_name'],
-					runtime_config['dlx_routing_key'],
-					runtime_config['retry_backoff'], runtime_config['retry_backoff_max'],
-				)
-			elif dlx_enable:
-				log.warning(f"Message {msg_id} sent to dead letter exchange after {current_retry} retries")
-				self._schedule_threadsafe(self._consumer_channel.basic_nack, threaded, delivery_tag=delivery_tag, requeue=False)
-			else:
-				log.warning(f"No dead letter exchange declared for {runtime_config['queue_name']}, proceeding to drop the message -- reflect on your life choices! byebye")
-				if self.verbose:
-					log.info(f"Dropped message content: {body}")
-				self._schedule_threadsafe(self._consumer_channel.basic_nack, threaded, delivery_tag=delivery_tag, requeue=False)
-
-		elif not auto_ack and should_process:
-			log.info(f'Message ({msg_id}) from {app_id} received and properly processed -- now dance the funky chicken')
-			self._schedule_threadsafe(self._consumer_channel.basic_ack, threaded, delivery_tag=delivery_tag)
+			elif not auto_ack and should_process:
+				log.info(f'Message ({msg_id}) from {app_id} received and properly processed -- now dance the funky chicken')
+				self._schedule_threadsafe(self._consumer_channel.basic_ack, threaded, delivery_tag=delivery_tag)
 
 	@retry(
 		retry=retry_if_exception_type((
@@ -660,53 +668,42 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 		# without confirms, basic_publish is fire-and-forget.
 		ch.confirm_delivery()
 
-		try:
-			if auto_declare:
-				if None in (exchange_name, queue_name, exchange_type, routing_key):
-					raise TypeError('Make sure that you are passing in all the necessary args for auto_declare')
-
-				self._setup_exchange_and_queue(
-					exchange_name=exchange_name,
-					queue_name=queue_name,
-					exchange_type=exchange_type,
-					routing_key=routing_key,
-					passive=passive,
-					channel=ch
-					)
+		with self._measure_publish() as outcome:
 			try:
-				# Publish the message by serializing it in json dump
-				# NOTE! we are not dumping a json anymore here! This allows for more flexibility
-				ch.basic_publish(exchange=exchange_name, routing_key=routing_key, body=message, properties=prop)
-				log.info(f"Message published to exchange {exchange_name} with routing key {routing_key}")
+				if auto_declare:
+					if None in (exchange_name, queue_name, exchange_type, routing_key):
+						raise TypeError('Make sure that you are passing in all the necessary args for auto_declare')
 
-			except UnroutableError as e:
-				log.error(f"Producer could not publish message:{message!r} to the exchange {exchange_name} with a routing key {routing_key}: {e}", exc_info=True)
-				raise
-			except NackError as e:
-				log.error(f"Message NACKed by broker: {e}")
-				raise
-			except Exception as e:
-				log.error(f"Unexpected error while publishing message: {e}")
-				raise
-		finally:
-			try:
-				ch.close()
-			except Exception:
-				pass
+					self._setup_exchange_and_queue(
+						exchange_name=exchange_name,
+						queue_name=queue_name,
+						exchange_type=exchange_type,
+						routing_key=routing_key,
+						passive=passive,
+						channel=ch
+						)
+				try:
+					# Publish the message by serializing it in json dump
+					# NOTE! we are not dumping a json anymore here! This allows for more flexibility
+					ch.basic_publish(exchange=exchange_name, routing_key=routing_key, body=message, properties=prop)
+					log.info(f"Message published to exchange {exchange_name} with routing key {routing_key}")
+					outcome.ok = True
 
-	@retry(
-		retry=retry_if_exception_type((
-			NackError,
-			UnroutableError,
-			AMQPConnectionError,
-			ChannelClosedByBroker,
-			ConnectionClosedByBroker,
-			StreamLostError
-			)),
-		stop=stop_after_attempt(3),
-		wait=wait_fixed(2),
-		before_sleep=before_sleep_log(log, WARNING)
-		)
+				except UnroutableError as e:
+					log.error(f"Producer could not publish message:{message!r} to the exchange {exchange_name} with a routing key {routing_key}: {e}", exc_info=True)
+					raise
+				except NackError as e:
+					log.error(f"Message NACKed by broker: {e}")
+					raise
+				except Exception as e:
+					log.error(f"Unexpected error while publishing message: {e}")
+					raise
+			finally:
+				try:
+					ch.close()
+				except Exception:
+					log.debug("Publish channel close raised during cleanup; ignoring.", exc_info=True)
+
 	def publish_messages(
 		self,
 		mrsal_protocol_collection: dict[str, dict[str, str | bytes]],
@@ -729,7 +726,43 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 		:raises UnroutableError: raised when a message published in publisher-acknowledgments mode (see `BlockingChannel.confirm_delivery`) is returned via `Basic.Return` followed by `Basic.Ack`.
 		:raises NackError: raised when a message published in publisher-acknowledgements mode is Nack'ed by the broker. See `BlockingChannel.confirm_delivery`.
 		"""
+		# on_publish fires once per logical call, spanning the tenacity retries in
+		# _publish_messages_with_retry; success True only when the whole collection
+		# published.
+		with self._measure_publish() as outcome:
+			self._publish_messages_with_retry(
+				mrsal_protocol_collection=mrsal_protocol_collection,
+				prop=prop,
+				auto_declare=auto_declare,
+				passive=passive,
+			)
+			outcome.ok = True
 
+	@retry(
+		retry=retry_if_exception_type((
+			NackError,
+			UnroutableError,
+			AMQPConnectionError,
+			ChannelClosedByBroker,
+			ConnectionClosedByBroker,
+			StreamLostError
+			)),
+		stop=stop_after_attempt(3),
+		wait=wait_fixed(2),
+		before_sleep=before_sleep_log(log, WARNING)
+		)
+	def _publish_messages_with_retry(
+		self,
+		mrsal_protocol_collection: dict[str, dict[str, str | bytes]],
+		prop: pika.BasicProperties | None = None,
+		auto_declare: bool = True,
+		passive: bool = True
+	) -> None:
+		"""One attempt at publishing the whole collection; retried by tenacity.
+
+		Split out of ``publish_messages`` so the ``on_publish`` metric fires once
+		per logical call rather than once per retry attempt.
+		"""
 		self._ensure_connection()
 		ch = self._connection.channel()
 		# Required for the NackError/UnroutableError retry on this method to actually fire;
@@ -775,7 +808,7 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 			try:
 				ch.close()
 			except Exception:
-				pass
+				log.debug("Publish channel close raised during cleanup; ignoring.", exc_info=True)
 
 	def _publish_to_dlx_with_retry_cycle(
 			self,
@@ -785,7 +818,8 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 			max_retry_time_limit: int, dlx_exchange_name: str | None,
 			dlx_routing_key: str | None = None,
 			retry_backoff: Literal["fixed", "exponential"] = config.DEFAULT_RETRY_BACKOFF,
-			retry_backoff_max: int = config.DEFAULT_RETRY_BACKOFF_MAX_MIN):
+			retry_backoff_max: int = config.DEFAULT_RETRY_BACKOFF_MAX_MIN,
+			queue_name: str | None = None):
 		"""Publish message to DLX with retry cycle headers.
 
 		At-least-once delivery for DLX: the publish uses ``confirm_delivery()``
@@ -810,8 +844,9 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 				dlx_routing_key=dlx_routing_key,
 				retry_backoff=retry_backoff,
 				retry_backoff_max=retry_backoff_max,
+				queue_name=queue_name,
 			)
-			
+
 			# Acknowledge original message
 			self._consumer_channel.basic_ack(delivery_tag=method_frame.delivery_tag)
 
@@ -1040,55 +1075,61 @@ class MrsalAsyncAMQP(Mrsal):
 		# When payload_model is set, the validated instance replaces message.body in the callback.
 		callback_body = message.body
 
-		if payload_model:
-			try:
-				callback_body = self.validate_payload(payload=message.body, model=payload_model)
-			except (ValidationError, json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
-				log.error(f"Payload validation failed: {e}", exc_info=True)
-				should_process = False
-				failure_reason = f"payload validation: {e!r}"
+		with self._measure_consume() as outcome:
+			if payload_model:
+				try:
+					callback_body = self.validate_payload(payload=message.body, model=payload_model)
+				except (ValidationError, json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
+					log.error(f"Payload validation failed: {e}", exc_info=True)
+					should_process = False
+					failure_reason = f"payload validation: {e!r}"
 
-		if callback and should_process:
-			try:
-				if callback_args:
-					await callback(*callback_args, message, properties, callback_body)
-				else:
-					await callback(message, properties, callback_body)
-			except Exception as e:
-				log.error(f"Splæt! Error processing message with callback: {e}", exc_info=True)
-				should_process = False
-				failure_reason = f"callback: {e!r}"
+			if callback and should_process:
+				try:
+					if callback_args:
+						await callback(*callback_args, message, properties, callback_body)
+					else:
+						await callback(message, properties, callback_body)
+				except Exception as e:
+					log.error(f"Splæt! Error processing message with callback: {e}", exc_info=True)
+					should_process = False
+					failure_reason = f"callback: {e!r}"
 
-		# auto_ack=True: broker already acked; skip DLX (caller opted out of accountability)
-		if auto_ack:
+			# End of the validation+callback span the on_consume duration measures.
+			outcome.ok = should_process
+			outcome.mark_handler_done()
+
+			# auto_ack=True: broker already acked; skip DLX (caller opted out of accountability)
+			if auto_ack:
+				if not should_process:
+					log.warning(
+						f"Message {msg_id} dropped (auto_ack=True): {failure_reason} | "
+						f"app_id={app_id} routing_key={message.routing_key}"
+					)
+				return
+
 			if not should_process:
-				log.warning(
-					f"Message {msg_id} dropped (auto_ack=True): {failure_reason} | "
-					f"app_id={app_id} routing_key={message.routing_key}"
-				)
-			return
+				if dlx_enable and enable_retry_cycles:
+					await self._async_publish_to_dlx_with_retry_cycle(
+						message, properties, failure_reason or "Callback processing failed",
+						exchange_name, routing_key, enable_retry_cycles,
+						retry_cycle_interval, max_retry_time_limit, dlx_exchange_name,
+						dlx_routing_key,
+						retry_backoff, retry_backoff_max,
+						queue_name,
+					)
+				elif dlx_enable:
+					await message.reject(requeue=False)
+					log.warning(f"Message {msg_id} sent to dead letter exchange after {current_retry} retries")
+				else:
+					await message.reject(requeue=False)
+					log.warning(f"No dead letter exchange for {queue_name} declared, proceeding to drop the message -- Ponder you life choices! byebye")
+					if self.verbose:
+						log.info(f"Dropped message content: {message.body}")
+				return
 
-		if not should_process:
-			if dlx_enable and enable_retry_cycles:
-				await self._async_publish_to_dlx_with_retry_cycle(
-					message, properties, failure_reason or "Callback processing failed",
-					exchange_name, routing_key, enable_retry_cycles,
-					retry_cycle_interval, max_retry_time_limit, dlx_exchange_name,
-					dlx_routing_key,
-					retry_backoff, retry_backoff_max,
-				)
-			elif dlx_enable:
-				await message.reject(requeue=False)
-				log.warning(f"Message {msg_id} sent to dead letter exchange after {current_retry} retries")
-			else:
-				await message.reject(requeue=False)
-				log.warning(f"No dead letter exchange for {queue_name} declared, proceeding to drop the message -- Ponder you life choices! byebye")
-				if self.verbose:
-					log.info(f"Dropped message content: {message.body}")
-			return
-
-		await message.ack()
-		log.info(f'Young grasshopper! Message ({msg_id}) from {app_id} received and properly processed.')
+			await message.ack()
+			log.info(f'Young grasshopper! Message ({msg_id}) from {app_id} received and properly processed.')
 
 	async def _handle_message_with_release(self, message, runtime_config: dict,
 										semaphore: asyncio.Semaphore) -> None:
@@ -1440,7 +1481,8 @@ class MrsalAsyncAMQP(Mrsal):
 												max_retry_time_limit: int, dlx_exchange_name: str | None,
 												dlx_routing_key: str | None = None,
 												retry_backoff: Literal["fixed", "exponential"] = config.DEFAULT_RETRY_BACKOFF,
-												retry_backoff_max: int = config.DEFAULT_RETRY_BACKOFF_MAX_MIN):
+												retry_backoff_max: int = config.DEFAULT_RETRY_BACKOFF_MAX_MIN,
+												queue_name: str | None = None):
 		"""Async publish message to DLX with retry cycle headers.
 
 		At-least-once delivery for DLX: the publish uses publisher confirms on
@@ -1464,8 +1506,9 @@ class MrsalAsyncAMQP(Mrsal):
 				dlx_routing_key=dlx_routing_key,
 				retry_backoff=retry_backoff,
 				retry_backoff_max=retry_backoff_max,
+				queue_name=queue_name,
 			)
-			
+
 			# Acknowledge original message
 			await message.ack()
 			
@@ -1603,60 +1646,64 @@ class MrsalBlockingPublisher(MrsalBlockingBase):
 		"""
 		self._validate_message_body(message)
 
-		topology_key = (exchange_name, exchange_type, queue_name, routing_key, passive)
-		last_exc: Exception | None = None
-		for attempt in range(1, _PUBLISH_ATTEMPTS + 1):
-			try:
-				self._ensure_publish_channel()
+		# on_publish spans all retry attempts; success flips True only on a
+		# confirmed publish.
+		with self._measure_publish() as outcome:
+			topology_key = (exchange_name, exchange_type, queue_name, routing_key, passive)
+			last_exc: Exception | None = None
+			for attempt in range(1, _PUBLISH_ATTEMPTS + 1):
+				try:
+					self._ensure_publish_channel()
 
-				if auto_declare and topology_key not in self._declared_topology:
-					if None in (exchange_name, queue_name, exchange_type, routing_key):
-						raise TypeError('Make sure that you are passing in all the necessary args for auto_declare')
-					self._setup_exchange_and_queue(
-						exchange_name=exchange_name,
-						queue_name=queue_name,
-						exchange_type=exchange_type,
-						routing_key=routing_key,
-						passive=passive,
-						channel=self._publish_channel,
-					)
-					# auto_declare_ok is the success flag for both passive checks
-					# and active declares; _setup_exchange_and_queue swallows the
-					# broker error, so guard on it (and only cache on success) for
-					# both modes -- a failed passive 404 also closed the channel.
-					if not self.auto_declare_ok:
-						self._reset_publish_channel()
-						raise MrsalAbortedSetup(
-							f"Topology declaration failed for exchange {exchange_name} / queue {queue_name}; refusing to publish."
+					if auto_declare and topology_key not in self._declared_topology:
+						if None in (exchange_name, queue_name, exchange_type, routing_key):
+							raise TypeError('Make sure that you are passing in all the necessary args for auto_declare')
+						self._setup_exchange_and_queue(
+							exchange_name=exchange_name,
+							queue_name=queue_name,
+							exchange_type=exchange_type,
+							routing_key=routing_key,
+							passive=passive,
+							channel=self._publish_channel,
 						)
-					self._declared_topology.add(topology_key)
+						# auto_declare_ok is the success flag for both passive checks
+						# and active declares; _setup_exchange_and_queue swallows the
+						# broker error, so guard on it (and only cache on success) for
+						# both modes -- a failed passive 404 also closed the channel.
+						if not self.auto_declare_ok:
+							self._reset_publish_channel()
+							raise MrsalAbortedSetup(
+								f"Topology declaration failed for exchange {exchange_name} / queue {queue_name}; refusing to publish."
+							)
+						self._declared_topology.add(topology_key)
 
-				self._publish_channel.basic_publish(
-					exchange=exchange_name, routing_key=routing_key, body=message,
-					properties=prop, mandatory=True,
-				)
-				if self.verbose:
-					log.info(f"Message published to exchange {exchange_name} with routing key {routing_key}")
-				return
+					self._publish_channel.basic_publish(
+						exchange=exchange_name, routing_key=routing_key, body=message,
+						properties=prop, mandatory=True,
+					)
+					if self.verbose:
+						log.info(f"Message published to exchange {exchange_name} with routing key {routing_key}")
+					outcome.ok = True
+					return
 
-			except _TERMINAL_PUBLISH_ERRORS as e:
-				# Confirm-mode rejection: terminal, retrying won't help. The
-				# channel stays usable for the next caller.
-				log.error(f"Broker rejected publish to {exchange_name}/{routing_key}: {e}")
-				raise
-			except _RETRIABLE_PUBLISH_ERRORS as e:
-				# Connection or channel died. Drop the channel and reconnect on
-				# the next attempt. The topology cache is left intact: declared
-				# exchanges/queues are broker-side state that outlives the
-				# channel, and a genuine reconnect clears the cache anyway via
-				# _ensure_publish_channel.
-				last_exc = e
-				self._reset_publish_channel()
-				log.warning(f"Publish attempt {attempt}/{_PUBLISH_ATTEMPTS} to {exchange_name}/{routing_key} failed: {e}")
-				if attempt < _PUBLISH_ATTEMPTS:
-					time.sleep(_PUBLISH_RETRY_WAIT_SEC)
-		assert last_exc is not None
-		raise last_exc
+				except _TERMINAL_PUBLISH_ERRORS as e:
+					# Confirm-mode rejection: terminal, retrying won't help. The
+					# channel stays usable for the next caller.
+					log.error(f"Broker rejected publish to {exchange_name}/{routing_key}: {e}")
+					raise
+				except _RETRIABLE_PUBLISH_ERRORS as e:
+					# Connection or channel died. Drop the channel and reconnect on
+					# the next attempt. The topology cache is left intact: declared
+					# exchanges/queues are broker-side state that outlives the
+					# channel, and a genuine reconnect clears the cache anyway via
+					# _ensure_publish_channel.
+					last_exc = e
+					self._reset_publish_channel()
+					log.warning(f"Publish attempt {attempt}/{_PUBLISH_ATTEMPTS} to {exchange_name}/{routing_key} failed: {e}")
+					if attempt < _PUBLISH_ATTEMPTS:
+						time.sleep(_PUBLISH_RETRY_WAIT_SEC)
+			assert last_exc is not None
+			raise last_exc
 
 	def close(self) -> None:
 		"""Close the publish channel, then the connection."""
@@ -1688,6 +1735,16 @@ class MrsalBlockingPublisherPool:
 		self._lock = threading.Lock()
 		self._created = 0
 		self._closed = False
+		self._metrics_hooks: MetricsHooks | None = None
+
+	def set_metrics_hooks(self, hooks: MetricsHooks | None) -> None:
+		"""Install metrics hooks for every publisher the pool hands out.
+
+		Stored on the pool and (re)applied to each publisher on checkout, so
+		both already-warm and not-yet-created publishers carry the same set.
+		See ``mrsal.metrics.MetricsHooks``.
+		"""
+		self._metrics_hooks = hooks
 
 	def _checkout(self, timeout: float | None) -> MrsalBlockingPublisher:
 		with self._lock:
@@ -1722,6 +1779,7 @@ class MrsalBlockingPublisherPool:
 		deadlock the pool.
 		"""
 		pub = self._checkout(timeout)
+		pub.set_metrics_hooks(self._metrics_hooks)
 		try:
 			yield pub
 		finally:
