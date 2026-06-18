@@ -42,6 +42,9 @@ pip-delete-this-directory.txt
 .tox/
 .cache
 nosetests.xml
+.coverage
+.coverage.*
+coverage.xml
 *.cover
 *.py,cover
 .hypothesis/
