@@ -159,6 +159,7 @@ def test_worker_logic_acks_threadsafe(mock_consumer):
 		'payload_model': None,
 		'dlx_enable': False,
 		'enable_retry_cycles': False,
+		'queue_name': 'test_queue',
 	}
 
 	# Spy on _schedule_threadsafe to ensure it's called
@@ -187,6 +188,7 @@ def test_worker_logic_acks_blocking(mock_consumer):
 		'payload_model': None,
 		'dlx_enable': False,
 		'enable_retry_cycles': False,
+		'queue_name': 'test_queue',
 	}
 
 	with patch.object(mock_consumer, '_schedule_threadsafe') as mock_schedule:

@@ -172,7 +172,7 @@ def test_on_consume_fires_from_threaded_path():
 		"dlx_routing_key": None, "retry_backoff": "fixed", "retry_backoff_max": 1,
 		"queue_name": "q",
 	}
-	method_frame = types.SimpleNamespace(delivery_tag=1)
+	method_frame = types.SimpleNamespace(delivery_tag=1, routing_key="rk")
 	properties = types.SimpleNamespace(app_id="a", message_id="m", headers={})
 
 	consumer._process_single_message(method_frame, properties, b"x", runtime_config)

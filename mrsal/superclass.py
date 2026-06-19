@@ -87,6 +87,10 @@ class Mrsal:
 	_channel: Any = field(init=False, default=None)
 	auto_declare_ok: bool = field(init=False, default=False)
 	_metrics_hooks: MetricsHooks | None = field(init=False, default=None, repr=False)
+	# Typed ``Any`` (not ``logging.Logger | None``) because pydantic can't build a
+	# schema for ``logging.Logger``; mirrors the ``_connection``/``_channel`` fields.
+	# ``set_logger`` keeps the real ``logging.Logger | None`` type on its parameter.
+	_logger: Any = field(init=False, default=None, repr=False)
 
 	def set_metrics_hooks(self, hooks: MetricsHooks | None) -> None:
 		"""Install a push-based metrics instrumentation set, or clear it with ``None``.
@@ -95,6 +99,16 @@ class Mrsal:
 		fast/non-blocking/no-exceptions contract.
 		"""
 		self._metrics_hooks = hooks
+
+	def set_logger(self, logger: logging.Logger | None) -> None:
+		"""Route mrsal's own log records through ``logger``, or clear with ``None``.
+
+		When unset, each call site falls back to its module's
+		``logging.getLogger(__name__)``, preserving the default logger names (no
+		behaviour change). Mirrors ``set_metrics_hooks``; the publisher pool
+		cascades the logger to the publishers it hands out.
+		"""
+		self._logger = logger
 
 	@contextmanager
 	def _measure_publish(self):
@@ -177,6 +191,7 @@ class Mrsal:
 
 		Returns a new dict — ``extra`` is *not* mutated.
 		"""
+		_log = self._logger or log
 		args: dict = dict(extra) if extra else {}
 
 		if dlx_enable and dlx_name is not None and dlx_routing is not None:
@@ -203,7 +218,7 @@ class Mrsal:
 			args['x-queue-mode'] = 'lazy'
 
 		if self.verbose and args:
-			log.info(f"Queue {queue_name} configured with arguments: {args}")
+			_log.info(f"Queue {queue_name} configured with arguments: {args}")
 
 		return args
 
@@ -386,6 +401,7 @@ class Mrsal:
 								channel=None
 								) -> None:
 
+		_log = self._logger or log
 		self.auto_declare_ok = False
 		dlx_name: str | None = None
 		dlx_routing: str | None = None
@@ -407,10 +423,10 @@ class Mrsal:
 						channel=channel
 					)
 					if self.verbose:
-						log.info(f"Dead letter exchange {dlx_name} declared successfully")
+						_log.info(f"Dead letter exchange {dlx_name} declared successfully")
 
 				except MrsalSetupError as e:
-					log.warning(f"DLX {dlx_name} might already exist or failed to create: {e}")
+					_log.warning(f"DLX {dlx_name} might already exist or failed to create: {e}")
 
 				dlx_queue_name = f"{queue_name}{config.DLX_SUFFIX}"
 				try:
@@ -432,7 +448,7 @@ class Mrsal:
 							)
 					dlx_setup_ok = True
 					if self.verbose:
-						log.info(f"DLX queue {dlx_queue_name} declared and bound successfully")
+						_log.info(f"DLX queue {dlx_queue_name} declared and bound successfully")
 				except MrsalSetupError as e:
 					# Fail loud: if the .dlx queue isn't declared/bound, every future
 					# DLX publish becomes unroutable and we're back to silent loss.
@@ -473,7 +489,7 @@ class Mrsal:
 								channel=channel
 								)
 						if self.verbose:
-							log.info(f"Retry queue {retry_queue_name} declared (backoff={retry_backoff}, queue TTL={ttl_min}m, dead-letters back to {exchange_name}/{routing_key})")
+							_log.info(f"Retry queue {retry_queue_name} declared (backoff={retry_backoff}, queue TTL={ttl_min}m, dead-letters back to {exchange_name}/{routing_key})")
 					except MrsalSetupError as e:
 						# Fail loud: cycling publishes target the .retry binding, so a
 						# missing/inconsistent .retry queue silently drops cycled
@@ -501,7 +517,7 @@ class Mrsal:
 		else:
 			queue_args = {}
 			if self.verbose:
-				log.info(f"Passive mode: checking existence of queue {queue_name} without configuration")
+				_log.info(f"Passive mode: checking existence of queue {queue_name} without configuration")
 
 
 		declare_exhange_dict = {
@@ -537,13 +553,13 @@ class Mrsal:
 				self._declare_queue_binding(**declare_queue_binding_dict, channel=channel)
 			self.auto_declare_ok = True
 			if not passive:
-				log.info(f"Exchange {exchange_name} and Queue {queue_name} declared successfully.")
+				_log.info(f"Exchange {exchange_name} and Queue {queue_name} declared successfully.")
 			else:
-				log.info(f"Exchange {exchange_name} and Queue {queue_name} verified to exist.")
+				_log.info(f"Exchange {exchange_name} and Queue {queue_name} verified to exist.")
 			if dlx_setup_ok:
-				log.info(f"You have a dead letter exhange {dlx_name} for fault tolerance -- use it well young grasshopper!")
+				_log.info(f"You have a dead letter exhange {dlx_name} for fault tolerance -- use it well young grasshopper!")
 		except MrsalSetupError as e:
-			log.error(f'Splæt! I failed the declaration setup with {e}', exc_info=True)
+			_log.error(f'Splæt! I failed the declaration setup with {e}', exc_info=True)
 			self.auto_declare_ok = False
 
 	async def _async_setup_exchange_and_queue(self,
@@ -570,6 +586,7 @@ class Mrsal:
 											retry_backoff_max: int = config.DEFAULT_RETRY_BACKOFF_MAX_MIN,
 											) -> AioQueue | None:
 		"""Setup exchange and queue with bindings asynchronously."""
+		_log = self._logger or log
 		if not self._connection:
 			raise MrsalAbortedSetup("Oh my Oh my! Connection not found when trying to run the setup!")
 
@@ -595,10 +612,10 @@ class Mrsal:
 					)
 
 					if self.verbose:
-						log.info(f"Dead letter exchange {dlx_name} declared successfully")
+						_log.info(f"Dead letter exchange {dlx_name} declared successfully")
 
 				except MrsalSetupError as e:
-					log.warning(f"DLX {dlx_name} might already exist or failed to create: {e}")
+					_log.warning(f"DLX {dlx_name} might already exist or failed to create: {e}")
 
 				dlx_queue_name = f"{queue_name}{config.DLX_SUFFIX}"
 				try:
@@ -621,7 +638,7 @@ class Mrsal:
 							)
 					dlx_setup_ok = True
 					if self.verbose:
-						log.info(f"DLX queue {dlx_queue_name} declared and bound successfully")
+						_log.info(f"DLX queue {dlx_queue_name} declared and bound successfully")
 				except MrsalSetupError as e:
 					raise MrsalAbortedSetup(
 						f"DLX queue {dlx_queue_name} setup failed: {e}. "
@@ -659,7 +676,7 @@ class Mrsal:
 								arguments=None
 								)
 						if self.verbose:
-							log.info(f"Retry queue {retry_queue_name} declared (backoff={retry_backoff}, queue TTL={ttl_min}m, dead-letters back to {exchange_name}/{routing_key})")
+							_log.info(f"Retry queue {retry_queue_name} declared (backoff={retry_backoff}, queue TTL={ttl_min}m, dead-letters back to {exchange_name}/{routing_key})")
 					except MrsalSetupError as e:
 						raise MrsalAbortedSetup(
 							f"Retry queue {retry_queue_name} setup failed: {e}. "
@@ -682,7 +699,7 @@ class Mrsal:
 		else:
 			queue_args = {}
 			if self.verbose:
-				log.info(f"Passive mode: checking existence of queue {queue_name} without configuration")
+				_log.info(f"Passive mode: checking existence of queue {queue_name} without configuration")
 
 
 		async_declare_exhange_dict = {
@@ -718,14 +735,14 @@ class Mrsal:
 				await self._async_declare_queue_binding(queue=queue, exchange=exchange, **async_declare_queue_binding_dict)
 			self.auto_declare_ok = True
 			if not passive:
-				log.info(f"Exchange {exchange_name} and Queue {queue_name} declared successfully.")
+				_log.info(f"Exchange {exchange_name} and Queue {queue_name} declared successfully.")
 			else:
-				log.info(f"Exchange {exchange_name} and Queue {queue_name} verified to exist.")
+				_log.info(f"Exchange {exchange_name} and Queue {queue_name} verified to exist.")
 			if dlx_setup_ok:
-				log.info(f"You have a dead letter exhange {dlx_name} for fault tolerance -- use it well young grasshopper!")
+				_log.info(f"You have a dead letter exhange {dlx_name} for fault tolerance -- use it well young grasshopper!")
 			return queue
 		except MrsalSetupError as e:
-			log.error(f'Splæt! I failed the declaration setup with {e}', exc_info=True)
+			_log.error(f'Splæt! I failed the declaration setup with {e}', exc_info=True)
 			self.auto_declare_ok = False
 
 
@@ -750,6 +767,7 @@ class Mrsal:
 		:param dict arguments: Custom key/value pair arguments for the exchange
 		:rtype: `pika.frame.Method` having `method` attribute of type `spec.Exchange.DeclareOk`
 		"""
+		_log = self._logger or log
 		exchange_declare_info = f"""
 								exchange={exchange},
 								exchange_type={exchange_type},
@@ -760,7 +778,7 @@ class Mrsal:
 								arguments={arguments}
 								"""
 		if self.verbose:
-			log.info(f"Declaring exchange with: {exchange_declare_info}")
+			_log.info(f"Declaring exchange with: {exchange_declare_info}")
 		ch = channel or self._channel
 		try:
 			ch.exchange_declare(
@@ -772,7 +790,7 @@ class Mrsal:
 		except Exception as e:
 			raise MrsalSetupError(f'Oooopise! I failed declaring the exchange with : {e}')
 		if self.verbose:
-			log.info("Exchange declared yo!")
+			_log.info("Exchange declared yo!")
 
 	async def _async_declare_exchange(self,
 									exchange: str,
@@ -783,6 +801,7 @@ class Mrsal:
 									internal: bool = False,
 									auto_delete: bool = False) -> AioExchange:
 		"""Declare a RabbitMQ exchange in async mode."""
+		_log = self._logger or log
 		exchange_declare_info = f"""
 								exchange={exchange},
 								exchange_type={exchange_type},
@@ -793,7 +812,7 @@ class Mrsal:
 								arguments={arguments}
 								"""
 		if self.verbose:
-			log.info(f"Declaring exchange with: {exchange_declare_info}")
+			_log.info(f"Declaring exchange with: {exchange_declare_info}")
 
 		try:
 			exchange_obj = await self._channel.declare_exchange(
@@ -830,6 +849,7 @@ class Mrsal:
 		:returns: Method frame from the Queue.Declare-ok response
 		:rtype: `pika.frame.Method` having `method` attribute of type `spec.Queue.DeclareOk`
 		"""
+		_log = self._logger or log
 		queue_declare_info = f"""
 								queue={queue},
 								durable={durable},
@@ -838,7 +858,7 @@ class Mrsal:
 								arguments={arguments}
 								"""
 		if self.verbose:
-			log.info(f"Declaring queue with: {queue_declare_info}")
+			_log.info(f"Declaring queue with: {queue_declare_info}")
 
 		ch = channel or self._channel
 		try:
@@ -846,7 +866,7 @@ class Mrsal:
 		except Exception as e:
 			raise MrsalSetupError(f'Oooopise! I failed declaring the queue with : {e}')
 		if self.verbose:
-			log.info("Queue declared yo")
+			_log.info("Queue declared yo")
 
 	async def _async_declare_queue(self,
 								queue_name: str,
@@ -856,6 +876,7 @@ class Mrsal:
 								passive: bool = False,
 								arguments: dict[str, Any] | None = None) -> AioQueue:
 		"""Declare a RabbitMQ queue asynchronously."""
+		_log = self._logger or log
 		queue_declare_info = f"""
 								queue={queue_name},
 								durable={durable},
@@ -864,7 +885,7 @@ class Mrsal:
 								arguments={arguments}
 								"""
 		if self.verbose:
-			log.info(f"Declaring queue with: {queue_declare_info}")
+			_log.info(f"Declaring queue with: {queue_declare_info}")
 
 		try:
 			queue_obj = await self._channel.declare_queue(
@@ -895,18 +916,19 @@ class Mrsal:
 		:returns: Method frame from the Queue.Bind-ok response
 		:rtype: `pika.frame.Method` having `method` attribute of type `spec.Queue.BindOk`
 		"""
+		_log = self._logger or log
 		if self.verbose:
-			log.info(f"Binding queue to exchange: queue={queue}, exchange={exchange}, routing_key={routing_key}")
+			_log.info(f"Binding queue to exchange: queue={queue}, exchange={exchange}, routing_key={routing_key}")
 
 		ch = channel or self._channel
 		try:
 			ch.queue_bind(exchange=exchange, queue=queue, routing_key=routing_key, arguments=arguments)
 			if self.verbose:
-				log.info(f"The queue is bound to exchange successfully: queue={queue}, exchange={exchange}, routing_key={routing_key}")
+				_log.info(f"The queue is bound to exchange successfully: queue={queue}, exchange={exchange}, routing_key={routing_key}")
 		except Exception as e:
 			raise MrsalSetupError(f'I failed binding the queue with : {e}')
 		if self.verbose:
-			log.info("Queue bound yo")
+			_log.info("Queue bound yo")
 
 	async def _async_declare_queue_binding(self,
 										queue: AioQueue,
@@ -914,6 +936,7 @@ class Mrsal:
 										routing_key: str | None,
 										arguments: dict[str, Any] | None = None) -> None:
 		"""Bind the queue to the exchange asynchronously."""
+		_log = self._logger or log
 		binding_info = f"""
 						queue={queue.name},
 						exchange={exchange.name},
@@ -921,7 +944,7 @@ class Mrsal:
 						arguments={arguments}
 						"""
 		if self.verbose:
-			log.info(f"Binding queue to exchange with: {binding_info}")
+			_log.info(f"Binding queue to exchange with: {binding_info}")
 
 		try:
 			await queue.bind(exchange, routing_key=routing_key, arguments=arguments)
@@ -944,8 +967,9 @@ class Mrsal:
 		return context
 
 	def get_ssl_context(self, async_conn: bool = True) -> SSLOptions | SSLContext | None:
+		_log = self._logger or log
 		if self.ssl:
-			log.info("Setting up TLS connection")
+			_log.info("Setting up TLS connection")
 			context = self._ssl_setup()
 			# use_blocking is the same as sync
 			if not async_conn:
@@ -1092,15 +1116,28 @@ class Mrsal:
 
 		return target_exchange, target_routing, target_properties, retry_info, should_cycle, next_delay_ms
 
-	def _log_dlx_result(self, retry_info: dict, next_delay_ms: int | None, should_cycle: bool) -> None:
-		"""Log the result of a DLX retry cycle publish."""
+	def _log_dlx_result(self, retry_info: dict, next_delay_ms: int | None, should_cycle: bool,
+						queue_name: str | None = None) -> None:
+		"""Log the result of a DLX retry cycle publish.
+
+		Carries the structured ``queue`` / ``retry`` / ``outcome`` fields so a
+		backend can group retry-cycle dispositions the same way it groups the
+		consumer-lifecycle records. ``outcome`` is ``retry`` (republished to the
+		``.retry`` queue) or ``dlx`` (parked in the terminal DLX). Unlike the
+		consumer records this path has no delivery handle, so ``msg_id`` /
+		``routing_key`` / ``duration_ms`` are not available here.
+		"""
+		_log = self._logger or log
+		cycle = retry_info['cycle_count']
 		if should_cycle:
 			delay_desc = f"{next_delay_ms / 60_000:.2f}m" if next_delay_ms is not None else "queue TTL"
-			log.info(f"Message sent to DLX for retry cycle {retry_info['cycle_count'] + 1} "
-					f"(next retry in {delay_desc})")
+			_log.info(f"Message sent to DLX for retry cycle {cycle + 1} "
+					f"(next retry in {delay_desc})",
+					extra={'queue': queue_name, 'retry': cycle, 'outcome': 'retry'})
 		else:
-			log.error(f"Message permanently failed after {retry_info['cycle_count']} cycles "
-					f"- staying in DLX for manual replay")
+			_log.error(f"Message permanently failed after {cycle} cycles "
+					f"- staying in DLX for manual replay",
+					extra={'queue': queue_name, 'retry': cycle, 'outcome': 'dlx'})
 
 	def _handle_dlx_with_retry_cycle_sync(
 			self, method_frame, properties, body, processing_error: str,
@@ -1126,7 +1163,7 @@ class Mrsal:
 			retry_backoff_max=retry_backoff_max,
 		)
 		self._publish_to_dlx(target_exchange, target_routing, body, target_properties)
-		self._log_dlx_result(retry_info, next_delay_ms, should_cycle)
+		self._log_dlx_result(retry_info, next_delay_ms, should_cycle, queue_name)
 		self._emit_dlx_metrics(retry_info, should_cycle, next_delay_ms, retry_cycle_interval, queue_name)
 
 	async def _handle_dlx_with_retry_cycle_async(
@@ -1153,7 +1190,7 @@ class Mrsal:
 			retry_backoff_max=retry_backoff_max,
 		)
 		await self._publish_to_dlx(target_exchange, target_routing, message.body, target_properties)
-		self._log_dlx_result(retry_info, next_delay_ms, should_cycle)
+		self._log_dlx_result(retry_info, next_delay_ms, should_cycle, queue_name)
 		self._emit_dlx_metrics(retry_info, should_cycle, next_delay_ms, retry_cycle_interval, queue_name)
 
 	def _emit_dlx_metrics(self, retry_info: dict, should_cycle: bool, next_delay_ms: int | None,
@@ -1165,6 +1202,7 @@ class Mrsal:
 		``delay_s`` is the per-message exponential delay when set, else the flat
 		``.retry`` queue TTL (``retry_cycle_interval`` minutes).
 		"""
+		_log = self._logger or log
 		hooks = self._metrics_hooks
 		if hooks is None:
 			return
@@ -1177,7 +1215,7 @@ class Mrsal:
 			# Every consumer path threads queue_name through; only a direct call
 			# to the private DLX helper without it lands here. Skip rather than
 			# hand on_dlx_final a None where its contract promises a queue name.
-			log.debug("on_dlx_final skipped: queue_name unavailable on this DLX path")
+			_log.debug("on_dlx_final skipped: queue_name unavailable on this DLX path")
 
 	def _publish_to_dlx(self, dlx_exchange: str, routing_key: str, body: bytes, properties: dict):
 		"""Abstract method - implemented by subclasses."""
