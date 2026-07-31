@@ -246,6 +246,32 @@ async def test_async_auto_declare_false_raises_clear_error():
 # -- async -------------------------------------------------------------------
 
 @pytest.mark.asyncio
+async def test_async_message_carries_consumer_tag():
+	"""The stand-in message models consumer_tag like real aio_pika.IncomingMessage.
+
+	Regression for #103: callbacks that log method_frame.consumer_tag worked in
+	production but raised AttributeError under the harness, silently sending the
+	message down the retry/DLX path.
+	"""
+	seen_tags = []
+
+	async def handle(message, properties, body):
+		seen_tags.append(message.consumer_tag)
+
+	consumer = MrsalAsyncAMQP(**ASYNC_ARGS)
+	async with TestMrsalAsyncBroker(consumer) as br:
+		await br.register_consumer(
+			queue_name="tags_q", exchange_name="tags_e", exchange_type="direct",
+			routing_key="tags_r", callback=handle,
+			dlx_enable=False, enable_retry_cycles=False,
+		)
+		await br.publish({"ok": True}, exchange="tags_e", routing_key="tags_r")
+
+	assert len(seen_tags) == 1
+	assert isinstance(seen_tags[0], str) and seen_tags[0]
+
+
+@pytest.mark.asyncio
 async def test_async_roundtrip_with_payload_model():
 	received = []
 
