@@ -1,0 +1,7 @@
+superclass module
+=================
+
+.. automodule:: superclass
+   :members:
+   :undoc-members:
+   :show-inheritance:
