@@ -15,6 +15,9 @@ class InMemoryIncomingMessage:
 	def __init__(self, broker: InMemoryBroker, delivery_tag: int, msg: StoredMessage):
 		self._broker = broker
 		self.delivery_tag = delivery_tag
+		# Real aio_pika.IncomingMessage always carries the consumer's tag; callbacks
+		# log it, so the stand-in must model it (deterministic, like the sync harness).
+		self.consumer_tag = f"ctag-{delivery_tag}"
 		self.body = msg.body
 		self.exchange = msg.exchange
 		self.routing_key = msg.routing_key
