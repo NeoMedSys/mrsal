@@ -9,7 +9,7 @@ from mrsal.amqp.subclass import (
 	MrsalBlockingPublisherPool,
 	_PUBLISH_ATTEMPTS,
 )
-from mrsal.exceptions import MrsalAbortedSetup
+from mrsal.exceptions import MrsalAbortedSetup, MrsalSetupError
 
 
 SETUP_ARGS = {
@@ -218,6 +218,19 @@ def test_connection_lost_during_queue_bind_is_not_a_setup_error():
 
 	with pytest.raises(StreamLostError):
 		publisher._declare_queue_binding(exchange='x', queue='q', routing_key='rk', arguments=None, channel=channel)
+
+
+def test_raw_connection_error_in_sync_declare_stays_a_setup_error():
+	# Sync helpers pass through only pika's AMQPConnectionError (which the sync
+	# retries match); a raw builtin ConnectionError keeps the old contract.
+	publisher = MrsalBlockingPublisher(**SETUP_ARGS)
+	channel = MagicMock()
+	channel.exchange_declare.side_effect = ConnectionError('raw socket error')
+
+	with pytest.raises(MrsalSetupError):
+		publisher._declare_exchange(
+			exchange='x', exchange_type='direct', arguments=None, durable=True,
+			passive=True, internal=False, auto_delete=False, channel=channel)
 
 
 def test_missing_exchange_on_passive_declare_is_terminal(mock_conn):

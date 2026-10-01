@@ -9,7 +9,7 @@ from mrsal.amqp.subclass import MrsalAsyncAMQP
 from mrsal.config import AioPikaAttributes
 from mrsal.exceptions import MrsalAbortedSetup
 from pydantic import ValidationError
-from tenacity import wait_none
+from tenacity import wait_fixed, wait_none
 
 from tests.conftest import ExpectedPayload, make_queue_with_messages
 
@@ -909,21 +909,75 @@ async def test_close_ends_a_running_consumer_without_reconnecting(amqp_consumer,
 
 
 @pytest.mark.asyncio
-async def test_connection_error_during_redeclare_is_retried(amqp_consumer, monkeypatch):
+async def test_connection_error_during_redeclare_rebuilds_the_connection(amqp_consumer, monkeypatch):
 	"""The rebuild re-declares topology; a connection error there must be retried,
-	not turned into MrsalAbortedSetup by the async declare helpers."""
-	monkeypatch.setattr(MrsalAsyncAMQP.start_consumer.retry, 'wait', wait_none())
-	consumer = amqp_consumer
-	queue, _ = make_queue_with_messages([])
-	consumer._channel.declare_queue.side_effect = [ConnectionError('Broken pipe'), queue]
+	not turned into MrsalAbortedSetup by the async declare helpers, and the retry
+	must connect fresh rather than reuse the half-dead connection."""
+	harness = _RebuildHarness(amqp_consumer, monkeypatch, old_iterator=_BlockingQueueIterator())
+	harness.old_channel.declare_queue.side_effect = ConnectionError('Broken pipe')
 
-	await asyncio.wait_for(consumer.start_consumer(
+	await asyncio.wait_for(harness.start(), timeout=1.0)
+
+	harness.old_connection.close.assert_awaited()
+	harness.assert_rebuilt()
+
+
+@pytest.mark.asyncio
+async def test_stop_during_backoff_against_unreachable_broker_returns(monkeypatch):
+	"""The broker is down from the start, so the loop never runs; stop() during
+	the retry backoff must still end start_consumer."""
+	monkeypatch.setattr(MrsalAsyncAMQP.start_consumer.retry, 'wait', wait_fixed(0.05))
+	consumer = MrsalAsyncAMQP(**SETUP_ARGS)
+	consumer.setup_async_connection = AsyncMock(side_effect=ConnectionError('Connection refused'))
+
+	consumer_task = asyncio.create_task(consumer.start_consumer(
 		queue_name='test_q', callback=AsyncMock(), routing_key='rk',
 		exchange_name='test_x', exchange_type='direct', auto_ack=True, dlx_enable=False,
-	), timeout=1.0)
+	))
+	await asyncio.sleep(0.12)
+	await consumer.stop()
+	await asyncio.wait_for(consumer_task, timeout=1.0)
 
-	assert consumer._channel.declare_queue.call_count == 2
-	queue.iterator.assert_called_once()
+	assert consumer.setup_async_connection.await_count >= 1
+	assert consumer._connection is None
+
+
+@pytest.mark.asyncio
+async def test_close_during_backoff_does_not_open_a_new_connection(amqp_consumer, monkeypatch):
+	"""close() while the retry is backing off after a loss: the retry must not
+	open a fresh connection that nobody closes."""
+	harness = _RebuildHarness(amqp_consumer, monkeypatch, old_iterator=_BlockingQueueIterator())
+	monkeypatch.setattr(MrsalAsyncAMQP.start_consumer.retry, 'wait', wait_fixed(0.2))
+	consumer_task = harness.start()
+	await asyncio.sleep(0.05)
+
+	await harness.old_connection.close_callbacks(ConnectionError('Broken pipe'))
+	await asyncio.sleep(0.05)  # handles dropped, retry now in backoff
+	await harness.consumer.close()
+	await asyncio.wait_for(consumer_task, timeout=1.0)
+
+	harness.consumer.setup_async_connection.assert_not_awaited()
+	assert harness.consumer._connection is None
+
+
+class _ExitRaisesIterator(_BlockingQueueIterator):
+	"""Idle iterator whose async-with exit fails on the dead channel."""
+	async def __aexit__(self, exc_type, exc, tb):
+		raise ChannelInvalidStateError('No active transport in channel')
+
+
+@pytest.mark.asyncio
+async def test_iterator_exit_raising_during_local_close_does_not_reconnect(amqp_consumer, monkeypatch):
+	"""A connection error from tearing the iterator down during close() must not
+	turn the deliberate shutdown into a reconnect."""
+	harness = _RebuildHarness(amqp_consumer, monkeypatch, old_iterator=_ExitRaisesIterator())
+	consumer_task = harness.start()
+	await asyncio.sleep(0.05)
+
+	await harness.consumer.close()
+	await asyncio.wait_for(consumer_task, timeout=1.0)
+
+	harness.consumer.setup_async_connection.assert_not_awaited()
 
 
 # --- DLX publish failure (#105) -----------------------------------------------

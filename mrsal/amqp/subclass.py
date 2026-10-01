@@ -1330,39 +1330,54 @@ class MrsalAsyncAMQP(Mrsal):
 			the timeout fires, remaining tasks are cancelled and the consumer returns; messages
 			handled by cancelled tasks will be redelivered by the broker.
 		"""
-		queue, runtime_config = await self._prepare_consumer_async(
-			queue_name=queue_name,
-			callback=callback,
-			callback_args=callback_args,
-			auto_ack=auto_ack,
-			auto_declare=auto_declare,
-			exchange_name=exchange_name,
-			exchange_type=exchange_type,
-			routing_key=routing_key,
-			payload_model=payload_model,
-			dlx_enable=dlx_enable,
-			dlx_exchange_name=dlx_exchange_name,
-			dlx_routing_key=dlx_routing_key,
-			use_quorum_queues=use_quorum_queues,
-			enable_retry_cycles=enable_retry_cycles,
-			retry_cycle_interval=retry_cycle_interval,
-			max_retry_time_limit=max_retry_time_limit,
-			retry_backoff=retry_backoff,
-			retry_backoff_max=retry_backoff_max,
-			max_queue_length=max_queue_length,
-			max_queue_length_bytes=max_queue_length_bytes,
-			queue_overflow=queue_overflow,
-			single_active_consumer=single_active_consumer,
-			lazy_queue=lazy_queue,
-			max_concurrent_tasks=max_concurrent_tasks,
-		)
-		await self._run_consume_loop_async(
-			queue=queue,
-			runtime_config=runtime_config,
-			auto_ack=auto_ack,
-			max_concurrent_tasks=max_concurrent_tasks,
-			drain_timeout=drain_timeout,
-		)
+		# Created here, not in the loop, so stop() / close() can land while the
+		# retry is still trying to connect (the loop may never have run). A stop
+		# that landed during the retry backoff ends the consumer here, before a
+		# new connection is opened.
+		if self._stop_event is None:
+			self._stop_event = asyncio.Event()
+		if self._stop_event.is_set():
+			return
+		try:
+			queue, runtime_config = await self._prepare_consumer_async(
+				queue_name=queue_name,
+				callback=callback,
+				callback_args=callback_args,
+				auto_ack=auto_ack,
+				auto_declare=auto_declare,
+				exchange_name=exchange_name,
+				exchange_type=exchange_type,
+				routing_key=routing_key,
+				payload_model=payload_model,
+				dlx_enable=dlx_enable,
+				dlx_exchange_name=dlx_exchange_name,
+				dlx_routing_key=dlx_routing_key,
+				use_quorum_queues=use_quorum_queues,
+				enable_retry_cycles=enable_retry_cycles,
+				retry_cycle_interval=retry_cycle_interval,
+				max_retry_time_limit=max_retry_time_limit,
+				retry_backoff=retry_backoff,
+				retry_backoff_max=retry_backoff_max,
+				max_queue_length=max_queue_length,
+				max_queue_length_bytes=max_queue_length_bytes,
+				queue_overflow=queue_overflow,
+				single_active_consumer=single_active_consumer,
+				lazy_queue=lazy_queue,
+				max_concurrent_tasks=max_concurrent_tasks,
+			)
+			await self._run_consume_loop_async(
+				queue=queue,
+				runtime_config=runtime_config,
+				auto_ack=auto_ack,
+				max_concurrent_tasks=max_concurrent_tasks,
+				drain_timeout=drain_timeout,
+			)
+		except _ASYNC_CONNECTION_ERRORS:
+			# Lost in setup or in the loop. A robust connection mid-reconnect still
+			# reports is_closed=False, so _ensure_async_connection would reuse it;
+			# drop the handles (without signalling a stop) so the retry connects fresh.
+			await self._close_handles()
+			raise
 
 	async def _prepare_consumer_async(
 			self,
@@ -1538,7 +1553,6 @@ class MrsalAsyncAMQP(Mrsal):
 		connection.close_callbacks.add(_on_connection_lost)
 		channel.close_callbacks.add(_on_connection_lost)
 		stopped = asyncio.ensure_future(self._stop_event.wait())
-		lost_with_error = False
 
 		try:
 			# async with: ensures the consumer cancellation is deterministically delivered
@@ -1575,9 +1589,6 @@ class MrsalAsyncAMQP(Mrsal):
 						# Keeps the in-flight set bounded, and turns a task's connection
 						# error into a connection loss.
 						task.add_done_callback(_on_task_done)
-		except _ASYNC_CONNECTION_ERRORS:
-			lost_with_error = True
-			raise
 		finally:
 			stopped.cancel()
 			self._consumer_iterator = None
@@ -1606,11 +1617,6 @@ class MrsalAsyncAMQP(Mrsal):
 						await asyncio.gather(*still_pending, return_exceptions=True)
 			connection.close_callbacks.discard(_on_connection_lost)
 			channel.close_callbacks.discard(_on_connection_lost)
-			if connection_lost.done() or lost_with_error:
-				# A robust connection mid-reconnect still reports is_closed=False, so
-				# _ensure_async_connection would reuse it; drop the handles (without
-				# signalling a stop) so the retry connects fresh.
-				await self._close_handles()
 
 	@staticmethod
 	async def _until_connection_lost(it, connection_lost: asyncio.Future, stopped: asyncio.Future):
@@ -1634,6 +1640,10 @@ class MrsalAsyncAMQP(Mrsal):
 			try:
 				message = next_message.result()
 			except StopAsyncIteration:
+				# The iterator also ends when its channel dies; that is a loss, not
+				# a clean end, unless a stop was requested.
+				if connection_lost.done() and not stopped.done():
+					raise ConnectionError(f"Consumer connection lost: {connection_lost.result()!r}")
 				return
 			yield message
 
