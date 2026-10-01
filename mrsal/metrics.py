@@ -21,7 +21,9 @@ class MetricsHooks:
 		broker rejection (``NackError`` / ``UnroutableError`` / confirm timeout).
 		``duration_s`` spans entry to broker ack/nack. NOT recovered if it raises
 		-- mirrors sonic, where an ``OnPublish`` panic propagates.
-	:param on_consume: fired exactly once per delivery after the handler returns.
+	:param on_consume: fired exactly once per delivery after the handler returns
+		and the delivery has been settled (ack, or reject / DLX on failure), so a
+		host can use it as the "delivery settled" signal.
 		``success`` is True only when payload validation passed and the callback
 		returned without raising; ``duration_s`` spans validation plus the
 		callback. A message that failed but was routed to DLX still reports
