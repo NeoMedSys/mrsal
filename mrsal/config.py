@@ -24,6 +24,9 @@ DEFAULT_MAX_RETRY_TIME_LIMIT_MIN: int = 8 * 60  # 8 hours
 # expiration always wins (RabbitMQ honors the shorter of the two).
 DEFAULT_RETRY_BACKOFF: Literal["fixed", "exponential"] = "exponential"
 DEFAULT_RETRY_BACKOFF_MAX_MIN: int = 60  # 1 hour
+# Upper bound on the async DLX publish (open channel + passive exchange check +
+# publisher confirm). Well under RabbitMQ's default consumer_timeout (30 min).
+DEFAULT_DLX_PUBLISH_TIMEOUT_SEC: float = 30.0
 
 # Naming convention for the two-queue retry topology. The same suffix is
 # applied to both the DLX exchange name and the .dlx queue name (and similarly

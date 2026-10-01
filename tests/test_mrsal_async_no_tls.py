@@ -1,4 +1,5 @@
 import asyncio
+import time
 import aiormq
 import pytest
 from aio_pika.exceptions import ChannelInvalidStateError, DeliveryError
@@ -7,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from mrsal.amqp.subclass import MrsalAsyncAMQP
 from mrsal.config import AioPikaAttributes
 from mrsal.exceptions import MrsalAbortedSetup
+from mrsal.metrics import MetricsHooks
 from pydantic import ValidationError
 from tenacity import wait_none
 
@@ -849,3 +851,104 @@ async def test_dlx_publish_broker_rejection_still_rejects(amqp_consumer):
 
 	mock_message.ack.assert_not_awaited()
 	mock_message.reject.assert_awaited_once_with(requeue=False)
+
+
+# --- DLX publish timeout (#105, M2) -------------------------------------------
+
+@pytest.mark.asyncio
+async def test_dlx_publish_never_confirming_times_out(amqp_consumer):
+	"""_publish_to_dlx must not wait forever for a publisher confirm."""
+	consumer = amqp_consumer
+	consumer.dlx_publish_timeout = 0.05
+	async def _never_confirms(*args, **kwargs):
+		await asyncio.Event().wait()
+
+	dlx_exchange = AsyncMock()
+	dlx_exchange.publish = AsyncMock(side_effect=_never_confirms)
+	dlx_channel = AsyncMock(is_closed=False)
+	dlx_channel.get_exchange = AsyncMock(return_value=dlx_exchange)
+	consumer._dlx_publish_channel = dlx_channel
+
+	# The outer wait_for is only a guard against hanging the suite; the
+	# timeout must come from dlx_publish_timeout, i.e. well before it.
+	start = time.monotonic()
+	with pytest.raises(asyncio.TimeoutError):
+		await asyncio.wait_for(
+			consumer._publish_to_dlx(dlx_exchange='x.dlx', routing_key='rk', body=b'{}', properties={}),
+			timeout=1.0,
+		)
+	assert time.monotonic() - start < 0.5
+
+
+@pytest.mark.asyncio
+async def test_hung_dlx_publish_rejects_delivery_and_next_message_is_processed(amqp_consumer):
+	"""Spec M2 acceptance: the DLX publish never confirms -> the delivery is
+	rejected within the timeout and the next message is still processed."""
+	consumer = amqp_consumer
+	consumer.dlx_publish_timeout = 0.05
+
+	failing = AsyncMock(body=b'{"n": 1}', ack=AsyncMock(), reject=AsyncMock())
+	failing.configure_mock(app_id="test_app", message_id="m1", headers=None, redelivered=False, routing_key="rk", delivery_tag=1)
+	healthy = AsyncMock(body=b'{"n": 2}', ack=AsyncMock(), reject=AsyncMock())
+	healthy.configure_mock(app_id="test_app", message_id="m2", headers=None, redelivered=False, routing_key="rk", delivery_tag=2)
+	mock_queue, _ = make_queue_with_messages([failing, healthy])
+	consumer._channel.declare_queue.return_value = mock_queue
+
+	async def callback(message, properties, body):
+		if body == b'{"n": 1}':
+			raise RuntimeError("boom")
+
+	# The DLX publish hangs forever: no confirm ever arrives.
+	async def _hang(*args, **kwargs):
+		await asyncio.Event().wait()
+
+	with patch.object(consumer, '_ensure_dlx_publish_channel', AsyncMock(side_effect=_hang)):
+		await asyncio.wait_for(consumer.start_consumer(
+			queue_name='test_q',
+			callback=callback,
+			routing_key='test_route',
+			exchange_name='test_x',
+			exchange_type='direct',
+			auto_ack=False,
+		), timeout=2.0)
+
+	failing.reject.assert_awaited_once_with(requeue=False)
+	failing.ack.assert_not_awaited()
+	healthy.ack.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('callback_fails', [False, True])
+async def test_on_consume_fires_after_delivery_is_settled(amqp_consumer, callback_fails):
+	"""Hosts use on_consume as the 'delivery settled' signal for stall detection,
+	so it must fire after the ack / DLX reject, never before."""
+	consumer = amqp_consumer
+	consumer.dlx_publish_timeout = 0.05
+	events: list[str] = []
+	consumer.set_metrics_hooks(MetricsHooks(on_consume=lambda ok, duration: events.append('on_consume')))
+
+	message = AsyncMock(body=b'{}')
+	message.ack = AsyncMock(side_effect=lambda *a, **k: events.append('ack'))
+	message.reject = AsyncMock(side_effect=lambda *a, **k: events.append('reject'))
+	message.configure_mock(app_id="test_app", message_id="m1", headers=None, redelivered=False, routing_key="rk", delivery_tag=1)
+	mock_queue, _ = make_queue_with_messages([message])
+	consumer._channel.declare_queue.return_value = mock_queue
+
+	async def callback(message, properties, body):
+		if callback_fails:
+			raise RuntimeError("boom")
+
+	async def _hang(*args, **kwargs):
+		await asyncio.Event().wait()
+
+	with patch.object(consumer, '_ensure_dlx_publish_channel', AsyncMock(side_effect=_hang)):
+		await asyncio.wait_for(consumer.start_consumer(
+			queue_name='test_q',
+			callback=callback,
+			routing_key='test_route',
+			exchange_name='test_x',
+			exchange_type='direct',
+			auto_ack=False,
+		), timeout=2.0)
+
+	assert events == (['reject', 'on_consume'] if callback_fails else ['ack', 'on_consume'])

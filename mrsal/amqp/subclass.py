@@ -965,6 +965,8 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 class MrsalAsyncAMQP(Mrsal):
 	"""Handles asynchronous connection with RabbitMQ using aio-pika."""
 
+	# Seconds the DLX publish may take before the delivery is rejected instead (#105).
+	dlx_publish_timeout: float = config.DEFAULT_DLX_PUBLISH_TIMEOUT_SEC
 	_dlx_publish_channel: Any = field(init=False, default=None)
 	_stop_event: asyncio.Event | None = field(init=False, default=None)
 	# aio_pika.queue.QueueIterator at runtime; typed as object to avoid importing
@@ -1650,6 +1652,13 @@ class MrsalAsyncAMQP(Mrsal):
 			msg_id = properties.message_id if hasattr(properties, 'message_id') else 'unknown'
 			app_id = properties.app_id if hasattr(properties, 'app_id') else 'unknown'
 			_log.error(f"Failed to send message to DLX, connection lost; leaving unsettled for redelivery: {e} | message_id={msg_id} app_id={app_id} delivery_tag={message.delivery_tag} exchange={original_exchange} routing_key={original_routing_key}")
+		except asyncio.TimeoutError:
+			# Connection still up but the DLX publish never completed: settle the
+			# delivery so the prefetch slot frees (#105).
+			msg_id = properties.message_id if hasattr(properties, 'message_id') else 'unknown'
+			app_id = properties.app_id if hasattr(properties, 'app_id') else 'unknown'
+			_log.error(f"DLX publish timed out after {self.dlx_publish_timeout}s; rejecting | message_id={msg_id} app_id={app_id} queue={queue_name} delivery_tag={message.delivery_tag} exchange={original_exchange} routing_key={original_routing_key}")
+			await message.reject(requeue=False)
 		except Exception as e:
 			msg_id = properties.message_id if hasattr(properties, 'message_id') else 'unknown'
 			app_id = properties.app_id if hasattr(properties, 'app_id') else 'unknown'
@@ -1681,9 +1690,15 @@ class MrsalAsyncAMQP(Mrsal):
 		if expiration_ms is not None:
 			message.expiration = timedelta(milliseconds=expiration_ms)
 
-		await self._ensure_dlx_publish_channel()
-		exchange = await self._dlx_publish_channel.get_exchange(dlx_exchange)
-		await exchange.publish(message, routing_key=routing_key, mandatory=True)
+		async def _publish() -> None:
+			await self._ensure_dlx_publish_channel()
+			exchange = await self._dlx_publish_channel.get_exchange(dlx_exchange)
+			await exchange.publish(message, routing_key=routing_key, mandatory=True)
+
+		# Every step can wait forever (no confirm from the broker, stuck channel
+		# open); an unbounded wait leaves the delivery unacked and, with a small
+		# prefetch, stalls the consumer silently (#105).
+		await asyncio.wait_for(_publish(), timeout=self.dlx_publish_timeout)
 
 
 # How many times publish() retries across a dropped connection/channel before
