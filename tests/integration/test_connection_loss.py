@@ -91,8 +91,7 @@ def test_publisher_recovers_when_connection_dies_before_passive_declare(unique_s
         cleanup_topology.queue(queue)
         _declare_target(exchange=exchange, queue=queue, routing_key=routing_key)
 
-    publisher = MrsalBlockingPublisher(**broker_setup_args())
-    try:
+    with MrsalBlockingPublisher(**broker_setup_args()) as publisher:
         publisher.publish(
             exchange_name=first[0], queue_name=first[1], routing_key=first[2],
             exchange_type="direct", message=b"before",
@@ -105,8 +104,6 @@ def test_publisher_recovers_when_connection_dies_before_passive_declare(unique_s
             exchange_name=second[0], queue_name=second[1], routing_key=second[2],
             exchange_type="direct", message=b"after",
         )
-    finally:
-        publisher.close()
 
     assert _get_body(queue=first[1]) == b"before"
     assert _get_body(queue=second[1]) == b"after"
@@ -148,6 +145,7 @@ async def test_async_consumer_keeps_consuming_after_connection_is_closed(unique_
 
     try:
         await runner.wait_ready()
+        first_connection = consumer._connection
         await asyncio.to_thread(publish, b"before")
         await asyncio.wait_for(got_message.wait(), timeout=10)
         got_message.clear()
@@ -161,5 +159,7 @@ async def test_async_consumer_keeps_consuming_after_connection_is_closed(unique_
 
         assert received == [b"before", b"after"]
         assert not runner._task.done(), "consumer task must still be running"
+        # Rebuilt by mrsal, not restored in place by aio-pika's robust reconnect.
+        assert consumer._connection is not first_connection
     finally:
         await runner.stop()
