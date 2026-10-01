@@ -15,6 +15,7 @@ T = TypeVar("T")
 from pika.connection import SSLOptions
 from pika.exceptions import AMQPConnectionError
 from aio_pika import ExchangeType as AioExchangeType, Queue as AioQueue, Exchange as AioExchange
+from aio_pika.exceptions import ChannelInvalidStateError
 from pydantic.dataclasses import dataclass
 
 import json
@@ -25,6 +26,23 @@ from mrsal.exceptions import MrsalAbortedSetup, MrsalSetupError
 from mrsal.metrics import MetricsHooks, safe_invoke
 
 log = logging.getLogger(__name__)
+
+# aio-pika side "the connection is gone": aiormq's AMQPConnectionError/ConnectionClosed
+# and raw socket errors (BrokenPipeError) are all builtin ConnectionError; a channel
+# whose transport died raises ChannelInvalidStateError.
+_ASYNC_CONNECTION_ERRORS = (ConnectionError, ChannelInvalidStateError)
+
+
+def _setup_error(e: Exception, message: str) -> Exception:
+	"""The exception a declare/bind helper raises for ``e``.
+
+	A dead connection is not a topology failure: pika's ``AMQPConnectionError``
+	and the aio-pika connection errors are returned unchanged so the callers'
+	reconnect/retry paths see them (#105). Anything else becomes ``MrsalSetupError``.
+	"""
+	if isinstance(e, (AMQPConnectionError, *_ASYNC_CONNECTION_ERRORS)):
+		return e
+	return MrsalSetupError(message)
 
 
 class _MetricOutcome:
@@ -788,11 +806,8 @@ class Mrsal:
 				passive=passive, internal=internal,
 				auto_delete=auto_delete
 				)
-		except AMQPConnectionError:
-			# Connection died: not a topology failure. Re-raise so callers' reconnect/retry paths see it.
-			raise
 		except Exception as e:
-			raise MrsalSetupError(f'Oooopise! I failed declaring the exchange with : {e}')
+			raise _setup_error(e=e, message=f'Oooopise! I failed declaring the exchange with : {e}')
 		if self.verbose:
 			_log.info("Exchange declared yo!")
 
@@ -829,7 +844,7 @@ class Mrsal:
 			)
 			return exchange_obj
 		except Exception as e:
-			raise MrsalSetupError(f"Failed to declare async exchange: {e}")
+			raise _setup_error(e=e, message=f"Failed to declare async exchange: {e}")
 
 	def _declare_queue(self,
 					queue: str, arguments: dict[str, str] | None,
@@ -867,11 +882,8 @@ class Mrsal:
 		ch = channel or self._channel
 		try:
 			ch.queue_declare(queue=queue, arguments=arguments, durable=durable, exclusive=exclusive, auto_delete=auto_delete, passive=passive)
-		except AMQPConnectionError:
-			# Connection died: not a topology failure. Re-raise so callers' reconnect/retry paths see it.
-			raise
 		except Exception as e:
-			raise MrsalSetupError(f'Oooopise! I failed declaring the queue with : {e}')
+			raise _setup_error(e=e, message=f'Oooopise! I failed declaring the queue with : {e}')
 		if self.verbose:
 			_log.info("Queue declared yo")
 
@@ -905,7 +917,7 @@ class Mrsal:
 			)
 			return queue_obj
 		except Exception as e:
-			raise MrsalSetupError(f"Failed to declare async queue: {e}")
+			raise _setup_error(e=e, message=f"Failed to declare async queue: {e}")
 
 	def _declare_queue_binding(self,
 							exchange: str, queue: str,
@@ -933,7 +945,7 @@ class Mrsal:
 			if self.verbose:
 				_log.info(f"The queue is bound to exchange successfully: queue={queue}, exchange={exchange}, routing_key={routing_key}")
 		except Exception as e:
-			raise MrsalSetupError(f'I failed binding the queue with : {e}')
+			raise _setup_error(e=e, message=f'I failed binding the queue with : {e}')
 		if self.verbose:
 			_log.info("Queue bound yo")
 
@@ -956,7 +968,7 @@ class Mrsal:
 		try:
 			await queue.bind(exchange, routing_key=routing_key, arguments=arguments)
 		except Exception as e:
-			raise MrsalSetupError(f"Failed to bind async queue: {e}")
+			raise _setup_error(e=e, message=f"Failed to bind async queue: {e}")
 
 	def _ssl_setup(self) -> SSLContext:
 		"""_ssl_setup is private method we are using to connect with rabbit server via signed certificates and some TLS settings.

@@ -22,8 +22,11 @@ class MetricsHooks:
 		``duration_s`` spans entry to broker ack/nack. NOT recovered if it raises
 		-- mirrors sonic, where an ``OnPublish`` panic propagates.
 	:param on_consume: fired exactly once per delivery after the handler returns
-		and the delivery has been settled (ack, or reject / DLX on failure), so a
-		host can use it as the "delivery settled" signal.
+		and mrsal has finished with the delivery: acked, rejected / routed to DLX,
+		or deliberately left unsettled because the connection was lost (the
+		broker redelivers it). With ``auto_ack=True`` the broker settled it on
+		delivery. Never firing for a delivery means mrsal is stuck on it, so a
+		host can use the hook to detect a stalled consumer.
 		``success`` is True only when payload validation passed and the callback
 		returned without raising; ``duration_s`` spans validation plus the
 		callback. A message that failed but was routed to DLX still reports

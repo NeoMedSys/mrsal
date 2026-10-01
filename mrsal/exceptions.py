@@ -8,3 +8,7 @@ class MrsalAbortedSetup(Exception):
 
 class MrsalNoAsyncioLoopError(Exception):
 	"""Handling no asyncio loop implemented"""
+
+
+class MrsalDLXPublishTimeout(Exception):
+	"""The async DLX publish did not complete within ``dlx_publish_timeout``"""
