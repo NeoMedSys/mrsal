@@ -22,6 +22,7 @@ from pika.exceptions import (
 		ConnectionWrongStateError,
 		)
 from aio_pika import connect_robust, Message
+from aio_pika.exceptions import ChannelInvalidStateError
 from dataclasses import field
 from typing import Any, Callable, Literal, Sequence, Type
 from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, retry_if_exception_type, before_sleep_log
@@ -33,6 +34,11 @@ from mrsal.metrics import MetricsHooks
 from mrsal import config
 
 log = logging.getLogger(__name__)
+
+# aio-pika side "the connection is gone": aiormq's AMQPConnectionError/ConnectionClosed
+# and raw socket errors (BrokenPipeError) are all builtin ConnectionError; a channel
+# whose transport died raises ChannelInvalidStateError.
+_ASYNC_CONNECTION_ERRORS = (ConnectionError, ChannelInvalidStateError)
 
 
 def _consume_log_extra(*, msg_id, app_id, queue, routing_key, retry, outcome, start_ts):
@@ -1234,6 +1240,7 @@ class MrsalAsyncAMQP(Mrsal):
 			ChannelClosedByBroker,
 			ConnectionClosedByBroker,
 			StreamLostError,
+			*_ASYNC_CONNECTION_ERRORS,
 			)),
 		wait=wait_exponential(multiplier=1, min=2, max=60),
 		before_sleep=before_sleep_log(log, WARNING)
@@ -1496,13 +1503,27 @@ class MrsalAsyncAMQP(Mrsal):
 		else:
 			semaphore = None
 
+		# Set when the connection or consumer channel closes. aio-pika's robust
+		# reconnect can fail to restore the channel and leave the iterator waiting
+		# forever (#105), so a loss ends the loop and the start_consumer retry
+		# rebuilds connection, channel, topology and consumer from scratch.
+		connection_lost: asyncio.Future = asyncio.get_running_loop().create_future()
+
+		def _on_connection_lost(_sender, exc=None) -> None:
+			if not connection_lost.done():
+				connection_lost.set_result(exc)
+
+		connection, channel = self._connection, self._channel
+		connection.close_callbacks.add(_on_connection_lost)
+		channel.close_callbacks.add(_on_connection_lost)
+
 		try:
 			# async with: ensures the consumer cancellation is deterministically delivered
 			# to the broker on exception or generator GC. Without it, channel state can
 			# be left mid-cancel.
 			async with queue.iterator(no_ack=auto_ack) as it:
 				self._consumer_iterator = it
-				async for message in it:
+				async for message in self._until_connection_lost(it=it, connection_lost=connection_lost):
 					# Stop check runs BEFORE processing the message we just pulled.
 					# Trade-off: a stop arriving between pulls leaves the just-pulled
 					# message unacked, which the broker redelivers on consumer cancel.
@@ -1558,6 +1579,32 @@ class MrsalAsyncAMQP(Mrsal):
 						for task in still_pending:
 							task.cancel()
 						await asyncio.gather(*still_pending, return_exceptions=True)
+			connection.close_callbacks.discard(_on_connection_lost)
+			channel.close_callbacks.discard(_on_connection_lost)
+			if connection_lost.done():
+				# A robust connection mid-reconnect still reports is_closed=False, so
+				# _ensure_async_connection would reuse it; drop the handles so the
+				# retry connects fresh.
+				await self.close()
+
+	@staticmethod
+	async def _until_connection_lost(it, connection_lost: asyncio.Future):
+		"""Yield from the queue iterator until it ends or the connection is lost.
+
+		Raises ``ConnectionError`` (retriable by ``start_consumer``) when
+		``connection_lost`` resolves while waiting for the next message.
+		"""
+		while True:
+			next_message = asyncio.ensure_future(it.__anext__())
+			await asyncio.wait({next_message, connection_lost}, return_when=asyncio.FIRST_COMPLETED)
+			if not next_message.done():
+				next_message.cancel()
+				raise ConnectionError(f"Consumer connection lost: {connection_lost.result()!r}")
+			try:
+				message = next_message.result()
+			except StopAsyncIteration:
+				return
+			yield message
 
 	async def _async_publish_to_dlx_with_retry_cycle(self, message, properties, processing_error: str,
 												original_exchange: str, original_routing_key: str,
@@ -1597,6 +1644,12 @@ class MrsalAsyncAMQP(Mrsal):
 			# Acknowledge original message
 			await message.ack()
 			
+		except _ASYNC_CONNECTION_ERRORS as e:
+			# Connection gone: leave the message unsettled. The broker redelivers it
+			# when the channel closes; reject(requeue=False) here would drop it (#105).
+			msg_id = properties.message_id if hasattr(properties, 'message_id') else 'unknown'
+			app_id = properties.app_id if hasattr(properties, 'app_id') else 'unknown'
+			_log.error(f"Failed to send message to DLX, connection lost; leaving unsettled for redelivery: {e} | message_id={msg_id} app_id={app_id} delivery_tag={message.delivery_tag} exchange={original_exchange} routing_key={original_routing_key}")
 		except Exception as e:
 			msg_id = properties.message_id if hasattr(properties, 'message_id') else 'unknown'
 			app_id = properties.app_id if hasattr(properties, 'app_id') else 'unknown'

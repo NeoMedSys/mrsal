@@ -2,7 +2,7 @@ import queue
 import pytest
 from unittest.mock import patch, MagicMock
 
-from pika.exceptions import UnroutableError, NackError, StreamLostError
+from pika.exceptions import UnroutableError, NackError, StreamLostError, ChannelClosedByBroker
 
 from mrsal.amqp.subclass import (
 	MrsalBlockingPublisher,
@@ -191,6 +191,35 @@ def test_declare_failure_raises_and_is_not_cached(publisher, mock_conn):
 	assert publisher._declared_topology == set()
 	assert publisher._setup_exchange_and_queue.call_count == 1
 	_, mock_channel = mock_conn
+	mock_channel.basic_publish.assert_not_called()
+
+
+def test_connection_lost_during_passive_declare_is_retried(mock_conn, monkeypatch):
+	# A dead socket during the passive declare is a connection failure, not a
+	# topology failure: it must take the reconnect-and-retry path (#105).
+	# Real _setup_exchange_and_queue (not the fixture stub): the declare path is under test.
+	publisher = MrsalBlockingPublisher(**SETUP_ARGS)
+	_, mock_channel = mock_conn
+	mock_channel.exchange_declare.side_effect = [StreamLostError('dropped'), MagicMock()]
+	monkeypatch.setattr('mrsal.amqp.subclass.time.sleep', lambda *a, **k: None)
+
+	publisher.publish(**PUBLISH_ARGS)
+
+	assert mock_channel.exchange_declare.call_count == 2
+	assert mock_channel.basic_publish.call_count == 1
+
+
+def test_missing_exchange_on_passive_declare_is_terminal(mock_conn):
+	# A broker 404 on the passive declare is a genuine topology failure: still
+	# MrsalAbortedSetup, no retry loop.
+	publisher = MrsalBlockingPublisher(**SETUP_ARGS)
+	_, mock_channel = mock_conn
+	mock_channel.exchange_declare.side_effect = ChannelClosedByBroker(404, 'NOT_FOUND')
+
+	with pytest.raises(MrsalAbortedSetup):
+		publisher.publish(**PUBLISH_ARGS)
+
+	assert mock_channel.exchange_declare.call_count == 1
 	mock_channel.basic_publish.assert_not_called()
 
 

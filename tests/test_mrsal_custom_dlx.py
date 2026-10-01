@@ -59,8 +59,11 @@ class TestDLXExchangeNameConfiguration:
 
 		# Mock connection and channel
 		consumer._connection = AsyncMock()
+		consumer._connection.close_callbacks = MagicMock()
+		consumer._connection.channel.return_value.close_callbacks = MagicMock()
 		consumer._connection.is_closed = False
 		consumer._channel = AsyncMock()
+		consumer._channel.close_callbacks = MagicMock()
 		consumer._channel.is_closed = False
 		consumer.auto_declare_ok = True
 

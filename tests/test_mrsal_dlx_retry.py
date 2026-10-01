@@ -364,8 +364,11 @@ class TestAsyncDLXRetryCycleOnly:
 		)
 
 		consumer._connection = AsyncMock()
+		consumer._connection.close_callbacks = MagicMock()
+		consumer._connection.channel.return_value.close_callbacks = MagicMock()
 		consumer._connection.is_closed = False
 		consumer._channel = AsyncMock()
+		consumer._channel.close_callbacks = MagicMock()
 		consumer._channel.is_closed = False
 		consumer.auto_declare_ok = True
 		consumer.setup_async_connection = AsyncMock()
@@ -897,8 +900,11 @@ class TestRetryCyclePreconditions:
 			dlx_enable=True,
 		)
 		consumer._connection = AsyncMock()
+		consumer._connection.close_callbacks = MagicMock()
+		consumer._connection.channel.return_value.close_callbacks = MagicMock()
 		consumer._connection.is_closed = False
 		consumer._channel = AsyncMock()
+		consumer._channel.close_callbacks = MagicMock()
 		consumer._channel.is_closed = False
 		consumer._async_setup_exchange_and_queue = AsyncMock()
 		return consumer
@@ -1161,6 +1167,8 @@ class TestSyncDLXPublishMandatoryFlag:
 			dlx_enable=True,
 		)
 		consumer._connection = AsyncMock()
+		consumer._connection.close_callbacks = MagicMock()
+		consumer._connection.channel.return_value.close_callbacks = MagicMock()
 		consumer._connection.is_closed = False
 		dlx_channel = AsyncMock()
 		dlx_channel.is_closed = False
@@ -1198,7 +1206,10 @@ class TestAsyncRetryQueueSetup:
 			use_quorum_queues=False,
 		)
 		consumer._connection = AsyncMock()
+		consumer._connection.close_callbacks = MagicMock()
+		consumer._connection.channel.return_value.close_callbacks = MagicMock()
 		consumer._channel = AsyncMock()
+		consumer._channel.close_callbacks = MagicMock()
 		# get_exchange is awaited during binding setup.
 		consumer._channel.get_exchange = AsyncMock(return_value=AsyncMock())
 
@@ -1248,7 +1259,10 @@ class TestAsyncRetryQueueSetup:
 			dlx_enable=True,
 		)
 		consumer._connection = AsyncMock()
+		consumer._connection.close_callbacks = MagicMock()
+		consumer._connection.channel.return_value.close_callbacks = MagicMock()
 		consumer._channel = AsyncMock()
+		consumer._channel.close_callbacks = MagicMock()
 		consumer._channel.get_exchange = AsyncMock(return_value=AsyncMock())
 
 		async def declare(**kwargs):

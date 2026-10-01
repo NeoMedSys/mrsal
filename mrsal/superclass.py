@@ -13,6 +13,7 @@ from typing import Any, Literal, Type, TypeVar
 
 T = TypeVar("T")
 from pika.connection import SSLOptions
+from pika.exceptions import AMQPConnectionError
 from aio_pika import ExchangeType as AioExchangeType, Queue as AioQueue, Exchange as AioExchange
 from pydantic.dataclasses import dataclass
 
@@ -787,6 +788,9 @@ class Mrsal:
 				passive=passive, internal=internal,
 				auto_delete=auto_delete
 				)
+		except AMQPConnectionError:
+			# Connection died: not a topology failure. Re-raise so callers' reconnect/retry paths see it.
+			raise
 		except Exception as e:
 			raise MrsalSetupError(f'Oooopise! I failed declaring the exchange with : {e}')
 		if self.verbose:
@@ -863,6 +867,9 @@ class Mrsal:
 		ch = channel or self._channel
 		try:
 			ch.queue_declare(queue=queue, arguments=arguments, durable=durable, exclusive=exclusive, auto_delete=auto_delete, passive=passive)
+		except AMQPConnectionError:
+			# Connection died: not a topology failure. Re-raise so callers' reconnect/retry paths see it.
+			raise
 		except Exception as e:
 			raise MrsalSetupError(f'Oooopise! I failed declaring the queue with : {e}')
 		if self.verbose:

@@ -1,11 +1,14 @@
 import asyncio
+import aiormq
 import pytest
+from aio_pika.exceptions import ChannelInvalidStateError, DeliveryError
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from mrsal.amqp.subclass import MrsalAsyncAMQP
 from mrsal.config import AioPikaAttributes
 from mrsal.exceptions import MrsalAbortedSetup
 from pydantic import ValidationError
+from tenacity import wait_none
 
 from tests.conftest import ExpectedPayload, make_queue_with_messages
 
@@ -27,8 +30,10 @@ SETUP_ARGS = {
 def mock_amqp_connection():
 	with patch('aio_pika.connect_robust', new_callable=AsyncMock) as mock_connect_robust:
 		mock_channel = AsyncMock()
+		mock_channel.close_callbacks = MagicMock()
 		mock_channel.is_closed = False
 		mock_connection = AsyncMock()
+		mock_connection.close_callbacks = MagicMock()
 		mock_connection.is_closed = False
 		mock_connection.channel.return_value = mock_channel
 
@@ -195,6 +200,7 @@ async def test_ensure_consumer_channel_closes_prior_open_channel():
 	fresh_channel = AsyncMock()
 	consumer._channel = stale_channel
 	consumer._connection = AsyncMock()
+	consumer._connection.close_callbacks = MagicMock()
 	consumer._connection.is_closed = False
 	consumer._connection.channel = AsyncMock(return_value=fresh_channel)
 
@@ -214,6 +220,7 @@ async def test_ensure_consumer_channel_closes_fresh_channel_if_set_qos_fails():
 	fresh_channel = AsyncMock()
 	fresh_channel.set_qos = AsyncMock(side_effect=RuntimeError("qos boom"))
 	consumer._connection = AsyncMock()
+	consumer._connection.close_callbacks = MagicMock()
 	consumer._connection.is_closed = False
 	consumer._connection.channel = AsyncMock(return_value=fresh_channel)
 
@@ -739,3 +746,106 @@ async def test_stop_wakes_idle_iterator(amqp_consumer):
 
 	callback.assert_not_called()
 	assert blocking_it.close_calls >= 1
+
+
+# --- Connection loss on the consumer (#105) -----------------------------------
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('lost_handle', ['connection', 'channel'])
+async def test_connection_loss_on_idle_consumer_rebuilds_and_resumes(amqp_consumer, monkeypatch, lost_handle):
+	"""#105: aio-pika's robust reconnect can fail to restore the channel, leaving an
+	idle iterator waiting forever. A close of the connection or consumer channel must
+	end the loop, drop the old handles, and let the start_consumer retry rebuild."""
+	consumer = amqp_consumer
+	monkeypatch.setattr(MrsalAsyncAMQP.start_consumer.retry, 'wait', wait_none())
+	old_connection, old_channel = consumer._connection, consumer._channel
+
+	blocking_it = _BlockingQueueIterator()
+	old_queue = AsyncMock()
+	old_queue.iterator = MagicMock(return_value=blocking_it)
+	old_channel.declare_queue.return_value = old_queue
+
+	# The rebuilt connection serves an empty queue, so the retried consumer returns.
+	new_queue, _ = make_queue_with_messages([])
+	new_channel = AsyncMock()
+	new_channel.is_closed = False
+	new_channel.close_callbacks = MagicMock()
+	new_channel.declare_queue.return_value = new_queue
+	new_connection = AsyncMock()
+	new_connection.is_closed = False
+	new_connection.close_callbacks = MagicMock()
+	new_connection.channel.return_value = new_channel
+
+	async def _reconnect():
+		consumer._connection = new_connection
+	consumer.setup_async_connection = AsyncMock(side_effect=_reconnect)
+
+	consumer_task = asyncio.create_task(consumer.start_consumer(
+		queue_name='test_q',
+		callback=AsyncMock(),
+		routing_key='rk',
+		exchange_name='test_x',
+		exchange_type='direct',
+		auto_ack=True,
+		dlx_enable=False,
+	))
+	await asyncio.sleep(0.05)
+	assert not consumer_task.done(), "consumer should be blocked on idle iterator"
+
+	lost = old_connection if lost_handle == 'connection' else old_channel
+	on_lost = lost.close_callbacks.add.call_args.args[0]
+	on_lost(lost, ConnectionError('Broken pipe'))
+	await asyncio.wait_for(consumer_task, timeout=1.0)
+
+	old_connection.close.assert_awaited()
+	consumer.setup_async_connection.assert_awaited_once()
+	new_queue.iterator.assert_called_once()
+	old_connection.close_callbacks.discard.assert_called_once_with(on_lost)
+
+
+# --- DLX publish failure (#105) -----------------------------------------------
+
+DLX_FAILURE_ARGS = {
+	'processing_error': 'callback: boom',
+	'original_exchange': 'test_x',
+	'original_routing_key': 'test_route',
+	'enable_retry_cycles': True,
+	'retry_cycle_interval': 10,
+	'max_retry_time_limit': 60,
+	'dlx_exchange_name': None,
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('error', [
+	BrokenPipeError(32, 'Broken pipe'),
+	aiormq.exceptions.ConnectionClosed(320, 'CONNECTION_FORCED'),
+	ChannelInvalidStateError('No active transport in channel'),
+])
+async def test_dlx_publish_connection_loss_leaves_message_unsettled(amqp_consumer, error):
+	"""Connection gone mid-DLX-publish: neither ack nor reject, so the broker
+	redelivers the message instead of it being dropped."""
+	consumer = amqp_consumer
+	mock_message = AsyncMock(ack=AsyncMock(), reject=AsyncMock(), delivery_tag=5)
+
+	with patch.object(consumer, '_handle_dlx_with_retry_cycle_async', AsyncMock(side_effect=error)):
+		await consumer._async_publish_to_dlx_with_retry_cycle(
+			message=mock_message, properties=MagicMock(), **DLX_FAILURE_ARGS)
+
+	mock_message.ack.assert_not_awaited()
+	mock_message.reject.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dlx_publish_broker_rejection_still_rejects(amqp_consumer):
+	"""A non-connection DLX failure (e.g. broker nack) keeps the old behaviour:
+	reject(requeue=False)."""
+	consumer = amqp_consumer
+	mock_message = AsyncMock(ack=AsyncMock(), reject=AsyncMock(), delivery_tag=5)
+
+	with patch.object(consumer, '_handle_dlx_with_retry_cycle_async', AsyncMock(side_effect=DeliveryError(None, None))):
+		await consumer._async_publish_to_dlx_with_retry_cycle(
+			message=mock_message, properties=MagicMock(), **DLX_FAILURE_ARGS)
+
+	mock_message.ack.assert_not_awaited()
+	mock_message.reject.assert_awaited_once_with(requeue=False)
