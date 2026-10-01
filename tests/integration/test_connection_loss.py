@@ -1,13 +1,19 @@
 """Broker-side connection loss against a real broker (#105).
 
-The broker force-closes every client connection through the management HTTP
-API, the way a broker restart or a network cut looks to the client. Covers
-the two production failures from #105:
+The broker force-closes client connections through the management HTTP API,
+the way a broker restart or a network cut looks to the client. Covers the two
+production failures from #105:
 
   * the blocking publisher hitting a dead socket inside the passive declare
     must reconnect and publish, not raise ``MrsalAbortedSetup``;
   * the async consumer must keep consuming after its connection is closed
     under it, not sit on an iterator that never yields again.
+
+Each test runs in its own throwaway vhost and force-closes only that vhost's
+connections, so it cannot disturb other tests or other clients on a shared
+broker. (Matching by client port does not work: Docker's port proxy rewrites
+the client address the broker sees.) The test user must be allowed to create
+vhosts, which ``guest`` is on the docker-compose broker.
 
 Management API endpoint defaults to ``localhost:15673`` (the port mapped in
 ``docker-compose.yml``); override with ``MRSAL_IT_MGMT_PORT``.
@@ -19,7 +25,9 @@ import os
 import time
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
 
+import pika
 import pytest
 
 from mrsal.amqp.subclass import MrsalAsyncAMQP, MrsalBlockingPublisher
@@ -28,75 +36,112 @@ from tests.integration.conftest import (
     AsyncConsumerRunner,
     BROKER_HOST,
     BROKER_PASS,
+    BROKER_PORT,
     BROKER_USER,
     broker_setup_args,
-    raw_pika_channel,
 )
 
 
 MGMT_PORT = int(os.environ.get("MRSAL_IT_MGMT_PORT", "15673"))
 
 
-def _mgmt_request(method: str, path: str):
+def _mgmt_request(method: str, path: str, body: dict | None = None):
     auth = base64.b64encode(f"{BROKER_USER}:{BROKER_PASS}".encode()).decode()
     request = urllib.request.Request(
         url=f"http://{BROKER_HOST}:{MGMT_PORT}/api/{path}",
         method=method,
-        headers={"Authorization": f"Basic {auth}", "X-Reason": "mrsal #105 integration test"},
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={
+            "Authorization": f"Basic {auth}",
+            "Content-Type": "application/json",
+            "X-Reason": "mrsal #105 integration test",
+        },
     )
     with urllib.request.urlopen(request, timeout=5) as response:
-        body = response.read()
-    return json.loads(body) if body else None
+        payload = response.read()
+    return json.loads(payload) if payload else None
 
 
-def force_close_all_connections(timeout: float = 15.0) -> int:
-    """Close every client connection from the broker side; return how many.
+@pytest.fixture
+def vhost(unique_suffix):
+    """A throwaway vhost for one test; deleting it removes all its topology."""
+    name = f"mrsal-it-cl-{unique_suffix}"
+    quoted = urllib.parse.quote(name, safe="")
+    _mgmt_request(method="PUT", path=f"vhosts/{quoted}")
+    _mgmt_request(
+        method="PUT",
+        path=f"permissions/{quoted}/{urllib.parse.quote(BROKER_USER, safe='')}",
+        body={"configure": ".*", "write": ".*", "read": ".*"},
+    )
+    yield name
+    _mgmt_request(method="DELETE", path=f"vhosts/{quoted}")
+
+
+def force_close_vhost_connections(vhost: str, timeout: float = 15.0) -> int:
+    """Close every client connection in ``vhost`` from the broker side; return how many.
 
     Polls because the management API lists a fresh connection only once the
     broker has emitted its stats.
     """
+    path = f"vhosts/{urllib.parse.quote(vhost, safe='')}/connections"
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        connections = _mgmt_request(method="GET", path="connections")
+        connections = _mgmt_request(method="GET", path=path)
         if connections:
             for connection in connections:
                 name = urllib.parse.quote(connection["name"], safe="")
                 _mgmt_request(method="DELETE", path=f"connections/{name}")
             return len(connections)
         time.sleep(0.25)
-    raise AssertionError(f"No connections listed by the management API within {timeout}s")
+    raise AssertionError(f"No connections listed in vhost {vhost} within {timeout}s")
 
 
-def _declare_target(exchange: str, queue: str, routing_key: str) -> None:
-    with raw_pika_channel() as ch:
+@contextmanager
+def _channel(vhost: str):
+    """A short-lived pika channel in ``vhost`` for setup and inspection."""
+    conn = pika.BlockingConnection(
+        pika.ConnectionParameters(
+            host=BROKER_HOST,
+            port=BROKER_PORT,
+            credentials=pika.PlainCredentials(BROKER_USER, BROKER_PASS),
+            virtual_host=vhost,
+            heartbeat=30,
+        )
+    )
+    try:
+        yield conn.channel()
+    finally:
+        conn.close()
+
+
+def _declare_target(vhost: str, exchange: str, queue: str, routing_key: str) -> None:
+    with _channel(vhost=vhost) as ch:
         ch.exchange_declare(exchange=exchange, exchange_type="direct", durable=True)
         ch.queue_declare(queue=queue, durable=True)
         ch.queue_bind(queue=queue, exchange=exchange, routing_key=routing_key)
 
 
-def _get_body(queue: str) -> bytes | None:
-    with raw_pika_channel() as ch:
+def _get_body(vhost: str, queue: str) -> bytes | None:
+    with _channel(vhost=vhost) as ch:
         _method, _properties, body = ch.basic_get(queue=queue, auto_ack=True)
     return body
 
 
 @pytest.mark.integration
-def test_publisher_recovers_when_connection_dies_before_passive_declare(unique_suffix, cleanup_topology):
+def test_publisher_recovers_when_connection_dies_before_passive_declare(vhost):
     # Two targets: the first publish warms the connection, the second forces a
     # fresh passive declare on the socket the broker has since closed.
-    first = (f"mrsal.it.cl.{unique_suffix}.a", f"mrsal.it.cl.{unique_suffix}.a.q", "rk-a")
-    second = (f"mrsal.it.cl.{unique_suffix}.b", f"mrsal.it.cl.{unique_suffix}.b.q", "rk-b")
+    first = ("cl.a", "cl.a.q", "rk-a")
+    second = ("cl.b", "cl.b.q", "rk-b")
     for exchange, queue, routing_key in (first, second):
-        cleanup_topology.exchange(exchange)
-        cleanup_topology.queue(queue)
-        _declare_target(exchange=exchange, queue=queue, routing_key=routing_key)
+        _declare_target(vhost=vhost, exchange=exchange, queue=queue, routing_key=routing_key)
 
-    with MrsalBlockingPublisher(**broker_setup_args()) as publisher:
+    with MrsalBlockingPublisher(**broker_setup_args(virtual_host=vhost)) as publisher:
         publisher.publish(
             exchange_name=first[0], queue_name=first[1], routing_key=first[2],
             exchange_type="direct", message=b"before",
         )
-        assert force_close_all_connections() >= 1
+        assert force_close_vhost_connections(vhost=vhost) >= 1
 
         # pika has not read the Connection.Close yet, so the publisher still
         # believes its connection is open and runs the passive declare on it.
@@ -105,18 +150,14 @@ def test_publisher_recovers_when_connection_dies_before_passive_declare(unique_s
             exchange_type="direct", message=b"after",
         )
 
-    assert _get_body(queue=first[1]) == b"before"
-    assert _get_body(queue=second[1]) == b"after"
+    assert _get_body(vhost=vhost, queue=first[1]) == b"before"
+    assert _get_body(vhost=vhost, queue=second[1]) == b"after"
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_async_consumer_keeps_consuming_after_connection_is_closed(unique_suffix, cleanup_topology):
-    exchange = f"mrsal.it.cl.{unique_suffix}.async"
-    queue = f"mrsal.it.cl.{unique_suffix}.async.q"
-    routing_key = f"mrsal.it.cl.{unique_suffix}.async.rk"
-    cleanup_topology.exchange(exchange)
-    cleanup_topology.queue(queue)
+async def test_async_consumer_keeps_consuming_after_connection_is_closed(vhost):
+    exchange, queue, routing_key = "cl.async", "cl.async.q", "cl.async.rk"
 
     received: list[bytes] = []
     got_message = asyncio.Event()
@@ -125,7 +166,7 @@ async def test_async_consumer_keeps_consuming_after_connection_is_closed(unique_
         received.append(body)
         got_message.set()
 
-    consumer = MrsalAsyncAMQP(**broker_setup_args())
+    consumer = MrsalAsyncAMQP(**broker_setup_args(virtual_host=vhost))
     runner = AsyncConsumerRunner(consumer)
     runner.start(
         queue_name=queue,
@@ -140,7 +181,7 @@ async def test_async_consumer_keeps_consuming_after_connection_is_closed(unique_
     )
 
     def publish(body: bytes) -> None:
-        with raw_pika_channel() as ch:
+        with _channel(vhost=vhost) as ch:
             ch.basic_publish(exchange=exchange, routing_key=routing_key, body=body)
 
     try:
@@ -150,7 +191,7 @@ async def test_async_consumer_keeps_consuming_after_connection_is_closed(unique_
         await asyncio.wait_for(got_message.wait(), timeout=10)
         got_message.clear()
 
-        assert await asyncio.to_thread(force_close_all_connections) >= 1
+        assert await asyncio.to_thread(force_close_vhost_connections, vhost) >= 1
 
         # The queue is durable, so a message published while the consumer is
         # rebuilding waits for it.

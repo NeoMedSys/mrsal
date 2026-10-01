@@ -33,14 +33,19 @@ log = logging.getLogger(__name__)
 _ASYNC_CONNECTION_ERRORS = (ConnectionError, ChannelInvalidStateError)
 
 
-def _setup_error(e: Exception, message: str) -> Exception:
+# pika side: StreamLostError, ConnectionClosedByBroker, ConnectionWrongStateError, ...
+_SYNC_CONNECTION_ERRORS = (AMQPConnectionError,)
+
+
+def _setup_error(e: Exception, message: str, connection_errors: tuple[type[Exception], ...]) -> Exception:
 	"""The exception a declare/bind helper raises for ``e``.
 
-	A dead connection is not a topology failure: pika's ``AMQPConnectionError``
-	and the aio-pika connection errors are returned unchanged so the callers'
-	reconnect/retry paths see them (#105). Anything else becomes ``MrsalSetupError``.
+	A dead connection is not a topology failure: ``connection_errors`` (pika's for
+	the sync helpers, aio-pika's for the async ones) are returned unchanged so the
+	callers' reconnect/retry paths see them (#105). Anything else becomes
+	``MrsalSetupError``.
 	"""
-	if isinstance(e, (AMQPConnectionError, *_ASYNC_CONNECTION_ERRORS)):
+	if isinstance(e, connection_errors):
 		return e
 	return MrsalSetupError(message)
 
@@ -807,7 +812,7 @@ class Mrsal:
 				auto_delete=auto_delete
 				)
 		except Exception as e:
-			raise _setup_error(e=e, message=f'Oooopise! I failed declaring the exchange with : {e}')
+			raise _setup_error(e=e, message=f'Oooopise! I failed declaring the exchange with : {e}', connection_errors=_SYNC_CONNECTION_ERRORS)
 		if self.verbose:
 			_log.info("Exchange declared yo!")
 
@@ -844,7 +849,7 @@ class Mrsal:
 			)
 			return exchange_obj
 		except Exception as e:
-			raise _setup_error(e=e, message=f"Failed to declare async exchange: {e}")
+			raise _setup_error(e=e, message=f"Failed to declare async exchange: {e}", connection_errors=_ASYNC_CONNECTION_ERRORS)
 
 	def _declare_queue(self,
 					queue: str, arguments: dict[str, str] | None,
@@ -883,7 +888,7 @@ class Mrsal:
 		try:
 			ch.queue_declare(queue=queue, arguments=arguments, durable=durable, exclusive=exclusive, auto_delete=auto_delete, passive=passive)
 		except Exception as e:
-			raise _setup_error(e=e, message=f'Oooopise! I failed declaring the queue with : {e}')
+			raise _setup_error(e=e, message=f'Oooopise! I failed declaring the queue with : {e}', connection_errors=_SYNC_CONNECTION_ERRORS)
 		if self.verbose:
 			_log.info("Queue declared yo")
 
@@ -917,7 +922,7 @@ class Mrsal:
 			)
 			return queue_obj
 		except Exception as e:
-			raise _setup_error(e=e, message=f"Failed to declare async queue: {e}")
+			raise _setup_error(e=e, message=f"Failed to declare async queue: {e}", connection_errors=_ASYNC_CONNECTION_ERRORS)
 
 	def _declare_queue_binding(self,
 							exchange: str, queue: str,
@@ -945,7 +950,7 @@ class Mrsal:
 			if self.verbose:
 				_log.info(f"The queue is bound to exchange successfully: queue={queue}, exchange={exchange}, routing_key={routing_key}")
 		except Exception as e:
-			raise _setup_error(e=e, message=f'I failed binding the queue with : {e}')
+			raise _setup_error(e=e, message=f'I failed binding the queue with : {e}', connection_errors=_SYNC_CONNECTION_ERRORS)
 		if self.verbose:
 			_log.info("Queue bound yo")
 
@@ -968,7 +973,7 @@ class Mrsal:
 		try:
 			await queue.bind(exchange, routing_key=routing_key, arguments=arguments)
 		except Exception as e:
-			raise _setup_error(e=e, message=f"Failed to bind async queue: {e}")
+			raise _setup_error(e=e, message=f"Failed to bind async queue: {e}", connection_errors=_ASYNC_CONNECTION_ERRORS)
 
 	def _ssl_setup(self) -> SSLContext:
 		"""_ssl_setup is private method we are using to connect with rabbit server via signed certificates and some TLS settings.
