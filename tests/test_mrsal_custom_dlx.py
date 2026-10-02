@@ -3,7 +3,7 @@ from unittest.mock import Mock, MagicMock, AsyncMock, patch
 from mrsal.amqp.subclass import MrsalBlockingAMQP, MrsalAsyncAMQP
 
 from mrsal.exceptions import MrsalAbortedSetup
-from tests.conftest import AsyncIteratorMock, ExpectedPayload
+from tests.conftest import AsyncIteratorMock, ExpectedPayload, mock_async_handles
 
 
 class TestDLXExchangeNameConfiguration:
@@ -58,13 +58,7 @@ class TestDLXExchangeNameConfiguration:
 		)
 
 		# Mock connection and channel
-		consumer._connection = AsyncMock()
-		consumer._connection.close_callbacks = MagicMock()
-		consumer._connection.channel.return_value.close_callbacks = MagicMock()
-		consumer._connection.is_closed = False
-		consumer._channel = AsyncMock()
-		consumer._channel.close_callbacks = MagicMock()
-		consumer._channel.is_closed = False
+		mock_async_handles(consumer)
 		consumer.auto_declare_ok = True
 
 		# Mock setup methods

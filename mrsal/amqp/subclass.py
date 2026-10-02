@@ -22,9 +22,10 @@ from pika.exceptions import (
 		ConnectionWrongStateError,
 		)
 from aio_pika import connect_robust, Message
+from aio_pika.exceptions import AuthenticationError
 from dataclasses import field
 from typing import Any, Callable, Literal, Sequence, Type
-from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, retry_if_exception_type, before_sleep_log
+from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, retry_if_exception_type, retry_if_not_exception_type, before_sleep_log
 from pydantic import ConfigDict, ValidationError
 from pydantic.dataclasses import dataclass
 
@@ -1007,29 +1008,30 @@ class MrsalAsyncAMQP(Mrsal):
 	async def _close_handles(self) -> None:
 		"""Close channels and connection without signalling a stop.
 
-		Each close is wrapped: a failure on one handle must not leak the next.
+		Each close is bounded and wrapped: on a half-dead connection a close can
+		hang, and a failure on one handle must not leak the next.
 		"""
-		_log = self._logger or log
 		if self._dlx_publish_channel is not None and not self._dlx_publish_channel.is_closed:
-			try:
-				await self._dlx_publish_channel.close()
-			except Exception:
-				_log.debug("DLX publish channel close raised; ignoring.", exc_info=True)
+			await self._close_bounded(handle=self._dlx_publish_channel, name="DLX publish channel")
 		self._dlx_publish_channel = None
 
 		if self._channel is not None and not self._channel.is_closed:
-			try:
-				await self._channel.close()
-			except Exception:
-				_log.debug("Consumer channel close raised; ignoring.", exc_info=True)
+			await self._close_bounded(handle=self._channel, name="Consumer channel")
 		self._channel = None
 
 		if self._connection is not None and not self._connection.is_closed:
-			try:
-				await self._connection.close()
-			except Exception:
-				_log.debug("Connection close raised; ignoring.", exc_info=True)
+			await self._close_bounded(handle=self._connection, name="Connection")
 		self._connection = None
+
+	async def _close_bounded(self, handle, name: str) -> None:
+		"""Close ``handle`` within ``config.CLOSE_TIMEOUT_SEC``; log and move on if it fails."""
+		_log = self._logger or log
+		try:
+			await asyncio.wait_for(handle.close(), timeout=config.CLOSE_TIMEOUT_SEC)
+		except asyncio.TimeoutError:
+			_log.warning(f"{name} close did not finish within {config.CLOSE_TIMEOUT_SEC}s; dropping it.")
+		except Exception:
+			_log.warning(f"{name} close raised; dropping it.", exc_info=True)
 
 	async def __aenter__(self):
 		return self
@@ -1244,13 +1246,15 @@ class MrsalAsyncAMQP(Mrsal):
 			semaphore.release()
 
 	@retry(
+		# Refused credentials are a builtin ConnectionError too, but retrying
+		# cannot fix them: they raise at once, as before #105.
 		retry=retry_if_exception_type((
 			AMQPConnectionError,
 			ChannelClosedByBroker,
 			ConnectionClosedByBroker,
 			StreamLostError,
 			*_ASYNC_CONNECTION_ERRORS,
-			)),
+			)) & retry_if_not_exception_type(AuthenticationError),
 		wait=wait_exponential(multiplier=1, min=2, max=60),
 		before_sleep=before_sleep_log(log, WARNING)
 		)
@@ -1290,6 +1294,8 @@ class MrsalAsyncAMQP(Mrsal):
 		condition: against a permanently unreachable broker it retries forever,
 		logging each attempt at WARNING. That suits a long-running service, which
 		should alert on those warnings rather than expect ``start_consumer`` to raise.
+		Refused credentials (``aio_pika.exceptions.AuthenticationError``) are not
+		retried and raise at once.
 		A ``stop()`` / ``close()`` during a backoff is seen when that sleep ends, so
 		``start_consumer`` can take up to 60s to return.
 
@@ -1336,9 +1342,11 @@ class MrsalAsyncAMQP(Mrsal):
 		# retry is still trying to connect (the loop may never have run). A stop
 		# that landed during the retry backoff ends the consumer here, before a
 		# new connection is opened.
+		_log = self._logger or log
 		if self._stop_event is None:
 			self._stop_event = asyncio.Event()
 		if self._stop_event.is_set():
+			_log.info(f"start_consumer({queue_name}): stop() / close() already called on this instance; not starting.")
 			return
 		try:
 			queue, runtime_config = await self._prepare_consumer_async(
@@ -1475,7 +1483,9 @@ class MrsalAsyncAMQP(Mrsal):
 					)
 
 			if not self.auto_declare_ok:
-				await self.close()
+				# Not close(): that would set the stop flag and silently end every
+				# later start_consumer on this instance.
+				await self._close_handles()
 				raise MrsalAbortedSetup('Auto declaration failed during setup.')
 		else:
 			# The async consume loop needs the declared aio_pika queue object to
@@ -1543,14 +1553,17 @@ class MrsalAsyncAMQP(Mrsal):
 		# rebuilds connection, channel, topology and consumer from scratch.
 		connection_lost: asyncio.Future = asyncio.get_running_loop().create_future()
 
-		def _on_connection_lost(_sender, exc=None) -> None:
+		def _mark_lost(exc: BaseException | None) -> None:
 			if not connection_lost.done():
 				connection_lost.set_result(exc)
+
+		def _on_connection_lost(_sender, exc=None) -> None:
+			_mark_lost(exc=exc)
 
 		def _on_task_done(task: asyncio.Task) -> None:
 			self._inflight_tasks.discard(task)
 			if not task.cancelled() and isinstance(task.exception(), _ASYNC_CONNECTION_ERRORS):
-				_on_connection_lost(None, task.exception())
+				_mark_lost(exc=task.exception())
 
 		connection, channel = self._connection, self._channel
 		connection.close_callbacks.add(_on_connection_lost)
@@ -1667,8 +1680,8 @@ class MrsalAsyncAMQP(Mrsal):
 		will be redelivered and re-published to DLX. Consumers must be idempotent.
 		"""
 		_log = self._logger or log
-		msg_id = properties.message_id if hasattr(properties, 'message_id') else 'unknown'
-		app_id = properties.app_id if hasattr(properties, 'app_id') else 'unknown'
+		msg_id = getattr(properties, 'message_id', 'unknown')
+		app_id = getattr(properties, 'app_id', 'unknown')
 		try:
 			# Use common logic from superclass
 			await self._handle_dlx_with_retry_cycle_async(
