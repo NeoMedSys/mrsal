@@ -1,5 +1,5 @@
 # MRSAL AMQP
-[![Release](https://img.shields.io/badge/release-3.15.0-blue.svg)](https://pypi.org/project/mrsal/) 
+[![Release](https://img.shields.io/badge/release-3.15.1-blue.svg)](https://pypi.org/project/mrsal/) 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%7C3.11%7C3.12-blue.svg)](https://www.python.org/downloads/)
 [![Mrsal Workflow](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml/badge.svg?branch=main)](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml)
 [![Coverage](https://neomedsys.github.io/mrsal/reports/badges/coverage-badge.svg)](https://neomedsys.github.io/mrsal/reports/coverage/htmlcov/)
@@ -47,7 +47,8 @@ process looked healthy.
   `MrsalAsyncAMQP` to consume again. A stop during a retry backoff ends it at once.
 - **`MrsalAsyncAMQP.start_consumer.retry` is gone.** `start_consumer` drives the
   retry itself so the backoff can see `stop()`. Code that patched
-  `start_consumer.retry.wait` should patch `mrsal.amqp.subclass._CONSUMER_RETRY_WAIT`.
+  `start_consumer.retry.wait` should patch `mrsal.amqp.async_amqp._CONSUMER_RETRY_WAIT`
+  (in 3.14.0 and 3.15.0 it lived in `mrsal.amqp.subclass`).
 - Closing an async channel or connection is bounded by `config.CLOSE_TIMEOUT_SEC`
   (10s); a close that fails or times out is logged at WARNING.
 
