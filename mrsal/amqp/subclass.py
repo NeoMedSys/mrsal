@@ -1290,6 +1290,8 @@ class MrsalAsyncAMQP(Mrsal):
 		condition: against a permanently unreachable broker it retries forever,
 		logging each attempt at WARNING. That suits a long-running service, which
 		should alert on those warnings rather than expect ``start_consumer`` to raise.
+		A ``stop()`` / ``close()`` during a backoff is seen when that sleep ends, so
+		``start_consumer`` can take up to 60s to return.
 
 		:param str queue_name: The queue to consume from
 		:param Callable callback: Async callable invoked as ``callback(*callback_args, message, properties, body)``.
@@ -1365,6 +1367,11 @@ class MrsalAsyncAMQP(Mrsal):
 				lazy_queue=lazy_queue,
 				max_concurrent_tasks=max_concurrent_tasks,
 			)
+			# A close() that landed while prepare was connecting could not close a
+			# connection that was not assigned yet; close it now.
+			if self._stop_event.is_set():
+				await self._close_handles()
+				return
 			await self._run_consume_loop_async(
 				queue=queue,
 				runtime_config=runtime_config,
@@ -1376,7 +1383,10 @@ class MrsalAsyncAMQP(Mrsal):
 			# Lost in setup or in the loop. A robust connection mid-reconnect still
 			# reports is_closed=False, so _ensure_async_connection would reuse it;
 			# drop the handles (without signalling a stop) so the retry connects fresh.
+			# A stop already requested ends here instead of waiting out a backoff.
 			await self._close_handles()
+			if self._stop_event.is_set():
+				return
 			raise
 
 	async def _prepare_consumer_async(
@@ -1519,14 +1529,7 @@ class MrsalAsyncAMQP(Mrsal):
 			drain_timeout: float | None,
 	) -> None:
 		"""Drive the async consume loop using a prepared ``queue``/``runtime_config``."""
-		# Lifecycle primitives are created here (not in __init__) because asyncio.Event
-		# needs to bind to a running loop; start_consumer is the first point we have one.
-		# Lazy creation also preserves a stop() that arrived during tenacity exponential
-		# backoff: if the previous attempt set the event and is being retried, we keep
-		# the set state instead of clobbering it with a fresh unset Event.
 		_log = self._logger or log
-		if self._stop_event is None:
-			self._stop_event = asyncio.Event()
 		if self._inflight_tasks is None:
 			self._inflight_tasks = set()
 		if max_concurrent_tasks is not None and max_concurrent_tasks > 0:
