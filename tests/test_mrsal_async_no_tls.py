@@ -6,6 +6,7 @@ import pytest
 from aio_pika.exceptions import AuthenticationError, ChannelInvalidStateError, DeliveryError
 from aio_pika.tools import CallbackCollection
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from mrsal import config
 from mrsal.amqp import async_amqp, subclass
@@ -690,6 +691,8 @@ class _BlockingQueueIterator:
 
 	Models an idle aio-pika queue with no pending deliveries.
 	"""
+	consumer_tag = 'ctag-test'
+
 	def __init__(self):
 		self._closed = asyncio.Event()
 		# Set once the consumer waits for a delivery on the idle queue.
@@ -1154,6 +1157,62 @@ def test_async_class_is_still_importable_from_subclass():
 	assert 'MrsalAsyncAMQP' in subclass.__all__
 	assert all(hasattr(subclass, name) for name in subclass.__all__)
 	assert async_amqp.log.name == 'mrsal.amqp.subclass'
+
+
+# --- Broker-side consumer cancel (#109) ---------------------------------------
+
+def _watch_consumer_tag(harness, monkeypatch):
+	"""Point the old channel at an aiormq-like channel whose consumers include the
+	iterator's tag, and check it every 10ms. Returns that consumers dict."""
+	consumers = {_BlockingQueueIterator.consumer_tag: object()}
+	harness.old_channel.get_underlay_channel = AsyncMock(return_value=SimpleNamespace(consumers=consumers))
+	monkeypatch.setattr(harness.consumer, 'consumer_check_interval', 0.01)
+	return consumers
+
+
+@pytest.mark.asyncio
+async def test_broker_cancel_rebuilds_the_consumer(amqp_consumer, monkeypatch):
+	"""#109: a server-side Basic.Cancel only drops the tag from the channel's
+	consumers; the channel stays open and the iterator waits forever. The tag
+	check must end the loop and let the retry rebuild the consumer."""
+	harness = _RebuildHarness(amqp_consumer, monkeypatch, old_iterator=_BlockingQueueIterator())
+	consumers = _watch_consumer_tag(harness, monkeypatch)
+	consumer_task = harness.start()
+	await harness.wait_consuming()
+
+	consumers.clear()
+	await asyncio.wait_for(consumer_task, timeout=1.0)
+
+	harness.assert_rebuilt()
+
+
+@pytest.mark.asyncio
+async def test_stop_wins_over_a_broker_cancel(amqp_consumer, monkeypatch):
+	"""A cancel seen together with a stop ends the consumer; no rebuild."""
+	harness = _RebuildHarness(amqp_consumer, monkeypatch, old_iterator=_BlockingQueueIterator())
+	consumers = _watch_consumer_tag(harness, monkeypatch)
+	consumer_task = harness.start()
+	await harness.wait_consuming()
+
+	harness.consumer._stop_event.set()
+	consumers.clear()
+	await asyncio.wait_for(consumer_task, timeout=1.0)
+
+	harness.consumer.setup_async_connection.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_failing_cancel_check_is_a_connection_loss(amqp_consumer, monkeypatch):
+	"""If the tag check itself fails because the channel died, that error reaches
+	the retry and the consumer is rebuilt; the check does not die silently."""
+	harness = _RebuildHarness(amqp_consumer, monkeypatch, old_iterator=_BlockingQueueIterator())
+	_watch_consumer_tag(harness, monkeypatch)
+	harness.old_channel.get_underlay_channel.side_effect = ChannelInvalidStateError('No active transport in channel')
+	consumer_task = harness.start()
+
+	await asyncio.wait_for(consumer_task, timeout=1.0)
+
+	harness.assert_rebuilt()
 
 
 # --- DLX publish failure (#105) -----------------------------------------------

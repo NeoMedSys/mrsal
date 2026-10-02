@@ -3,7 +3,7 @@ import json
 import logging
 import time
 from datetime import timedelta
-from mrsal.exceptions import MrsalAbortedSetup, MrsalDLXPublishTimeout, MrsalNoAsyncioLoopError
+from mrsal.exceptions import MrsalAbortedSetup, MrsalConsumerCancelled, MrsalDLXPublishTimeout, MrsalNoAsyncioLoopError
 from pika.exceptions import (
 		AMQPConnectionError,
 		ChannelClosedByBroker,
@@ -46,6 +46,8 @@ class MrsalAsyncAMQP(Mrsal):
 
 	# Seconds the DLX publish may take before the delivery is rejected instead (#105).
 	dlx_publish_timeout: float = config.DEFAULT_DLX_PUBLISH_TIMEOUT_SEC
+	# Seconds between checks that the broker has not cancelled the consumer (#109).
+	consumer_check_interval: float = config.DEFAULT_CONSUMER_CHECK_INTERVAL_SEC
 	_dlx_publish_channel: Any = field(init=False, default=None)
 	_stop_event: asyncio.Event | None = field(init=False, default=None)
 	# aio_pika.queue.QueueIterator at runtime; typed as object to avoid importing
@@ -363,7 +365,9 @@ class MrsalAsyncAMQP(Mrsal):
 
 		Runs until ``stop()`` / ``close()``. A lost connection or channel ends the
 		consume loop and the retry rebuilds connection, channel, topology and
-		consumer with exponential backoff (2s up to 60s). The retry has no stop
+		consumer with exponential backoff (2s up to 60s). So does a broker-side
+		consumer cancel (``MrsalConsumerCancelled``, e.g. the queue was deleted),
+		detected within ``consumer_check_interval`` seconds. The retry has no stop
 		condition: against a permanently unreachable broker it retries forever,
 		logging each attempt at WARNING. That suits a long-running service, which
 		should alert on those warnings rather than expect ``start_consumer`` to raise.
@@ -667,35 +671,42 @@ class MrsalAsyncAMQP(Mrsal):
 			# be left mid-cancel.
 			async with queue.iterator(no_ack=auto_ack) as it:
 				self._consumer_iterator = it
-				async for message in self._until_connection_lost(it=it, connection_lost=connection_lost, stopped=stopped):
-					# Stop check runs BEFORE processing the message we just pulled.
-					# Trade-off: a stop arriving between pulls leaves the just-pulled
-					# message unacked, which the broker redelivers on consumer cancel.
-					# Alternative (process-then-check) would risk an unbounded delay
-					# before stop() takes effect when callbacks are slow.
-					if self._stop_event.is_set():
-						break
-					if message is None:
-						continue
-
-					if semaphore is None:
-						# Sequential path -- preserves prior behaviour exactly.
-						await self._handle_message(message, runtime_config)
-					else:
-						# Bounded concurrent path. acquire() applies back-pressure so the
-						# iterator stops pulling new messages once max_concurrent_tasks
-						# are in flight, even if prefetch_count is larger.
-						await semaphore.acquire()
+				consumer_cancelled = asyncio.ensure_future(self._wait_consumer_cancelled(channel=channel, it=it))
+				try:
+					async for message in self._until_connection_lost(
+							it=it, connection_lost=connection_lost, stopped=stopped,
+							consumer_cancelled=consumer_cancelled):
+						# Stop check runs BEFORE processing the message we just pulled.
+						# Trade-off: a stop arriving between pulls leaves the just-pulled
+						# message unacked, which the broker redelivers on consumer cancel.
+						# Alternative (process-then-check) would risk an unbounded delay
+						# before stop() takes effect when callbacks are slow.
 						if self._stop_event.is_set():
-							semaphore.release()
 							break
-						task = asyncio.create_task(
-							self._handle_message_with_release(message, runtime_config, semaphore)
-						)
-						self._inflight_tasks.add(task)
-						# Keeps the in-flight set bounded, and turns a task's connection
-						# error into a connection loss.
-						task.add_done_callback(_on_task_done)
+						if message is None:
+							continue
+
+						if semaphore is None:
+							# Sequential path -- preserves prior behaviour exactly.
+							await self._handle_message(message, runtime_config)
+						else:
+							# Bounded concurrent path. acquire() applies back-pressure so the
+							# iterator stops pulling new messages once max_concurrent_tasks
+							# are in flight, even if prefetch_count is larger.
+							await semaphore.acquire()
+							if self._stop_event.is_set():
+								semaphore.release()
+								break
+							task = asyncio.create_task(
+								self._handle_message_with_release(message, runtime_config, semaphore)
+							)
+							self._inflight_tasks.add(task)
+							# Keeps the in-flight set bounded, and turns a task's connection
+							# error into a connection loss.
+							task.add_done_callback(_on_task_done)
+				finally:
+					consumer_cancelled.cancel()
+					await asyncio.gather(consumer_cancelled, return_exceptions=True)
 		finally:
 			stopped.cancel()
 			self._consumer_iterator = None
@@ -725,25 +736,48 @@ class MrsalAsyncAMQP(Mrsal):
 			connection.close_callbacks.discard(_mark_lost)
 			channel.close_callbacks.discard(_mark_lost)
 
-	@staticmethod
-	async def _until_connection_lost(it, connection_lost: asyncio.Future, stopped: asyncio.Future):
-		"""Yield from the queue iterator until it ends, a stop, or a connection loss.
+	async def _wait_consumer_cancelled(self, channel, it) -> str:
+		"""Return the consumer tag once the broker has cancelled ``it``'s consumer (#109).
 
-		Returns on a stop (``stop()`` / ``close()``), which wins over a loss
-		seen at the same time. Raises ``ConnectionError`` (retriable by
+		A server-side ``Basic.Cancel`` (queue deleted, node failover) only drops
+		the consumer tag from aiormq's ``channel.consumers``: the channel stays
+		open, no close callback fires, and the iterator waits forever. aiormq
+		offers no hook for it, so the tag is checked every
+		``consumer_check_interval`` seconds.
+		"""
+		# Read once: closing the iterator (after the cancel) deletes its tag.
+		consumer_tag = it.consumer_tag
+		while True:
+			await asyncio.sleep(self.consumer_check_interval)
+			underlay = await channel.get_underlay_channel()
+			if consumer_tag not in underlay.consumers:
+				return consumer_tag
+
+	@staticmethod
+	async def _until_connection_lost(it, connection_lost: asyncio.Future, stopped: asyncio.Future,
+									consumer_cancelled: asyncio.Future):
+		"""Yield from the queue iterator until it ends, a stop, a connection loss,
+		or a broker-side consumer cancel.
+
+		Returns on a stop (``stop()`` / ``close()``), which wins over a loss or a
+		cancel seen at the same time. Raises ``ConnectionError`` (retriable by
 		``start_consumer``) when ``connection_lost`` resolves while waiting for
-		the next message.
+		the next message, and ``MrsalConsumerCancelled`` (a ``ConnectionError``)
+		when ``consumer_cancelled`` does.
 		"""
 		while True:
 			next_message = asyncio.ensure_future(it.__anext__())
-			await asyncio.wait({next_message, connection_lost, stopped}, return_when=asyncio.FIRST_COMPLETED)
+			await asyncio.wait({next_message, connection_lost, stopped, consumer_cancelled}, return_when=asyncio.FIRST_COMPLETED)
 			if not next_message.done():
 				next_message.cancel()
 				# Own the cancelled pull: its close() on a dead channel may raise.
 				await asyncio.gather(next_message, return_exceptions=True)
 				if stopped.done():
 					return
-				raise ConnectionError(f"Consumer connection lost: {connection_lost.result()!r}")
+				if connection_lost.done():
+					raise ConnectionError(f"Consumer connection lost: {connection_lost.result()!r}")
+				# result() re-raises if the check itself failed (e.g. the channel died under it).
+				raise MrsalConsumerCancelled(f"Broker cancelled consumer {consumer_cancelled.result()!r}")
 			try:
 				message = next_message.result()
 			except StopAsyncIteration:

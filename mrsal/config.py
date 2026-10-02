@@ -27,6 +27,9 @@ DEFAULT_RETRY_BACKOFF_MAX_MIN: int = 60  # 1 hour
 # Upper bound on the async DLX publish (open channel + passive exchange check +
 # publisher confirm). Well under RabbitMQ's default consumer_timeout (30 min).
 DEFAULT_DLX_PUBLISH_TIMEOUT_SEC: float = 30.0
+# How often the async consumer checks that the broker has not cancelled it
+# (Basic.Cancel, e.g. its queue was deleted). Bounds the detection delay.
+DEFAULT_CONSUMER_CHECK_INTERVAL_SEC: float = 5.0
 
 # Naming convention for the two-queue retry topology. The same suffix is
 # applied to both the DLX exchange name and the .dlx queue name (and similarly

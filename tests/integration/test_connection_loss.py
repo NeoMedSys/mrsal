@@ -265,3 +265,55 @@ async def test_rebuild_after_timed_out_closes_leaves_one_consumer(vhost, monkeyp
         assert len(connections) == 1
     finally:
         await runner.stop()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_async_consumer_resumes_after_broker_cancels_it(vhost):
+    """#109: deleting the queue makes the broker cancel the consumer
+    (Basic.Cancel). The channel stays open, so only the consumer-tag check
+    notices; the rebuild re-declares the queue and consumes again."""
+    exchange, queue, routing_key = "cl.cancel", "cl.cancel.q", "cl.cancel.rk"
+    received: list[bytes] = []
+    got_message = asyncio.Event()
+
+    async def on_message(message, properties, body):
+        received.append(body)
+        got_message.set()
+
+    consumer = MrsalAsyncAMQP(**broker_setup_args(virtual_host=vhost), consumer_check_interval=0.5)
+    runner = AsyncConsumerRunner(consumer)
+    runner.start(
+        queue_name=queue,
+        exchange_name=exchange,
+        exchange_type="direct",
+        routing_key=routing_key,
+        callback=on_message,
+        auto_ack=False,
+        dlx_enable=False,
+        enable_retry_cycles=False,
+        use_quorum_queues=False,
+    )
+
+    try:
+        await runner.wait_ready()
+        quoted = urllib.parse.quote(vhost, safe="")
+        await asyncio.to_thread(_mgmt_request, method="DELETE", path=f"queues/{quoted}/{queue}")
+
+        # The rebuild re-declares the queue; until then publishes are unroutable.
+        deadline = time.monotonic() + 30
+        while True:
+            assert time.monotonic() < deadline, "consumer did not come back after the cancel"
+            info = await asyncio.to_thread(_mgmt_request, method="GET", path=f"queues/{quoted}")
+            if any(q["name"] == queue and q.get("consumers") == 1 for q in info):
+                break
+            await asyncio.sleep(0.5)
+
+        with _channel(vhost=vhost) as ch:
+            ch.basic_publish(exchange=exchange, routing_key=routing_key, body=b"after-cancel")
+        await asyncio.wait_for(got_message.wait(), timeout=10)
+
+        assert received == [b"after-cancel"]
+        assert not runner._task.done(), "consumer task must still be running"
+    finally:
+        await runner.stop()
