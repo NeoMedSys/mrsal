@@ -1,8 +1,20 @@
 # MRSAL AMQP
-[![Release](https://img.shields.io/badge/release-3.16.0-blue.svg)](https://pypi.org/project/mrsal/) 
+[![Release](https://img.shields.io/badge/release-3.17.0-blue.svg)](https://pypi.org/project/mrsal/) 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%7C3.11%7C3.12-blue.svg)](https://www.python.org/downloads/)
 [![Mrsal Workflow](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml/badge.svg?branch=main)](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml)
 [![Coverage](https://neomedsys.github.io/mrsal/reports/badges/coverage-badge.svg)](https://neomedsys.github.io/mrsal/reports/coverage/htmlcov/)
+
+## New in 3.17.0
+
+- **The async consumer recovers when the broker cancels it** (#109). RabbitMQ
+  sends `Basic.Cancel` when a consumer's queue is deleted or its node fails over.
+  Before, the consumer stopped receiving messages without any error: the
+  channel stayed open and `start_consumer` neither returned nor raised. mrsal now
+  checks every `MrsalAsyncAMQP(consumer_check_interval=5.0)` seconds (must be
+  > 0) that the broker still knows the consumer. When it does not, the loop raises
+  `MrsalConsumerCancelled` (a `ConnectionError`) and the retry rebuilds the
+  consumer as for a lost connection, re-declaring its queue. Default
+  `config.DEFAULT_CONSUMER_CHECK_INTERVAL_SEC`.
 
 ## Changes in 3.16.0
 
