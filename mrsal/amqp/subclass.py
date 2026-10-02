@@ -25,7 +25,7 @@ from aio_pika import connect_robust, Message
 from aio_pika.exceptions import AuthenticationError
 from dataclasses import field
 from typing import Any, Callable, Literal, Sequence, Type
-from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, retry_if_exception_type, retry_if_not_exception_type, before_sleep_log
+from tenacity import AsyncRetrying, RetryCallState, retry, stop_after_attempt, wait_fixed, wait_exponential, retry_if_exception_type, retry_if_not_exception_type, before_sleep_log
 from pydantic import ConfigDict, ValidationError
 from pydantic.dataclasses import dataclass
 
@@ -956,6 +956,19 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 		)
 
 
+# MrsalAsyncAMQP.start_consumer rebuilds on a lost connection. Refused
+# credentials are a builtin ConnectionError too, but retrying cannot fix them:
+# they raise at once, as before #105.
+_CONSUMER_RETRY = retry_if_exception_type((
+	AMQPConnectionError,
+	ChannelClosedByBroker,
+	ConnectionClosedByBroker,
+	StreamLostError,
+	*_ASYNC_CONNECTION_ERRORS,
+	)) & retry_if_not_exception_type(AuthenticationError)
+_CONSUMER_RETRY_WAIT = wait_exponential(multiplier=1, min=2, max=60)
+
+
 @dataclass(config=ConfigDict(arbitrary_types_allowed=True))
 class MrsalAsyncAMQP(Mrsal):
 	"""Handles asynchronous connection with RabbitMQ using aio-pika."""
@@ -1245,19 +1258,6 @@ class MrsalAsyncAMQP(Mrsal):
 		finally:
 			semaphore.release()
 
-	@retry(
-		# Refused credentials are a builtin ConnectionError too, but retrying
-		# cannot fix them: they raise at once, as before #105.
-		retry=retry_if_exception_type((
-			AMQPConnectionError,
-			ChannelClosedByBroker,
-			ConnectionClosedByBroker,
-			StreamLostError,
-			*_ASYNC_CONNECTION_ERRORS,
-			)) & retry_if_not_exception_type(AuthenticationError),
-		wait=wait_exponential(multiplier=1, min=2, max=60),
-		before_sleep=before_sleep_log(log, WARNING)
-		)
 	async def start_consumer(
 			self,
 			queue_name: str,
@@ -1289,15 +1289,14 @@ class MrsalAsyncAMQP(Mrsal):
 		"""Start the async consumer.
 
 		Runs until ``stop()`` / ``close()``. A lost connection or channel ends the
-		consume loop and the ``@retry`` rebuilds connection, channel, topology and
+		consume loop and the retry rebuilds connection, channel, topology and
 		consumer with exponential backoff (2s up to 60s). The retry has no stop
 		condition: against a permanently unreachable broker it retries forever,
 		logging each attempt at WARNING. That suits a long-running service, which
 		should alert on those warnings rather than expect ``start_consumer`` to raise.
 		Refused credentials (``aio_pika.exceptions.AuthenticationError``) are not
 		retried and raise at once.
-		A ``stop()`` / ``close()`` during a backoff is seen when that sleep ends, so
-		``start_consumer`` can take up to 60s to return.
+		A ``stop()`` / ``close()`` during a backoff ends it at once.
 
 		:param str queue_name: The queue to consume from
 		:param Callable callback: Async callable invoked as ``callback(*callback_args, message, properties, body)``.
@@ -1338,64 +1337,84 @@ class MrsalAsyncAMQP(Mrsal):
 			the timeout fires, remaining tasks are cancelled and the consumer returns; messages
 			handled by cancelled tasks will be redelivered by the broker.
 		"""
-		# Created here, not in the loop, so stop() / close() can land while the
-		# retry is still trying to connect (the loop may never have run). A stop
-		# that landed during the retry backoff ends the consumer here, before a
-		# new connection is opened.
+		# Created here, before the first attempt, so stop() / close() can land
+		# while the retry is still trying to connect (the loop may never have run).
 		_log = self._logger or log
 		if self._stop_event is None:
 			self._stop_event = asyncio.Event()
-		if self._stop_event.is_set():
-			_log.info(f"start_consumer({queue_name}): stop() / close() already called on this instance; not starting.")
-			return
+
+		def _log_retry(retry_state: RetryCallState) -> None:
+			_log.warning(
+				f"start_consumer({queue_name}): retrying in {retry_state.upcoming_sleep:.1f}s "
+				f"after {retry_state.outcome.exception()!r}"
+			)
+
+		async for attempt in AsyncRetrying(
+				retry=_CONSUMER_RETRY,
+				wait=_CONSUMER_RETRY_WAIT,
+				before_sleep=_log_retry,
+				sleep=self._sleep_unless_stopped):
+			with attempt:
+				# A stop that landed during the backoff ends the consumer here,
+				# before a new connection is opened.
+				if self._stop_event.is_set():
+					_log.info(f"start_consumer({queue_name}): stop() / close() already called on this instance; not starting.")
+					return
+				try:
+					queue, runtime_config = await self._prepare_consumer_async(
+						queue_name=queue_name,
+						callback=callback,
+						callback_args=callback_args,
+						auto_ack=auto_ack,
+						auto_declare=auto_declare,
+						exchange_name=exchange_name,
+						exchange_type=exchange_type,
+						routing_key=routing_key,
+						payload_model=payload_model,
+						dlx_enable=dlx_enable,
+						dlx_exchange_name=dlx_exchange_name,
+						dlx_routing_key=dlx_routing_key,
+						use_quorum_queues=use_quorum_queues,
+						enable_retry_cycles=enable_retry_cycles,
+						retry_cycle_interval=retry_cycle_interval,
+						max_retry_time_limit=max_retry_time_limit,
+						retry_backoff=retry_backoff,
+						retry_backoff_max=retry_backoff_max,
+						max_queue_length=max_queue_length,
+						max_queue_length_bytes=max_queue_length_bytes,
+						queue_overflow=queue_overflow,
+						single_active_consumer=single_active_consumer,
+						lazy_queue=lazy_queue,
+						max_concurrent_tasks=max_concurrent_tasks,
+					)
+					# A close() that landed while prepare was connecting could not close a
+					# connection that was not assigned yet; close it now.
+					if self._stop_event.is_set():
+						await self._close_handles()
+						return
+					await self._run_consume_loop_async(
+						queue=queue,
+						runtime_config=runtime_config,
+						auto_ack=auto_ack,
+						max_concurrent_tasks=max_concurrent_tasks,
+						drain_timeout=drain_timeout,
+					)
+				except _ASYNC_CONNECTION_ERRORS:
+					# Lost in setup or in the loop. A robust connection mid-reconnect still
+					# reports is_closed=False, so _ensure_async_connection would reuse it;
+					# drop the handles (without signalling a stop) so the retry connects fresh.
+					# A stop already requested ends here instead of waiting out a backoff.
+					await self._close_handles()
+					if self._stop_event.is_set():
+						return
+					raise
+
+	async def _sleep_unless_stopped(self, seconds: float) -> None:
+		"""start_consumer's retry backoff; ends early on ``stop()`` / ``close()``."""
 		try:
-			queue, runtime_config = await self._prepare_consumer_async(
-				queue_name=queue_name,
-				callback=callback,
-				callback_args=callback_args,
-				auto_ack=auto_ack,
-				auto_declare=auto_declare,
-				exchange_name=exchange_name,
-				exchange_type=exchange_type,
-				routing_key=routing_key,
-				payload_model=payload_model,
-				dlx_enable=dlx_enable,
-				dlx_exchange_name=dlx_exchange_name,
-				dlx_routing_key=dlx_routing_key,
-				use_quorum_queues=use_quorum_queues,
-				enable_retry_cycles=enable_retry_cycles,
-				retry_cycle_interval=retry_cycle_interval,
-				max_retry_time_limit=max_retry_time_limit,
-				retry_backoff=retry_backoff,
-				retry_backoff_max=retry_backoff_max,
-				max_queue_length=max_queue_length,
-				max_queue_length_bytes=max_queue_length_bytes,
-				queue_overflow=queue_overflow,
-				single_active_consumer=single_active_consumer,
-				lazy_queue=lazy_queue,
-				max_concurrent_tasks=max_concurrent_tasks,
-			)
-			# A close() that landed while prepare was connecting could not close a
-			# connection that was not assigned yet; close it now.
-			if self._stop_event.is_set():
-				await self._close_handles()
-				return
-			await self._run_consume_loop_async(
-				queue=queue,
-				runtime_config=runtime_config,
-				auto_ack=auto_ack,
-				max_concurrent_tasks=max_concurrent_tasks,
-				drain_timeout=drain_timeout,
-			)
-		except _ASYNC_CONNECTION_ERRORS:
-			# Lost in setup or in the loop. A robust connection mid-reconnect still
-			# reports is_closed=False, so _ensure_async_connection would reuse it;
-			# drop the handles (without signalling a stop) so the retry connects fresh.
-			# A stop already requested ends here instead of waiting out a backoff.
-			await self._close_handles()
-			if self._stop_event.is_set():
-				return
-			raise
+			await asyncio.wait_for(self._stop_event.wait(), timeout=seconds)
+		except asyncio.TimeoutError:
+			pass
 
 	async def _prepare_consumer_async(
 			self,

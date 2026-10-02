@@ -6,6 +6,7 @@ from aio_pika.tools import CallbackCollection
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from mrsal import config
+from mrsal.amqp import subclass
 from mrsal.amqp.subclass import MrsalAsyncAMQP
 from mrsal.config import AioPikaAttributes
 from mrsal.exceptions import MrsalAbortedSetup, MrsalSetupError
@@ -771,7 +772,7 @@ class _RebuildHarness:
 	rebuilt connection serving an empty queue so a retried consumer returns."""
 
 	def __init__(self, consumer, monkeypatch, old_iterator):
-		monkeypatch.setattr(MrsalAsyncAMQP.start_consumer.retry, 'wait', wait_none())
+		monkeypatch.setattr(subclass, '_CONSUMER_RETRY_WAIT', wait_none())
 		self.old_connection, self.old_channel = consumer._connection, consumer._channel
 		self.old_iterator = old_iterator
 		# The real collection type aio-pika fires, called the way aio-pika calls it.
@@ -935,8 +936,8 @@ async def test_connection_error_during_redeclare_rebuilds_the_connection(amqp_co
 @pytest.mark.asyncio
 async def test_stop_during_backoff_against_unreachable_broker_returns(monkeypatch):
 	"""The broker is down from the start, so the loop never runs; stop() during
-	the retry backoff must still end start_consumer."""
-	monkeypatch.setattr(MrsalAsyncAMQP.start_consumer.retry, 'wait', wait_fixed(0.05))
+	the retry backoff must end start_consumer at once, not after the 10s sleep."""
+	monkeypatch.setattr(subclass, '_CONSUMER_RETRY_WAIT', wait_fixed(10))
 	consumer = MrsalAsyncAMQP(**SETUP_ARGS)
 	attempted = asyncio.Event()
 
@@ -962,7 +963,7 @@ async def test_close_during_backoff_does_not_open_a_new_connection(amqp_consumer
 	"""close() while the retry is backing off after a loss: the retry must not
 	open a fresh connection that nobody closes."""
 	harness = _RebuildHarness(amqp_consumer, monkeypatch, old_iterator=_BlockingQueueIterator())
-	monkeypatch.setattr(MrsalAsyncAMQP.start_consumer.retry, 'wait', wait_fixed(0.2))
+	monkeypatch.setattr(subclass, '_CONSUMER_RETRY_WAIT', wait_fixed(10))
 	consumer_task = harness.start()
 	await harness.wait_consuming()
 
@@ -992,7 +993,7 @@ async def test_iterator_exit_raising_during_local_close_does_not_reconnect(amqp_
 	turn the deliberate shutdown into a reconnect, nor wait out a retry backoff
 	first: start_consumer returns at once."""
 	harness = _RebuildHarness(amqp_consumer, monkeypatch, old_iterator=_ExitRaisesIterator())
-	monkeypatch.setattr(MrsalAsyncAMQP.start_consumer.retry, 'wait', wait_fixed(10))
+	monkeypatch.setattr(subclass, '_CONSUMER_RETRY_WAIT', wait_fixed(10))
 	consumer_task = harness.start()
 	await harness.wait_consuming()
 
@@ -1057,7 +1058,7 @@ async def test_failed_auto_declare_does_not_stop_the_instance(amqp_consumer, mon
 async def test_refused_credentials_raise_without_retry(monkeypatch):
 	"""Refused credentials are a ConnectionError subclass, but retrying cannot fix
 	them: start_consumer raises at once instead of retrying forever."""
-	monkeypatch.setattr(MrsalAsyncAMQP.start_consumer.retry, 'wait', wait_fixed(10))
+	monkeypatch.setattr(subclass, '_CONSUMER_RETRY_WAIT', wait_fixed(10))
 	consumer = MrsalAsyncAMQP(**SETUP_ARGS)
 	consumer.setup_async_connection = AsyncMock(side_effect=AuthenticationError('ACCESS_REFUSED'))
 
@@ -1088,7 +1089,7 @@ async def test_topology_mismatch_aborts_instead_of_retrying(amqp_consumer, monke
 	"""A 406 on the DLX exchange closes the channel; the next declare on it raises
 	ChannelInvalidStateError on a live connection. That must stay MrsalAbortedSetup,
 	not become an endless retry of a permanent mismatch."""
-	monkeypatch.setattr(MrsalAsyncAMQP.start_consumer.retry, 'wait', wait_none())
+	monkeypatch.setattr(subclass, '_CONSUMER_RETRY_WAIT', wait_none())
 	consumer = amqp_consumer
 	consumer.setup_async_connection = AsyncMock()
 	consumer._channel.declare_exchange.side_effect = aiormq.exceptions.ChannelPreconditionFailed('PRECONDITION_FAILED')
