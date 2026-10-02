@@ -983,6 +983,47 @@ async def test_iterator_exit_raising_during_local_close_does_not_reconnect(amqp_
 	harness.consumer.setup_async_connection.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_connection_error_after_stop_returns_without_backoff(amqp_consumer, monkeypatch):
+	"""A connection error raised while a stop is already set ends start_consumer
+	at once instead of waiting out a retry backoff first."""
+	harness = _RebuildHarness(amqp_consumer, monkeypatch, old_iterator=_ExitRaisesIterator())
+	monkeypatch.setattr(MrsalAsyncAMQP.start_consumer.retry, 'wait', wait_fixed(10))
+	consumer_task = harness.start()
+	await asyncio.sleep(0.05)
+
+	await harness.consumer.close()
+	await asyncio.wait_for(consumer_task, timeout=1.0)
+
+	harness.consumer.setup_async_connection.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_close_while_connecting_closes_the_new_connection(amqp_consumer, monkeypatch):
+	"""close() while prepare is still connecting: the connection assigned after
+	the close must be closed, not left open by a consumer that never runs."""
+	harness = _RebuildHarness(amqp_consumer, monkeypatch, old_iterator=_BlockingQueueIterator())
+	connected = asyncio.Event()
+
+	async def _slow_reconnect():
+		await connected.wait()
+		harness.consumer._connection = harness.new_connection
+	harness.consumer.setup_async_connection = AsyncMock(side_effect=_slow_reconnect)
+	harness.consumer._connection = None
+	harness.consumer._channel = None
+
+	consumer_task = harness.start()
+	await asyncio.sleep(0.05)
+	await harness.consumer.close()
+	connected.set()
+	await asyncio.wait_for(consumer_task, timeout=1.0)
+
+	harness.consumer.setup_async_connection.assert_awaited_once()
+	harness.new_connection.close.assert_awaited()
+	harness.new_queue.iterator.assert_not_called()
+	assert harness.consumer._connection is None
+
+
 # --- DLX publish failure (#105) -----------------------------------------------
 
 DLX_FAILURE_ARGS = {

@@ -23,6 +23,7 @@ import base64
 import json
 import os
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from contextlib import contextmanager
@@ -68,13 +69,15 @@ def vhost(unique_suffix):
     name = f"mrsal-it-cl-{unique_suffix}"
     quoted = urllib.parse.quote(name, safe="")
     _mgmt_request(method="PUT", path=f"vhosts/{quoted}")
-    _mgmt_request(
-        method="PUT",
-        path=f"permissions/{quoted}/{urllib.parse.quote(BROKER_USER, safe='')}",
-        body={"configure": ".*", "write": ".*", "read": ".*"},
-    )
-    yield name
-    _mgmt_request(method="DELETE", path=f"vhosts/{quoted}")
+    try:
+        _mgmt_request(
+            method="PUT",
+            path=f"permissions/{quoted}/{urllib.parse.quote(BROKER_USER, safe='')}",
+            body={"configure": ".*", "write": ".*", "read": ".*"},
+        )
+        yield name
+    finally:
+        _mgmt_request(method="DELETE", path=f"vhosts/{quoted}")
 
 
 def force_close_vhost_connections(vhost: str, timeout: float = 15.0) -> int:
@@ -86,14 +89,22 @@ def force_close_vhost_connections(vhost: str, timeout: float = 15.0) -> int:
     path = f"vhosts/{urllib.parse.quote(vhost, safe='')}/connections"
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        connections = _mgmt_request(method="GET", path=path)
-        if connections:
-            for connection in connections:
-                name = urllib.parse.quote(connection["name"], safe="")
+        closed = 0
+        for connection in _mgmt_request(method="GET", path=path):
+            name = urllib.parse.quote(connection["name"], safe="")
+            try:
                 _mgmt_request(method="DELETE", path=f"connections/{name}")
-            return len(connections)
+            except urllib.error.HTTPError as e:
+                # Listed but already closed: one of the test's own short-lived
+                # setup connections, gone before the listing caught up.
+                if e.code != 404:
+                    raise
+            else:
+                closed += 1
+        if closed:
+            return closed
         time.sleep(0.25)
-    raise AssertionError(f"No connections listed in vhost {vhost} within {timeout}s")
+    raise AssertionError(f"No open connections listed in vhost {vhost} within {timeout}s")
 
 
 @contextmanager
