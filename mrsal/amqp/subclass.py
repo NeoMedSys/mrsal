@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import timedelta
 from functools import partial
-from mrsal.exceptions import MrsalAbortedSetup, MrsalNoAsyncioLoopError
+from mrsal.exceptions import MrsalAbortedSetup, MrsalDLXPublishTimeout, MrsalNoAsyncioLoopError
 from logging import WARNING
 from pika.exceptions import (
 		AMQPConnectionError,
@@ -973,6 +973,8 @@ _CONSUMER_RETRY_WAIT = wait_exponential(multiplier=1, min=2, max=60)
 class MrsalAsyncAMQP(Mrsal):
 	"""Handles asynchronous connection with RabbitMQ using aio-pika."""
 
+	# Seconds the DLX publish may take before the delivery is rejected instead (#105).
+	dlx_publish_timeout: float = config.DEFAULT_DLX_PUBLISH_TIMEOUT_SEC
 	_dlx_publish_channel: Any = field(init=False, default=None)
 	_stop_event: asyncio.Event | None = field(init=False, default=None)
 	# aio_pika.queue.QueueIterator at runtime; typed as object to avoid importing
@@ -1694,7 +1696,10 @@ class MrsalAsyncAMQP(Mrsal):
 		a dedicated channel, so broker rejection or connection loss raises and
 		the original message is rejected (not acked). If the process crashes
 		between the confirmed DLX publish and the original ack, the message
-		will be redelivered and re-published to DLX. Consumers must be idempotent.
+		will be redelivered and re-published to DLX. A ``dlx_publish_timeout``
+		gives up waiting for the confirm, not the publish: if the broker did
+		accept it, the rejected original is dead-lettered too, leaving one copy
+		with retry headers and one without. Consumers must be idempotent.
 		"""
 		_log = self._logger or log
 		msg_id = getattr(properties, 'message_id', 'unknown')
@@ -1726,6 +1731,11 @@ class MrsalAsyncAMQP(Mrsal):
 			# even when only the DLX channel died and no close callback fires.
 			_log.error(f"Failed to send message to DLX, connection lost; leaving unsettled for redelivery: {e} | message_id={msg_id} app_id={app_id} delivery_tag={message.delivery_tag} exchange={original_exchange} routing_key={original_routing_key}")
 			raise
+		except MrsalDLXPublishTimeout:
+			# Connection still up but the DLX publish never completed: settle the
+			# delivery so the prefetch slot frees (#105).
+			_log.error(f"DLX publish timed out after {self.dlx_publish_timeout}s; rejecting | message_id={msg_id} app_id={app_id} queue={queue_name} delivery_tag={message.delivery_tag} exchange={original_exchange} routing_key={original_routing_key}")
+			await message.reject(requeue=False)
 		except Exception as e:
 			_log.error(f"Failed to send message to DLX: {e} | message_id={msg_id} app_id={app_id} delivery_tag={message.delivery_tag} exchange={original_exchange} routing_key={original_routing_key}")
 			await message.reject(requeue=False)
@@ -1755,9 +1765,34 @@ class MrsalAsyncAMQP(Mrsal):
 		if expiration_ms is not None:
 			message.expiration = timedelta(milliseconds=expiration_ms)
 
-		await self._ensure_dlx_publish_channel()
-		exchange = await self._dlx_publish_channel.get_exchange(dlx_exchange)
-		await exchange.publish(message, routing_key=routing_key, mandatory=True)
+		async def _publish() -> None:
+			await self._ensure_dlx_publish_channel()
+			exchange = await self._dlx_publish_channel.get_exchange(dlx_exchange)
+			await exchange.publish(message, routing_key=routing_key, mandatory=True)
+
+		# Every step can wait forever (no confirm from the broker, stuck channel
+		# open); an unbounded wait leaves the delivery unacked and, with a small
+		# prefetch, stalls the consumer silently (#105).
+		try:
+			await asyncio.wait_for(_publish(), timeout=self.dlx_publish_timeout)
+		except asyncio.TimeoutError as e:
+			# The channel may be what is stuck: drop it so the next DLX publish
+			# opens a fresh one instead of waiting the full timeout again.
+			await self._drop_dlx_publish_channel()
+			raise MrsalDLXPublishTimeout(
+				f"DLX publish to {dlx_exchange} did not complete within {self.dlx_publish_timeout}s"
+			) from e
+
+	async def _drop_dlx_publish_channel(self) -> None:
+		"""Forget the DLX publish channel; close it, bounded, if it is still open."""
+		_log = self._logger or log
+		channel, self._dlx_publish_channel = self._dlx_publish_channel, None
+		if channel is None or channel.is_closed:
+			return
+		try:
+			await asyncio.wait_for(channel.close(), timeout=self.dlx_publish_timeout)
+		except Exception:
+			_log.debug("DLX publish channel close raised; ignoring.", exc_info=True)
 
 
 # How many times publish() retries across a dropped connection/channel before

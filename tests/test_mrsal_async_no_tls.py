@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 import aiormq
 import pytest
 from aio_pika.exceptions import AuthenticationError, ChannelInvalidStateError, DeliveryError
@@ -10,7 +11,8 @@ from mrsal import config
 from mrsal.amqp import subclass
 from mrsal.amqp.subclass import MrsalAsyncAMQP
 from mrsal.config import AioPikaAttributes
-from mrsal.exceptions import MrsalAbortedSetup, MrsalSetupError
+from mrsal.exceptions import MrsalAbortedSetup, MrsalDLXPublishTimeout, MrsalSetupError
+from mrsal.metrics import MetricsHooks
 from pydantic import ValidationError
 from tenacity import wait_fixed, wait_none
 
@@ -1192,3 +1194,196 @@ async def test_dlx_publish_broker_rejection_still_rejects(amqp_consumer):
 
 	mock_message.ack.assert_not_awaited()
 	mock_message.reject.assert_awaited_once_with(requeue=False)
+
+
+# --- DLX publish timeout (#105, M2) -------------------------------------------
+
+@pytest.mark.asyncio
+async def test_dlx_publish_never_confirming_times_out(amqp_consumer):
+	"""_publish_to_dlx must not wait forever for a publisher confirm."""
+	consumer = amqp_consumer
+	consumer.dlx_publish_timeout = 0.05
+	async def _never_confirms(*args, **kwargs):
+		await asyncio.Event().wait()
+
+	dlx_exchange = AsyncMock()
+	dlx_exchange.publish = AsyncMock(side_effect=_never_confirms)
+	dlx_channel = AsyncMock(is_closed=False)
+	dlx_channel.get_exchange = AsyncMock(return_value=dlx_exchange)
+	consumer._dlx_publish_channel = dlx_channel
+
+	# The outer wait_for is only a guard against hanging the suite; the
+	# timeout must come from dlx_publish_timeout, i.e. well before it.
+	start = time.monotonic()
+	with pytest.raises(MrsalDLXPublishTimeout):
+		await asyncio.wait_for(
+			consumer._publish_to_dlx(dlx_exchange='x.dlx', routing_key='rk', body=b'{}', properties={}),
+			timeout=1.0,
+		)
+	assert time.monotonic() - start < 0.5
+
+
+@pytest.mark.asyncio
+async def test_hung_dlx_publish_rejects_delivery_and_next_message_is_processed(amqp_consumer):
+	"""Spec M2 acceptance: the DLX publish never confirms -> the delivery is
+	rejected within the timeout and the next message is still processed."""
+	consumer = amqp_consumer
+	consumer.dlx_publish_timeout = 0.05
+
+	failing = AsyncMock(body=b'{"n": 1}', ack=AsyncMock(), reject=AsyncMock())
+	failing.configure_mock(app_id="test_app", message_id="m1", headers=None, redelivered=False, routing_key="rk", delivery_tag=1)
+	healthy = AsyncMock(body=b'{"n": 2}', ack=AsyncMock(), reject=AsyncMock())
+	healthy.configure_mock(app_id="test_app", message_id="m2", headers=None, redelivered=False, routing_key="rk", delivery_tag=2)
+	mock_queue, _ = make_queue_with_messages([failing, healthy])
+	consumer._channel.declare_queue.return_value = mock_queue
+
+	async def callback(message, properties, body):
+		if body == b'{"n": 1}':
+			raise RuntimeError("boom")
+
+	# The DLX publish hangs forever: no confirm ever arrives.
+	async def _hang(*args, **kwargs):
+		await asyncio.Event().wait()
+
+	with patch.object(consumer, '_ensure_dlx_publish_channel', AsyncMock(side_effect=_hang)):
+		await asyncio.wait_for(consumer.start_consumer(
+			queue_name='test_q',
+			callback=callback,
+			routing_key='test_route',
+			exchange_name='test_x',
+			exchange_type='direct',
+			auto_ack=False,
+		), timeout=2.0)
+
+	failing.reject.assert_awaited_once_with(requeue=False)
+	failing.ack.assert_not_awaited()
+	healthy.ack.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('callback_fails', [False, True])
+async def test_on_consume_fires_after_delivery_is_settled(amqp_consumer, callback_fails):
+	"""Hosts use on_consume as the 'delivery settled' signal for stall detection,
+	so it must fire after the ack / DLX reject, never before."""
+	consumer = amqp_consumer
+	consumer.dlx_publish_timeout = 0.05
+	events: list[str] = []
+	consumer.set_metrics_hooks(MetricsHooks(on_consume=lambda ok, duration: events.append('on_consume')))
+
+	message = AsyncMock(body=b'{}')
+	message.ack = AsyncMock(side_effect=lambda *a, **k: events.append('ack'))
+	message.reject = AsyncMock(side_effect=lambda *a, **k: events.append('reject'))
+	message.configure_mock(app_id="test_app", message_id="m1", headers=None, redelivered=False, routing_key="rk", delivery_tag=1)
+	mock_queue, _ = make_queue_with_messages([message])
+	consumer._channel.declare_queue.return_value = mock_queue
+
+	async def callback(message, properties, body):
+		if callback_fails:
+			raise RuntimeError("boom")
+
+	async def _hang(*args, **kwargs):
+		await asyncio.Event().wait()
+
+	with patch.object(consumer, '_ensure_dlx_publish_channel', AsyncMock(side_effect=_hang)):
+		await asyncio.wait_for(consumer.start_consumer(
+			queue_name='test_q',
+			callback=callback,
+			routing_key='test_route',
+			exchange_name='test_x',
+			exchange_type='direct',
+			auto_ack=False,
+		), timeout=2.0)
+
+	assert events == (['reject', 'on_consume'] if callback_fails else ['ack', 'on_consume'])
+
+
+@pytest.mark.asyncio
+async def test_dlx_timeout_drops_the_channel_and_next_publish_opens_a_fresh_one(amqp_consumer):
+	"""107 review: a stuck DLX channel must not be reused for the next failure."""
+	consumer = amqp_consumer
+	consumer.dlx_publish_timeout = 0.05
+
+	async def _never_confirms(*args, **kwargs):
+		await asyncio.Event().wait()
+
+	stuck_exchange = AsyncMock()
+	stuck_exchange.publish = AsyncMock(side_effect=_never_confirms)
+	stuck_channel = AsyncMock(is_closed=False)
+	stuck_channel.get_exchange = AsyncMock(return_value=stuck_exchange)
+	consumer._dlx_publish_channel = stuck_channel
+
+	with pytest.raises(MrsalDLXPublishTimeout):
+		await consumer._publish_to_dlx(dlx_exchange='x.dlx', routing_key='rk', body=b'{}', properties={})
+
+	stuck_channel.close.assert_awaited_once()
+	assert consumer._dlx_publish_channel is None
+
+	fresh_exchange = AsyncMock()
+	fresh_channel = AsyncMock(is_closed=False)
+	fresh_channel.get_exchange = AsyncMock(return_value=fresh_exchange)
+	consumer._connection.channel = AsyncMock(return_value=fresh_channel)
+
+	await consumer._publish_to_dlx(dlx_exchange='x.dlx', routing_key='rk', body=b'{}', properties={})
+
+	consumer._connection.channel.assert_awaited_once_with(publisher_confirms=True)
+	fresh_exchange.publish.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_connection_error_from_dlx_publish_is_not_treated_as_a_timeout(amqp_consumer):
+	"""A ConnectionError inside the timeout wrapper comes out as itself, so the
+	connection-loss branch (re-raise, no reject) handles it, and the channel is
+	not dropped as if it were stuck."""
+	consumer = amqp_consumer
+	dlx_exchange = AsyncMock()
+	dlx_exchange.publish = AsyncMock(side_effect=ConnectionError('Broken pipe'))
+	dlx_channel = AsyncMock(is_closed=False)
+	dlx_channel.get_exchange = AsyncMock(return_value=dlx_exchange)
+	consumer._dlx_publish_channel = dlx_channel
+
+	with pytest.raises(ConnectionError):
+		await consumer._publish_to_dlx(dlx_exchange='x.dlx', routing_key='rk', body=b'{}', properties={})
+
+	assert consumer._dlx_publish_channel is dlx_channel
+	dlx_channel.close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_socket_timeout_from_ack_is_not_logged_as_a_dlx_publish_timeout(amqp_consumer, caplog):
+	"""107 review: on Python 3.11+ asyncio.TimeoutError is the builtin TimeoutError;
+	a socket timeout from ack() must take the generic branch, not the DLX-timeout one."""
+	consumer = amqp_consumer
+	mock_message = AsyncMock(reject=AsyncMock(), delivery_tag=5)
+	mock_message.ack = AsyncMock(side_effect=TimeoutError('socket timed out'))
+
+	with patch.object(consumer, '_handle_dlx_with_retry_cycle_async', AsyncMock()):
+		with caplog.at_level(logging.ERROR):
+			await consumer._async_publish_to_dlx_with_retry_cycle(
+				message=mock_message, properties=MagicMock(), **DLX_FAILURE_ARGS)
+
+	mock_message.reject.assert_awaited_once_with(requeue=False)
+	assert "DLX publish timed out" not in caplog.text
+	assert "Failed to send message to DLX" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_on_consume_fires_when_delivery_is_left_unsettled_on_connection_loss(amqp_consumer, monkeypatch):
+	"""on_consume also fires on the connection-loss path, where mrsal deliberately
+	leaves the delivery unsettled for broker redelivery and rebuilds."""
+	events: list[str] = []
+	amqp_consumer.set_metrics_hooks(MetricsHooks(on_consume=lambda ok, duration: events.append('on_consume')))
+
+	message = AsyncMock(body=b'{}')
+	message.ack = AsyncMock(side_effect=lambda *a, **k: events.append('ack'))
+	message.reject = AsyncMock(side_effect=lambda *a, **k: events.append('reject'))
+	message.configure_mock(app_id="a", message_id="m1", headers=None, redelivered=False, routing_key="rk", delivery_tag=1)
+	harness = _RebuildHarness(amqp_consumer, monkeypatch, old_iterator=_QueueThenBlock([message]))
+
+	async def failing_callback(message, properties, body):
+		raise RuntimeError("boom")
+
+	with patch.object(amqp_consumer, '_ensure_dlx_publish_channel', AsyncMock(side_effect=ConnectionError('Broken pipe'))):
+		await asyncio.wait_for(harness.start(callback=failing_callback, auto_ack=False, dlx_enable=True), timeout=1.0)
+
+	assert events == ['on_consume']
+	harness.assert_rebuilt()

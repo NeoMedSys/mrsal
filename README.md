@@ -1,9 +1,30 @@
 # MRSAL AMQP
-[![Release](https://img.shields.io/badge/release-3.14.0-blue.svg)](https://pypi.org/project/mrsal/) 
+[![Release](https://img.shields.io/badge/release-3.15.0-blue.svg)](https://pypi.org/project/mrsal/) 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%7C3.11%7C3.12-blue.svg)](https://www.python.org/downloads/)
 [![Mrsal Workflow](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml/badge.svg?branch=main)](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml)
 [![Coverage](https://neomedsys.github.io/mrsal/reports/badges/coverage-badge.svg)](https://neomedsys.github.io/mrsal/reports/coverage/htmlcov/)
 
+## New in 3.15.0
+
+- **`MrsalAsyncAMQP(dlx_publish_timeout=30.0)`** bounds the async DLX publish
+  (opening the DLX channel, the passive exchange check and the publisher
+  confirm). Before, a broker that never confirmed left the delivery unacked
+  forever and, with a small `prefetch_count`, the consumer stopped silently. On
+  timeout the delivery is rejected (`requeue=False`, so the queue's
+  dead-letter exchange parks it), the DLX channel is dropped so the next publish
+  opens a fresh one, and an ERROR is logged with the message id and queue. The
+  timeout covers the wait for the confirm, not the publish: if the broker did
+  accept it, the message can appear in the DLX twice (at-least-once; consumers
+  must be idempotent). Default `config.DEFAULT_DLX_PUBLISH_TIMEOUT_SEC`.
+- **`MetricsHooks.on_consume` fires after mrsal has finished with the delivery**:
+  acked, rejected / routed to DLX, or deliberately left unsettled on a lost
+  connection for the broker to redeliver. Hosts can use it to detect a
+  delivery that never finishes.
+- **Also in 3.13.2 (#105), async consumer behaviour on connection loss:** a
+  lost connection or channel ends the consume loop and `start_consumer`'s retry
+  rebuilds the connection, channel, topology and consumer (backoff 2s to 60s,
+  no retry limit), instead of relying on aio-pika's robust channel restore.
+  `close()` / `async with` now end a running consumer like `stop()`.
 ## Breaking changes in 3.14.0
 
 The async consumer now survives a broker restart or network cut (#105). Before,
