@@ -20,8 +20,8 @@ process looked healthy.
 - **The blocking publisher reconnects** when the socket dies during its passive
   declare, instead of raising `MrsalAbortedSetup`.
 - **`stop()` / `close()` end a running async consumer, and the instance cannot be
-  restarted afterwards.** `close()` is a deliberate shutdown, not a connection
-  loss, so it no longer leads to a reconnect. A later `start_consumer` on the
+  restarted afterwards.** `close()` shuts the consumer down and no longer leads
+  to a reconnect. A later `start_consumer` on the
   same instance returns at once (logged at INFO); construct a new
   `MrsalAsyncAMQP` to consume again. A stop during a retry backoff ends it at once.
 - **`MrsalAsyncAMQP.start_consumer.retry` is gone.** `start_consumer` drives the
