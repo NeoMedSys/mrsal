@@ -1186,19 +1186,105 @@ async def test_broker_cancel_rebuilds_the_consumer(amqp_consumer, monkeypatch):
 	harness.assert_rebuilt()
 
 
+def _watch_consumer_tag_reporting(harness, monkeypatch):
+	"""Like _watch_consumer_tag, plus an event set when a check runs after the tag
+	is gone (the check returns right after, so the cancel is then detected)."""
+	consumers = _watch_consumer_tag(harness, monkeypatch)
+	cancel_seen = asyncio.Event()
+
+	async def _underlay():
+		if not consumers:
+			cancel_seen.set()
+		return SimpleNamespace(consumers=consumers)
+	harness.old_channel.get_underlay_channel = AsyncMock(side_effect=_underlay)
+	return consumers, cancel_seen
+
+
+def _message(message_id='m1'):
+	message = AsyncMock(body=b'{}', ack=AsyncMock(), reject=AsyncMock())
+	message.configure_mock(app_id="a", message_id=message_id, headers=None, redelivered=False, routing_key="rk", delivery_tag=1)
+	return message
+
+
 @pytest.mark.asyncio
 async def test_stop_wins_over_a_broker_cancel(amqp_consumer, monkeypatch):
-	"""A cancel seen together with a stop ends the consumer; no rebuild."""
-	harness = _RebuildHarness(amqp_consumer, monkeypatch, old_iterator=_BlockingQueueIterator())
-	consumers = _watch_consumer_tag(harness, monkeypatch)
-	consumer_task = harness.start()
-	await harness.wait_consuming()
+	"""The cancel is detected while a callback runs, then a stop lands before the
+	loop looks again. The stop must win: the loop returns normally. Had the
+	cancel won, the loss path would have closed the old connection first."""
+	release = asyncio.Event()
+	running = asyncio.Event()
 
-	harness.consumer._stop_event.set()
+	async def slow_callback(message, properties, body):
+		running.set()
+		await release.wait()
+
+	harness = _RebuildHarness(amqp_consumer, monkeypatch, old_iterator=_QueueThenBlock([_message()]))
+	consumers, cancel_seen = _watch_consumer_tag_reporting(harness, monkeypatch)
+	consumer_task = harness.start(callback=slow_callback, auto_ack=False)
+	await asyncio.wait_for(running.wait(), timeout=1.0)
+
 	consumers.clear()
+	await asyncio.wait_for(cancel_seen.wait(), timeout=1.0)
+	harness.consumer._stop_event.set()
+	release.set()
 	await asyncio.wait_for(consumer_task, timeout=1.0)
 
 	harness.consumer.setup_async_connection.assert_not_awaited()
+	harness.old_connection.close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_broker_cancel_drains_in_flight_tasks_before_the_rebuild(amqp_consumer, monkeypatch):
+	"""max_concurrent_tasks path: a cancel ends the loop, but a task already
+	running finishes before the consumer is rebuilt."""
+	release = asyncio.Event()
+	running = asyncio.Event()
+	order = []
+
+	async def slow_callback(message, properties, body):
+		running.set()
+		await release.wait()
+		order.append('callback done')
+
+	harness = _RebuildHarness(amqp_consumer, monkeypatch, old_iterator=_QueueThenBlock([_message()]))
+	consumers, cancel_seen = _watch_consumer_tag_reporting(harness, monkeypatch)
+	reconnect = harness.consumer.setup_async_connection.side_effect
+
+	async def _reconnect_logged():
+		order.append('reconnect')
+		await reconnect()
+	harness.consumer.setup_async_connection = AsyncMock(side_effect=_reconnect_logged)
+	consumer_task = harness.start(callback=slow_callback, auto_ack=False, max_concurrent_tasks=2)
+	await asyncio.wait_for(running.wait(), timeout=1.0)
+
+	consumers.clear()
+	await asyncio.wait_for(cancel_seen.wait(), timeout=1.0)
+	release.set()
+	await asyncio.wait_for(consumer_task, timeout=1.0)
+
+	assert order == ['callback done', 'reconnect']
+	harness.assert_rebuilt()
+
+
+@pytest.mark.asyncio
+async def test_unexpected_error_in_cancel_check_ends_start_consumer(amqp_consumer, monkeypatch):
+	"""A check that fails with something other than a connection error (e.g. an
+	aio-pika/aiormq internals change) must surface, not be retried forever."""
+	harness = _RebuildHarness(amqp_consumer, monkeypatch, old_iterator=_BlockingQueueIterator())
+	_watch_consumer_tag(harness, monkeypatch)
+	harness.old_channel.get_underlay_channel.side_effect = RuntimeError('aiormq changed')
+
+	with pytest.raises(RuntimeError, match='aiormq changed'):
+		await asyncio.wait_for(harness.start(), timeout=1.0)
+
+	harness.consumer.setup_async_connection.assert_not_awaited()
+
+
+@pytest.mark.parametrize('interval', [0, -1])
+def test_consumer_check_interval_must_be_positive(interval):
+	"""At 0 the cancel check would run in a busy loop."""
+	with pytest.raises(ValidationError):
+		MrsalAsyncAMQP(**SETUP_ARGS, consumer_check_interval=interval)
 
 
 @pytest.mark.asyncio

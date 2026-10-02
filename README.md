@@ -10,8 +10,8 @@
   sends `Basic.Cancel` when a consumer's queue is deleted or its node fails over.
   Before, the consumer stopped receiving messages without any error: the
   channel stayed open and `start_consumer` neither returned nor raised. mrsal now
-  checks every `MrsalAsyncAMQP(consumer_check_interval=5.0)` seconds that the
-  broker still knows the consumer. When it does not, the loop raises
+  checks every `MrsalAsyncAMQP(consumer_check_interval=5.0)` seconds (must be
+  > 0) that the broker still knows the consumer. When it does not, the loop raises
   `MrsalConsumerCancelled` (a `ConnectionError`) and the retry rebuilds the
   consumer as for a lost connection, re-declaring its queue. Default
   `config.DEFAULT_CONSUMER_CHECK_INTERVAL_SEC`.

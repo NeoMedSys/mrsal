@@ -11,11 +11,12 @@ from pika.exceptions import (
 		ConnectionClosedByBroker,
 		)
 from aio_pika import connect_robust, Message
+from aio_pika.abc import AbstractChannel, AbstractQueueIterator
 from aio_pika.exceptions import AuthenticationError
 from dataclasses import field
 from typing import Any, Callable, Literal, Sequence, Type
 from tenacity import AsyncRetrying, RetryCallState, wait_exponential, retry_if_exception_type, retry_if_not_exception_type
-from pydantic import ConfigDict, ValidationError
+from pydantic import ConfigDict, Field, ValidationError
 from pydantic.dataclasses import dataclass
 
 from mrsal.superclass import Mrsal, _ASYNC_CONNECTION_ERRORS
@@ -47,7 +48,8 @@ class MrsalAsyncAMQP(Mrsal):
 	# Seconds the DLX publish may take before the delivery is rejected instead (#105).
 	dlx_publish_timeout: float = config.DEFAULT_DLX_PUBLISH_TIMEOUT_SEC
 	# Seconds between checks that the broker has not cancelled the consumer (#109).
-	consumer_check_interval: float = config.DEFAULT_CONSUMER_CHECK_INTERVAL_SEC
+	# Must be > 0: at 0 the check would run in a busy loop.
+	consumer_check_interval: float = Field(default=config.DEFAULT_CONSUMER_CHECK_INTERVAL_SEC, gt=0)
 	_dlx_publish_channel: Any = field(init=False, default=None)
 	_stop_event: asyncio.Event | None = field(init=False, default=None)
 	# aio_pika.queue.QueueIterator at runtime; typed as object to avoid importing
@@ -736,7 +738,7 @@ class MrsalAsyncAMQP(Mrsal):
 			connection.close_callbacks.discard(_mark_lost)
 			channel.close_callbacks.discard(_mark_lost)
 
-	async def _wait_consumer_cancelled(self, channel, it) -> str:
+	async def _wait_consumer_cancelled(self, channel: AbstractChannel, it: AbstractQueueIterator) -> str:
 		"""Return the consumer tag once the broker has cancelled ``it``'s consumer (#109).
 
 		A server-side ``Basic.Cancel`` (queue deleted, node failover) only drops
@@ -744,8 +746,15 @@ class MrsalAsyncAMQP(Mrsal):
 		open, no close callback fires, and the iterator waits forever. aiormq
 		offers no hook for it, so the tag is checked every
 		``consumer_check_interval`` seconds.
+
+		Relies on two public attributes: aio-pika's ``QueueIterator.consumer_tag``
+		and aiormq's ``Channel.consumers``. Any error from the check reaches
+		``start_consumer``: a connection error (the channel died) is retried, and
+		anything else, e.g. an ``AttributeError`` after a dependency change,
+		ends ``start_consumer`` loudly.
 		"""
-		# Read once: closing the iterator (after the cancel) deletes its tag.
+		# Read once: closing the iterator (after the cancel) deletes its tag. It is
+		# always set here: the iterator's __aenter__ has already consumed.
 		consumer_tag = it.consumer_tag
 		while True:
 			await asyncio.sleep(self.consumer_check_interval)
