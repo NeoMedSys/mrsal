@@ -31,6 +31,7 @@ from contextlib import contextmanager
 import pika
 import pytest
 
+from mrsal import config
 from mrsal.amqp.subclass import MrsalAsyncAMQP, MrsalBlockingPublisher
 
 from tests.integration.conftest import (
@@ -44,6 +45,9 @@ from tests.integration.conftest import (
 
 
 MGMT_PORT = int(os.environ.get("MRSAL_IT_MGMT_PORT", "15673"))
+# Longer than aio-pika's default robust reconnect interval (5s) plus the
+# management API's stats interval, so a stray reconnect would be visible.
+RECONNECT_GRACE_SEC = 12
 
 
 def _mgmt_request(method: str, path: str, body: dict | None = None):
@@ -213,5 +217,51 @@ async def test_async_consumer_keeps_consuming_after_connection_is_closed(vhost):
         assert not runner._task.done(), "consumer task must still be running"
         # Rebuilt by mrsal, not restored in place by aio-pika's robust reconnect.
         assert consumer._connection is not first_connection
+    finally:
+        await runner.stop()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_rebuild_after_timed_out_closes_leaves_one_consumer(vhost, monkeypatch):
+    """A close that times out drops the handle while it may still be open. The
+    dropped robust connection must not reconnect and restore its consumer next
+    to the rebuilt one."""
+    monkeypatch.setattr(config, "CLOSE_TIMEOUT_SEC", 1e-9)  # every close times out
+    exchange, queue, routing_key = "cl.zombie", "cl.zombie.q", "cl.zombie.rk"
+
+    async def on_message(message, properties, body):
+        pass
+
+    consumer = MrsalAsyncAMQP(**broker_setup_args(virtual_host=vhost))
+    runner = AsyncConsumerRunner(consumer)
+    runner.start(
+        queue_name=queue,
+        exchange_name=exchange,
+        exchange_type="direct",
+        routing_key=routing_key,
+        callback=on_message,
+        auto_ack=False,
+        dlx_enable=False,
+        enable_retry_cycles=False,
+        use_quorum_queues=False,
+    )
+
+    try:
+        await runner.wait_ready()
+        first_connection = consumer._connection
+        assert await asyncio.to_thread(force_close_vhost_connections, vhost) >= 1
+
+        deadline = time.monotonic() + 30
+        while consumer._connection in (None, first_connection):
+            assert time.monotonic() < deadline, "consumer was not rebuilt"
+            await asyncio.sleep(0.25)
+        await asyncio.sleep(RECONNECT_GRACE_SEC)
+
+        quoted = urllib.parse.quote(vhost, safe="")
+        queue_info = await asyncio.to_thread(_mgmt_request, method="GET", path=f"queues/{quoted}/{queue}")
+        connections = await asyncio.to_thread(_mgmt_request, method="GET", path=f"vhosts/{quoted}/connections")
+        assert queue_info["consumers"] == 1
+        assert len(connections) == 1
     finally:
         await runner.stop()
