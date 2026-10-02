@@ -1,8 +1,34 @@
 # MRSAL AMQP
-[![Release](https://img.shields.io/badge/release-3.13.1-blue.svg)](https://pypi.org/project/mrsal/) 
+[![Release](https://img.shields.io/badge/release-3.14.0-blue.svg)](https://pypi.org/project/mrsal/) 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%7C3.11%7C3.12-blue.svg)](https://www.python.org/downloads/)
 [![Mrsal Workflow](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml/badge.svg?branch=main)](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml)
 [![Coverage](https://neomedsys.github.io/mrsal/reports/badges/coverage-badge.svg)](https://neomedsys.github.io/mrsal/reports/coverage/htmlcov/)
+
+## Breaking changes in 3.14.0
+
+The async consumer now survives a broker restart or network cut (#105). Before,
+the consumer could sit on a queue iterator that never yielded again while the
+process looked healthy.
+
+- **A lost connection or consumer channel rebuilds the consumer.** The consume
+  loop ends on a close of either, and `start_consumer` retries with exponential
+  backoff (2s up to 60s), opening a fresh connection, channel, topology and
+  consumer. It retries forever against an unreachable broker, logging each
+  attempt at WARNING; refused credentials (`aio_pika.exceptions.AuthenticationError`)
+  raise at once. A DLX publish that fails because the connection is gone leaves
+  the message unsettled for redelivery instead of crashing the consumer.
+- **The blocking publisher reconnects** when the socket dies during its passive
+  declare, instead of raising `MrsalAbortedSetup`.
+- **`stop()` / `close()` end a running async consumer, and the instance cannot be
+  restarted afterwards.** `close()` shuts the consumer down and no longer leads
+  to a reconnect. A later `start_consumer` on the
+  same instance returns at once (logged at INFO); construct a new
+  `MrsalAsyncAMQP` to consume again. A stop during a retry backoff ends it at once.
+- **`MrsalAsyncAMQP.start_consumer.retry` is gone.** `start_consumer` drives the
+  retry itself so the backoff can see `stop()`. Code that patched
+  `start_consumer.retry.wait` should patch `mrsal.amqp.subclass._CONSUMER_RETRY_WAIT`.
+- Closing an async channel or connection is bounded by `config.CLOSE_TIMEOUT_SEC`
+  (10s); a close that fails or times out is logged at WARNING.
 
 ## New in 3.13.0
 

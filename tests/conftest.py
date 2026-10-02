@@ -18,6 +18,21 @@ class ExpectedPayload:
 	active: bool
 
 
+def mock_async_handles(consumer) -> None:
+	"""Give ``consumer`` open mocked aio-pika connection and channel handles.
+
+	Both carry ``close_callbacks``, which the consume loop registers on; so does
+	any channel the connection opens (the DLX publish channel).
+	"""
+	consumer._connection = AsyncMock()
+	consumer._connection.close_callbacks = MagicMock()
+	consumer._connection.channel.return_value.close_callbacks = MagicMock()
+	consumer._connection.is_closed = False
+	consumer._channel = AsyncMock()
+	consumer._channel.close_callbacks = MagicMock()
+	consumer._channel.is_closed = False
+
+
 class AsyncIteratorMock:
 	"""Async-iterator + async-context-manager mock for aio_pika queue.iterator().
 

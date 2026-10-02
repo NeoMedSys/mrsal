@@ -4,7 +4,7 @@ from aio_pika.exceptions import DeliveryError
 
 from mrsal.amqp.subclass import MrsalBlockingAMQP, MrsalAsyncAMQP
 from mrsal.exceptions import MrsalAbortedSetup
-from tests.conftest import AsyncIteratorMock, ExpectedPayload
+from tests.conftest import AsyncIteratorMock, ExpectedPayload, mock_async_handles
 
 
 class TestDLXRetryCycleOnly:
@@ -363,10 +363,7 @@ class TestAsyncDLXRetryCycleOnly:
 			use_quorum_queues=True
 		)
 
-		consumer._connection = AsyncMock()
-		consumer._connection.is_closed = False
-		consumer._channel = AsyncMock()
-		consumer._channel.is_closed = False
+		mock_async_handles(consumer)
 		consumer.auto_declare_ok = True
 		consumer.setup_async_connection = AsyncMock()
 		consumer._async_setup_exchange_and_queue = AsyncMock()
@@ -896,10 +893,7 @@ class TestRetryCyclePreconditions:
 			virtual_host="testboi",
 			dlx_enable=True,
 		)
-		consumer._connection = AsyncMock()
-		consumer._connection.is_closed = False
-		consumer._channel = AsyncMock()
-		consumer._channel.is_closed = False
+		mock_async_handles(consumer)
 		consumer._async_setup_exchange_and_queue = AsyncMock()
 		return consumer
 
@@ -1161,6 +1155,8 @@ class TestSyncDLXPublishMandatoryFlag:
 			dlx_enable=True,
 		)
 		consumer._connection = AsyncMock()
+		consumer._connection.close_callbacks = MagicMock()
+		consumer._connection.channel.return_value.close_callbacks = MagicMock()
 		consumer._connection.is_closed = False
 		dlx_channel = AsyncMock()
 		dlx_channel.is_closed = False
@@ -1197,8 +1193,7 @@ class TestAsyncRetryQueueSetup:
 			dlx_enable=True,
 			use_quorum_queues=False,
 		)
-		consumer._connection = AsyncMock()
-		consumer._channel = AsyncMock()
+		mock_async_handles(consumer)
 		# get_exchange is awaited during binding setup.
 		consumer._channel.get_exchange = AsyncMock(return_value=AsyncMock())
 
@@ -1247,8 +1242,7 @@ class TestAsyncRetryQueueSetup:
 			virtual_host="testboi",
 			dlx_enable=True,
 		)
-		consumer._connection = AsyncMock()
-		consumer._channel = AsyncMock()
+		mock_async_handles(consumer)
 		consumer._channel.get_exchange = AsyncMock(return_value=AsyncMock())
 
 		async def declare(**kwargs):

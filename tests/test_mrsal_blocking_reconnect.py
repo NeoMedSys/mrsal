@@ -11,7 +11,7 @@ import logging
 
 from unittest.mock import Mock, MagicMock, patch
 from pika.exceptions import StreamLostError
-from tenacity import wait_fixed
+from tenacity import wait_fixed, wait_none
 from mrsal.amqp.subclass import MrsalBlockingAMQP
 from mrsal.testing import TestMrsalBroker
 
@@ -270,3 +270,42 @@ def test_consumer_resumes_against_same_queue_after_mid_consume_drop(monkeypatch)
 	# The consumer resumed on the same queue.
 	_, consume_kwargs = ch2.consume.call_args
 	assert consume_kwargs['queue'] == 'orders'
+
+
+# --- Dead socket during declare (#105) ----------------------------------------
+# The sync declare helpers pass pika's AMQPConnectionError through instead of
+# wrapping it as a setup error, so these entry points' retries reconnect. Real
+# _setup_exchange_and_queue: the declare path is under test.
+
+def test_stream_lost_in_consumer_declare_is_retried(monkeypatch):
+	monkeypatch.setattr(MrsalBlockingAMQP.start_consumer.retry, 'wait', wait_none())
+	channel = MagicMock(name='channel')
+	channel.exchange_declare.side_effect = [StreamLostError('dropped'), MagicMock()]
+	consumer = MrsalBlockingAMQP(**SETUP_ARGS)
+	consumer._connection = _open_connection(channel=channel)
+	consumer._run_consume_loop = Mock()
+
+	consumer.start_consumer(
+		queue_name='orders', callback=Mock(), exchange_name='orders.x',
+		exchange_type='direct', routing_key='orders.new', dlx_enable=False,
+		enable_retry_cycles=False,
+	)
+
+	assert channel.exchange_declare.call_count == 2
+	consumer._run_consume_loop.assert_called_once()
+
+
+def test_stream_lost_in_publish_message_declare_is_retried(monkeypatch):
+	monkeypatch.setattr(MrsalBlockingAMQP.publish_message.retry, 'wait', wait_none())
+	channel = MagicMock(name='channel')
+	channel.exchange_declare.side_effect = [StreamLostError('dropped'), MagicMock()]
+	consumer = MrsalBlockingAMQP(**SETUP_ARGS)
+	consumer._connection = _open_connection(channel=channel)
+
+	consumer.publish_message(
+		exchange_name='orders.x', routing_key='orders.new', message='hello',
+		exchange_type='direct', queue_name='orders',
+	)
+
+	assert channel.exchange_declare.call_count == 2
+	channel.basic_publish.assert_called_once()
