@@ -8,7 +8,7 @@ from aio_pika.tools import CallbackCollection
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from mrsal import config
-from mrsal.amqp import async_amqp
+from mrsal.amqp import async_amqp, subclass
 from mrsal.amqp.subclass import MrsalAsyncAMQP
 from mrsal.config import AioPikaAttributes
 from mrsal.exceptions import MrsalAbortedSetup, MrsalDLXPublishTimeout, MrsalSetupError
@@ -1151,6 +1151,8 @@ def test_async_class_is_still_importable_from_subclass():
 	must keep resolving to the same class, and it keeps logging under the old
 	logger name."""
 	assert MrsalAsyncAMQP is async_amqp.MrsalAsyncAMQP
+	assert 'MrsalAsyncAMQP' in subclass.__all__
+	assert all(hasattr(subclass, name) for name in subclass.__all__)
 	assert async_amqp.log.name == 'mrsal.amqp.subclass'
 
 

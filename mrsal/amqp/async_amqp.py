@@ -23,6 +23,7 @@ from mrsal.amqp._log_fields import _consume_log_extra
 from mrsal import config
 
 # Kept from before the split (#108), so log filters on the old name still match.
+# A compatibility contract (see README, 3.16.0): do not change it to __name__.
 log = logging.getLogger("mrsal.amqp.subclass")
 
 
@@ -486,6 +487,7 @@ class MrsalAsyncAMQP(Mrsal):
 		try:
 			await asyncio.wait_for(self._stop_event.wait(), timeout=seconds)
 		except asyncio.TimeoutError:
+			# No stop during the backoff: the full sleep elapsed, retry now.
 			pass
 
 	async def _prepare_consumer_async(

@@ -27,10 +27,19 @@ from pydantic.dataclasses import dataclass
 
 from mrsal.superclass import Mrsal
 from mrsal.amqp._log_fields import _consume_log_extra, _publish_log_extra
-# Moved to its own module (#108); re-exported so existing imports keep working.
-from mrsal.amqp.async_amqp import MrsalAsyncAMQP  # noqa: F401
+from mrsal.amqp.async_amqp import MrsalAsyncAMQP
 from mrsal.metrics import MetricsHooks
 from mrsal import config
+
+# MrsalAsyncAMQP moved to mrsal.amqp.async_amqp (#108) and is re-exported here
+# so existing imports keep working.
+__all__ = [
+	'MrsalBlockingBase',
+	'MrsalBlockingAMQP',
+	'MrsalAsyncAMQP',
+	'MrsalBlockingPublisher',
+	'MrsalBlockingPublisherPool',
+]
 
 log = logging.getLogger(__name__)
 
