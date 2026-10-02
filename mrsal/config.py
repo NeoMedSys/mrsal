@@ -34,6 +34,11 @@ DEFAULT_DLX_PUBLISH_TIMEOUT_SEC: float = 30.0
 DLX_SUFFIX: str = ".dlx"
 RETRY_SUFFIX: str = ".retry"
 
+# Bound on closing one async channel or connection. On a half-dead robust
+# connection a close can wait forever, which would leave a consumer that is
+# tearing down after a connection loss stuck again (#105).
+CLOSE_TIMEOUT_SEC: float = 10.0
+
 # Exchange types where the .retry binding key is honored. fanout and headers
 # exchanges ignore routing keys, so retry/.dlx separation collapses and the
 # message gets re-cycled even after the retry budget is exhausted. The

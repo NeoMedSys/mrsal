@@ -40,10 +40,9 @@ _SYNC_CONNECTION_ERRORS = (AMQPConnectionError,)
 def _setup_error(e: Exception, message: str, connection_errors: tuple[type[Exception], ...]) -> Exception:
 	"""The exception a declare/bind helper raises for ``e``.
 
-	A dead connection is not a topology failure: ``connection_errors`` (pika's for
-	the sync helpers, aio-pika's for the async ones) are returned unchanged so the
-	callers' reconnect/retry paths see them (#105). Anything else becomes
-	``MrsalSetupError``.
+	``connection_errors`` (pika's for the sync helpers, aio-pika's for the async
+	ones) are returned unchanged so the callers' reconnect/retry paths see them
+	(#105). Anything else becomes ``MrsalSetupError``.
 	"""
 	if isinstance(e, connection_errors):
 		return e
@@ -816,6 +815,18 @@ class Mrsal:
 		if self.verbose:
 			_log.info("Exchange declared yo!")
 
+	def _async_setup_connection_errors(self) -> tuple[type[Exception], ...]:
+		"""What an async declare/bind helper passes through as a lost connection.
+
+		``ChannelInvalidStateError`` counts only while the connection has no
+		transport. A channel the broker closed (a 406 on a mismatched declare)
+		raises it too, on a live connection; that is a topology failure, and
+		retrying it would loop forever on a permanent mismatch.
+		"""
+		if self._connection is None or self._connection.transport is None:
+			return _ASYNC_CONNECTION_ERRORS
+		return (ConnectionError,)
+
 	async def _async_declare_exchange(self,
 									exchange: str,
 									exchange_type: AioExchangeType,
@@ -849,7 +860,7 @@ class Mrsal:
 			)
 			return exchange_obj
 		except Exception as e:
-			raise _setup_error(e=e, message=f"Failed to declare async exchange: {e}", connection_errors=_ASYNC_CONNECTION_ERRORS)
+			raise _setup_error(e=e, message=f"Failed to declare async exchange: {e}", connection_errors=self._async_setup_connection_errors())
 
 	def _declare_queue(self,
 					queue: str, arguments: dict[str, str] | None,
@@ -922,7 +933,7 @@ class Mrsal:
 			)
 			return queue_obj
 		except Exception as e:
-			raise _setup_error(e=e, message=f"Failed to declare async queue: {e}", connection_errors=_ASYNC_CONNECTION_ERRORS)
+			raise _setup_error(e=e, message=f"Failed to declare async queue: {e}", connection_errors=self._async_setup_connection_errors())
 
 	def _declare_queue_binding(self,
 							exchange: str, queue: str,
@@ -973,7 +984,7 @@ class Mrsal:
 		try:
 			await queue.bind(exchange, routing_key=routing_key, arguments=arguments)
 		except Exception as e:
-			raise _setup_error(e=e, message=f"Failed to bind async queue: {e}", connection_errors=_ASYNC_CONNECTION_ERRORS)
+			raise _setup_error(e=e, message=f"Failed to bind async queue: {e}", connection_errors=self._async_setup_connection_errors())
 
 	def _ssl_setup(self) -> SSLContext:
 		"""_ssl_setup is private method we are using to connect with rabbit server via signed certificates and some TLS settings.

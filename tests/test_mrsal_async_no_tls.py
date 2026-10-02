@@ -3,13 +3,15 @@ import logging
 import time
 import aiormq
 import pytest
-from aio_pika.exceptions import ChannelInvalidStateError, DeliveryError
+from aio_pika.exceptions import AuthenticationError, ChannelInvalidStateError, DeliveryError
 from aio_pika.tools import CallbackCollection
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from mrsal import config
+from mrsal.amqp import subclass
 from mrsal.amqp.subclass import MrsalAsyncAMQP
 from mrsal.config import AioPikaAttributes
-from mrsal.exceptions import MrsalAbortedSetup, MrsalDLXPublishTimeout
+from mrsal.exceptions import MrsalAbortedSetup, MrsalDLXPublishTimeout, MrsalSetupError
 from mrsal.metrics import MetricsHooks
 from pydantic import ValidationError
 from tenacity import wait_fixed, wait_none
@@ -690,6 +692,8 @@ class _BlockingQueueIterator:
 	"""
 	def __init__(self):
 		self._closed = asyncio.Event()
+		# Set once the consumer waits for a delivery on the idle queue.
+		self.waiting = asyncio.Event()
 		self.iterator_call_kwargs = None
 		self.close_calls = 0
 
@@ -703,6 +707,7 @@ class _BlockingQueueIterator:
 		return self
 
 	async def __anext__(self):
+		self.waiting.set()
 		await self._closed.wait()
 		raise StopAsyncIteration
 
@@ -753,8 +758,7 @@ async def test_stop_wakes_idle_iterator(amqp_consumer):
 		dlx_enable=False,
 	))
 
-	# Let the consumer reach `async for message in it` and block on __anext__.
-	await asyncio.sleep(0.05)
+	await asyncio.wait_for(blocking_it.waiting.wait(), timeout=1.0)
 	assert not consumer_task.done(), "consumer should be blocked on idle iterator"
 
 	await consumer.stop()
@@ -771,8 +775,9 @@ class _RebuildHarness:
 	rebuilt connection serving an empty queue so a retried consumer returns."""
 
 	def __init__(self, consumer, monkeypatch, old_iterator):
-		monkeypatch.setattr(MrsalAsyncAMQP.start_consumer.retry, 'wait', wait_none())
+		monkeypatch.setattr(subclass, '_CONSUMER_RETRY_WAIT', wait_none())
 		self.old_connection, self.old_channel = consumer._connection, consumer._channel
+		self.old_iterator = old_iterator
 		# The real collection type aio-pika fires, called the way aio-pika calls it.
 		self.old_connection.close_callbacks = CallbackCollection(self.old_connection)
 		self.old_channel.close_callbacks = CallbackCollection(self.old_channel)
@@ -803,6 +808,10 @@ class _RebuildHarness:
 		kwargs.update(overrides)
 		return asyncio.create_task(self.consumer.start_consumer(**kwargs))
 
+	async def wait_consuming(self):
+		"""Until the consumer waits for a delivery on the idle old queue."""
+		await asyncio.wait_for(self.old_iterator.waiting.wait(), timeout=1.0)
+
 	def assert_rebuilt(self):
 		self.consumer.setup_async_connection.assert_awaited_once()
 		self.new_queue.iterator.assert_called_once()
@@ -819,7 +828,7 @@ async def test_connection_loss_on_idle_consumer_rebuilds_and_resumes(amqp_consum
 	end the loop, drop the old handles, and let the start_consumer retry rebuild."""
 	harness = _RebuildHarness(amqp_consumer, monkeypatch, old_iterator=_BlockingQueueIterator())
 	consumer_task = harness.start()
-	await asyncio.sleep(0.05)
+	await harness.wait_consuming()
 	assert not consumer_task.done(), "consumer should be blocked on idle iterator"
 
 	lost = harness.old_connection if lost_handle == 'connection' else harness.old_channel
@@ -834,15 +843,17 @@ async def test_connection_loss_on_idle_consumer_rebuilds_and_resumes(amqp_consum
 async def test_connection_lost_while_callback_runs_rebuilds_after_it(amqp_consumer, monkeypatch):
 	"""Loss during a running callback: the callback finishes, then the loop rebuilds."""
 	release = asyncio.Event()
+	running = asyncio.Event()
 
 	async def slow_callback(message, properties, body):
+		running.set()
 		await release.wait()
 
 	message = AsyncMock(body=b'{}', ack=AsyncMock(), reject=AsyncMock())
 	message.configure_mock(app_id="a", message_id="m1", headers=None, redelivered=False, routing_key="rk", delivery_tag=1)
 	harness = _RebuildHarness(amqp_consumer, monkeypatch, old_iterator=_QueueThenBlock([message]))
 	consumer_task = harness.start(callback=slow_callback, auto_ack=False)
-	await asyncio.sleep(0.05)
+	await asyncio.wait_for(running.wait(), timeout=1.0)
 
 	await harness.old_connection.close_callbacks(ConnectionError('Broken pipe'))
 	release.set()
@@ -884,7 +895,7 @@ async def test_stop_racing_a_connection_loss_ends_the_consumer(amqp_consumer, mo
 	"""A stop seen together with a loss wins: start_consumer returns, no rebuild."""
 	harness = _RebuildHarness(amqp_consumer, monkeypatch, old_iterator=_BlockingQueueIterator())
 	consumer_task = harness.start()
-	await asyncio.sleep(0.05)
+	await harness.wait_consuming()
 
 	harness.consumer._stop_event.set()
 	await harness.old_connection.close_callbacks(ConnectionError('Broken pipe'))
@@ -904,7 +915,7 @@ async def test_close_ends_a_running_consumer_without_reconnecting(amqp_consumer,
 	old_connection.close = AsyncMock(side_effect=_close_fires_callbacks)
 
 	consumer_task = harness.start()
-	await asyncio.sleep(0.05)
+	await harness.wait_consuming()
 	await harness.consumer.close()
 	await asyncio.wait_for(consumer_task, timeout=1.0)
 
@@ -928,16 +939,21 @@ async def test_connection_error_during_redeclare_rebuilds_the_connection(amqp_co
 @pytest.mark.asyncio
 async def test_stop_during_backoff_against_unreachable_broker_returns(monkeypatch):
 	"""The broker is down from the start, so the loop never runs; stop() during
-	the retry backoff must still end start_consumer."""
-	monkeypatch.setattr(MrsalAsyncAMQP.start_consumer.retry, 'wait', wait_fixed(0.05))
+	the retry backoff must end start_consumer at once, not after the 10s sleep."""
+	monkeypatch.setattr(subclass, '_CONSUMER_RETRY_WAIT', wait_fixed(10))
 	consumer = MrsalAsyncAMQP(**SETUP_ARGS)
-	consumer.setup_async_connection = AsyncMock(side_effect=ConnectionError('Connection refused'))
+	attempted = asyncio.Event()
+
+	async def _refused():
+		attempted.set()
+		raise ConnectionError('Connection refused')
+	consumer.setup_async_connection = AsyncMock(side_effect=_refused)
 
 	consumer_task = asyncio.create_task(consumer.start_consumer(
 		queue_name='test_q', callback=AsyncMock(), routing_key='rk',
 		exchange_name='test_x', exchange_type='direct', auto_ack=True, dlx_enable=False,
 	))
-	await asyncio.sleep(0.12)
+	await asyncio.wait_for(attempted.wait(), timeout=1.0)
 	await consumer.stop()
 	await asyncio.wait_for(consumer_task, timeout=1.0)
 
@@ -950,12 +966,17 @@ async def test_close_during_backoff_does_not_open_a_new_connection(amqp_consumer
 	"""close() while the retry is backing off after a loss: the retry must not
 	open a fresh connection that nobody closes."""
 	harness = _RebuildHarness(amqp_consumer, monkeypatch, old_iterator=_BlockingQueueIterator())
-	monkeypatch.setattr(MrsalAsyncAMQP.start_consumer.retry, 'wait', wait_fixed(0.2))
+	monkeypatch.setattr(subclass, '_CONSUMER_RETRY_WAIT', wait_fixed(10))
 	consumer_task = harness.start()
-	await asyncio.sleep(0.05)
+	await harness.wait_consuming()
 
+	dropped = asyncio.Event()
+
+	async def _close():
+		dropped.set()
+	harness.old_connection.close = AsyncMock(side_effect=_close)
 	await harness.old_connection.close_callbacks(ConnectionError('Broken pipe'))
-	await asyncio.sleep(0.05)  # handles dropped, retry now in backoff
+	await asyncio.wait_for(dropped.wait(), timeout=1.0)  # handles dropped, retry now in backoff
 	await harness.consumer.close()
 	await asyncio.wait_for(consumer_task, timeout=1.0)
 
@@ -972,25 +993,12 @@ class _ExitRaisesIterator(_BlockingQueueIterator):
 @pytest.mark.asyncio
 async def test_iterator_exit_raising_during_local_close_does_not_reconnect(amqp_consumer, monkeypatch):
 	"""A connection error from tearing the iterator down during close() must not
-	turn the deliberate shutdown into a reconnect."""
+	turn the deliberate shutdown into a reconnect, nor wait out a retry backoff
+	first: start_consumer returns at once."""
 	harness = _RebuildHarness(amqp_consumer, monkeypatch, old_iterator=_ExitRaisesIterator())
+	monkeypatch.setattr(subclass, '_CONSUMER_RETRY_WAIT', wait_fixed(10))
 	consumer_task = harness.start()
-	await asyncio.sleep(0.05)
-
-	await harness.consumer.close()
-	await asyncio.wait_for(consumer_task, timeout=1.0)
-
-	harness.consumer.setup_async_connection.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_connection_error_after_stop_returns_without_backoff(amqp_consumer, monkeypatch):
-	"""A connection error raised while a stop is already set ends start_consumer
-	at once instead of waiting out a retry backoff first."""
-	harness = _RebuildHarness(amqp_consumer, monkeypatch, old_iterator=_ExitRaisesIterator())
-	monkeypatch.setattr(MrsalAsyncAMQP.start_consumer.retry, 'wait', wait_fixed(10))
-	consumer_task = harness.start()
-	await asyncio.sleep(0.05)
+	await harness.wait_consuming()
 
 	await harness.consumer.close()
 	await asyncio.wait_for(consumer_task, timeout=1.0)
@@ -1005,7 +1013,10 @@ async def test_close_while_connecting_closes_the_new_connection(amqp_consumer, m
 	harness = _RebuildHarness(amqp_consumer, monkeypatch, old_iterator=_BlockingQueueIterator())
 	connected = asyncio.Event()
 
+	connecting = asyncio.Event()
+
 	async def _slow_reconnect():
+		connecting.set()
 		await connected.wait()
 		harness.consumer._connection = harness.new_connection
 	harness.consumer.setup_async_connection = AsyncMock(side_effect=_slow_reconnect)
@@ -1013,7 +1024,7 @@ async def test_close_while_connecting_closes_the_new_connection(amqp_consumer, m
 	harness.consumer._channel = None
 
 	consumer_task = harness.start()
-	await asyncio.sleep(0.05)
+	await asyncio.wait_for(connecting.wait(), timeout=1.0)
 	await harness.consumer.close()
 	connected.set()
 	await asyncio.wait_for(consumer_task, timeout=1.0)
@@ -1022,6 +1033,99 @@ async def test_close_while_connecting_closes_the_new_connection(amqp_consumer, m
 	harness.new_connection.close.assert_awaited()
 	harness.new_queue.iterator.assert_not_called()
 	assert harness.consumer._connection is None
+
+
+@pytest.mark.asyncio
+async def test_failed_auto_declare_does_not_stop_the_instance(amqp_consumer, monkeypatch):
+	"""A failed auto-declare raises MrsalAbortedSetup and drops the handles, but
+	must not set the stop flag: a later start_consumer on the instance runs setup
+	again instead of returning silently."""
+	harness = _RebuildHarness(amqp_consumer, monkeypatch, old_iterator=_BlockingQueueIterator())
+	consumer = harness.consumer
+	declare_ok = iter([False, True])
+
+	async def _setup(**kwargs):
+		consumer.auto_declare_ok = next(declare_ok)
+		return harness.new_queue
+	consumer._async_setup_exchange_and_queue = AsyncMock(side_effect=_setup)
+
+	with pytest.raises(MrsalAbortedSetup):
+		await harness.start()
+	await asyncio.wait_for(harness.start(), timeout=1.0)
+
+	assert consumer._async_setup_exchange_and_queue.await_count == 2
+	harness.new_queue.iterator.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_refused_credentials_raise_without_retry(monkeypatch):
+	"""Refused credentials are a ConnectionError subclass, but retrying cannot fix
+	them: start_consumer raises at once instead of retrying forever."""
+	monkeypatch.setattr(subclass, '_CONSUMER_RETRY_WAIT', wait_fixed(10))
+	consumer = MrsalAsyncAMQP(**SETUP_ARGS)
+	consumer.setup_async_connection = AsyncMock(side_effect=AuthenticationError('ACCESS_REFUSED'))
+
+	with pytest.raises(AuthenticationError):
+		await asyncio.wait_for(consumer.start_consumer(
+			queue_name='test_q', callback=AsyncMock(), routing_key='rk',
+			exchange_name='test_x', exchange_type='direct', auto_ack=True, dlx_enable=False,
+		), timeout=1.0)
+
+	consumer.setup_async_connection.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('transport, expected', [(None, ChannelInvalidStateError), (MagicMock(), MrsalSetupError)])
+async def test_channel_invalid_state_in_async_declare_is_a_loss_only_without_transport(amqp_consumer, transport, expected):
+	"""ChannelInvalidStateError is a lost connection only when the connection has no
+	transport. On a live connection it comes from a channel the broker closed, which
+	is a topology failure."""
+	amqp_consumer._connection.transport = transport
+	amqp_consumer._channel.declare_queue.side_effect = ChannelInvalidStateError('Channel closed by RPC timeout')
+
+	with pytest.raises(expected):
+		await amqp_consumer._async_declare_queue(queue_name='q')
+
+
+@pytest.mark.asyncio
+async def test_topology_mismatch_aborts_instead_of_retrying(amqp_consumer, monkeypatch):
+	"""A 406 on the DLX exchange closes the channel; the next declare on it raises
+	ChannelInvalidStateError on a live connection. That must stay MrsalAbortedSetup,
+	not become an endless retry of a permanent mismatch."""
+	monkeypatch.setattr(subclass, '_CONSUMER_RETRY_WAIT', wait_none())
+	consumer = amqp_consumer
+	consumer.setup_async_connection = AsyncMock()
+	consumer._channel.declare_exchange.side_effect = aiormq.exceptions.ChannelPreconditionFailed('PRECONDITION_FAILED')
+	consumer._channel.declare_queue.side_effect = ChannelInvalidStateError('Channel closed by RPC timeout')
+
+	with pytest.raises(MrsalAbortedSetup):
+		await asyncio.wait_for(consumer.start_consumer(
+			queue_name='test_q', callback=AsyncMock(), routing_key='rk',
+			exchange_name='test_x', exchange_type='direct', dlx_enable=True,
+		), timeout=1.0)
+
+	consumer.setup_async_connection.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_hanging_close_of_the_old_connection_does_not_block_the_rebuild(amqp_consumer, monkeypatch):
+	"""Closing a half-dead connection can hang; the close is bounded so the
+	consumer still rebuilds."""
+	monkeypatch.setattr(config, 'CLOSE_TIMEOUT_SEC', 0.05)
+	harness = _RebuildHarness(amqp_consumer, monkeypatch, old_iterator=_BlockingQueueIterator())
+
+	async def _hang():
+		await asyncio.Event().wait()
+	consumer_task = harness.start()
+	await harness.wait_consuming()
+	harness.old_connection.close = AsyncMock(side_effect=_hang)
+	harness.old_channel.close = AsyncMock(side_effect=_hang)
+
+	await harness.old_connection.close_callbacks(ConnectionError('Broken pipe'))
+	await asyncio.wait_for(consumer_task, timeout=1.0)
+
+	harness.old_connection.close.assert_awaited()
+	harness.assert_rebuilt()
 
 
 # --- DLX publish failure (#105) -----------------------------------------------
