@@ -1572,12 +1572,10 @@ class MrsalAsyncAMQP(Mrsal):
 		# rebuilds connection, channel, topology and consumer from scratch.
 		connection_lost: asyncio.Future = asyncio.get_running_loop().create_future()
 
-		def _mark_lost(exc: BaseException | None) -> None:
+		def _mark_lost(_sender=None, exc: BaseException | None = None) -> None:
+			"""Close callback (aio-pika calls it with sender and exc) and task-error path."""
 			if not connection_lost.done():
 				connection_lost.set_result(exc)
-
-		def _on_connection_lost(_sender, exc=None) -> None:
-			_mark_lost(exc=exc)
 
 		def _on_task_done(task: asyncio.Task) -> None:
 			self._inflight_tasks.discard(task)
@@ -1585,8 +1583,8 @@ class MrsalAsyncAMQP(Mrsal):
 				_mark_lost(exc=task.exception())
 
 		connection, channel = self._connection, self._channel
-		connection.close_callbacks.add(_on_connection_lost)
-		channel.close_callbacks.add(_on_connection_lost)
+		connection.close_callbacks.add(_mark_lost)
+		channel.close_callbacks.add(_mark_lost)
 		stopped = asyncio.ensure_future(self._stop_event.wait())
 
 		try:
@@ -1650,8 +1648,8 @@ class MrsalAsyncAMQP(Mrsal):
 						for task in still_pending:
 							task.cancel()
 						await asyncio.gather(*still_pending, return_exceptions=True)
-			connection.close_callbacks.discard(_on_connection_lost)
-			channel.close_callbacks.discard(_on_connection_lost)
+			connection.close_callbacks.discard(_mark_lost)
+			channel.close_callbacks.discard(_mark_lost)
 
 	@staticmethod
 	async def _until_connection_lost(it, connection_lost: asyncio.Future, stopped: asyncio.Future):

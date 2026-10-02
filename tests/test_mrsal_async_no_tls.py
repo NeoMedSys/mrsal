@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import aiormq
 import pytest
 from aio_pika.exceptions import AuthenticationError, ChannelInvalidStateError, DeliveryError
@@ -1123,6 +1124,24 @@ async def test_hanging_close_of_the_old_connection_does_not_block_the_rebuild(am
 
 	harness.old_connection.close.assert_awaited()
 	harness.assert_rebuilt()
+
+
+@pytest.mark.asyncio
+async def test_failing_channel_close_still_closes_the_connection(amqp_consumer, caplog):
+	"""A channel close that raises is logged at WARNING and must not leak the
+	connection behind it."""
+	connection = amqp_consumer._connection
+	amqp_consumer._channel.close = AsyncMock(side_effect=ChannelInvalidStateError('No active transport in channel'))
+
+	with caplog.at_level(logging.WARNING):
+		await amqp_consumer.close()
+
+	connection.close.assert_awaited_once()
+	assert amqp_consumer._channel is None and amqp_consumer._connection is None
+	assert any(
+		r.levelno == logging.WARNING and 'Consumer channel close raised' in r.getMessage()
+		for r in caplog.records
+	)
 
 
 # --- DLX publish failure (#105) -----------------------------------------------
