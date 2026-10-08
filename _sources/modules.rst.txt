@@ -1,0 +1,12 @@
+mrsal
+=====
+
+.. toctree::
+   :maxdepth: 4
+
+   basemodels
+   config
+   exceptions
+   metrics
+   superclass
+   testing
