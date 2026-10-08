@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import Mock, MagicMock, AsyncMock, patch
 from aio_pika.exceptions import DeliveryError
+from pika.exceptions import StreamLostError
 
 from mrsal.amqp.subclass import MrsalBlockingAMQP, MrsalAsyncAMQP
 from mrsal.exceptions import MrsalAbortedSetup
@@ -343,6 +344,35 @@ class TestDLXUsesConsumerChannel:
 			delivery_tag=99, requeue=False
 		)
 		mock_consumer._channel.basic_nack.assert_not_called()
+
+	def test_publish_to_dlx_with_retry_cycle_reraises_when_consumer_channel_closed(self, mock_consumer):
+		"""Connection lost during DLX publish: skip the nack on the dead consumer channel and
+		re-raise the original error so start_consumer's retry reconnects (broker redelivers)."""
+		mock_method_frame = MagicMock()
+		mock_method_frame.delivery_tag = 7
+
+		mock_properties = MagicMock()
+		mock_properties.headers = None
+		mock_properties.content_type = 'application/json'
+
+		mock_consumer._connection.channel.side_effect = StreamLostError("Broken pipe")
+		mock_consumer._consumer_channel.is_open = False
+
+		with pytest.raises(StreamLostError):
+			mock_consumer._publish_to_dlx_with_retry_cycle(
+				method_frame=mock_method_frame,
+				properties=mock_properties,
+				body=b'{"data": "failed"}',
+				processing_error="test error",
+				original_exchange="test_exchange",
+				original_routing_key="test_key",
+				enable_retry_cycles=True,
+				retry_cycle_interval=10,
+				max_retry_time_limit=60,
+				dlx_exchange_name=None
+			)
+
+		mock_consumer._consumer_channel.basic_nack.assert_not_called()
 
 
 class TestAsyncDLXRetryCycleOnly:

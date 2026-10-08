@@ -10,7 +10,7 @@ still *driven* by tenacity; broker topology is treated as durable
 import logging
 
 from unittest.mock import Mock, MagicMock, patch
-from pika.exceptions import StreamLostError
+from pika.exceptions import StreamLostError, ChannelWrongStateError
 from tenacity import wait_fixed, wait_none
 from mrsal.amqp.subclass import MrsalBlockingAMQP
 from mrsal.testing import TestMrsalBroker
@@ -293,6 +293,21 @@ def test_stream_lost_in_consumer_declare_is_retried(monkeypatch):
 
 	assert channel.exchange_declare.call_count == 2
 	consumer._run_consume_loop.assert_called_once()
+
+
+def test_channel_wrong_state_in_consume_loop_is_retried(monkeypatch):
+	monkeypatch.setattr(MrsalBlockingAMQP.start_consumer.retry, 'wait', wait_none())
+	consumer = MrsalBlockingAMQP(**SETUP_ARGS)
+	consumer._connection = _open_connection()
+	consumer._run_consume_loop = Mock(side_effect=[ChannelWrongStateError('Channel is closed.'), None])
+
+	consumer.start_consumer(
+		queue_name='orders', callback=Mock(), exchange_name='orders.x',
+		exchange_type='direct', routing_key='orders.new', dlx_enable=False,
+		enable_retry_cycles=False,
+	)
+
+	assert consumer._run_consume_loop.call_count == 2
 
 
 def test_stream_lost_in_publish_message_declare_is_retried(monkeypatch):

@@ -1,8 +1,19 @@
 # MRSAL AMQP
-[![Release](https://img.shields.io/badge/release-3.17.0-blue.svg)](https://pypi.org/project/mrsal/) 
+[![Release](https://img.shields.io/badge/release-3.17.1-blue.svg)](https://pypi.org/project/mrsal/) 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%7C3.11%7C3.12-blue.svg)](https://www.python.org/downloads/)
 [![Mrsal Workflow](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml/badge.svg?branch=main)](https://github.com/NeoMedSys/mrsal/actions/workflows/mrsal.yaml)
 [![Coverage](https://neomedsys.github.io/mrsal/reports/badges/coverage-badge.svg)](https://neomedsys.github.io/mrsal/reports/coverage/htmlcov/)
+
+## Fixed in 3.17.1
+
+- **The blocking consumer survives a connection lost during a DLX publish.**
+  Before, the failed DLX publish was followed by a nack on the dead consumer
+  channel, which raised `ChannelWrongStateError`. That replaced the original
+  `StreamLostError`, `start_consumer` did not retry it, and the consumer process
+  exited. Now the nack is skipped when the consumer channel is closed and the
+  original error is re-raised, so `start_consumer` reconnects and the broker
+  redelivers the unacked message. `ChannelWrongStateError` is also added to the
+  blocking `start_consumer` retry list.
 
 ## New in 3.17.0
 
