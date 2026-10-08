@@ -18,6 +18,7 @@ from pika.exceptions import (
 		NackError,
 		UnroutableError,
 		ConnectionWrongStateError,
+		ChannelWrongStateError,
 		)
 from dataclasses import field
 from typing import Any, Callable, Literal, Sequence, Type
@@ -349,6 +350,7 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 			ChannelClosedByBroker,
 			ConnectionClosedByBroker,
 			StreamLostError,
+			ChannelWrongStateError,
 			)),
 		wait=wait_exponential(multiplier=1, min=2, max=60),
 		before_sleep=before_sleep_log(log, WARNING)
@@ -639,7 +641,7 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 						future.add_done_callback(self._handle_worker_exception)
 					else:
 						self._process_single_message(method_frame, properties, body, runtime_config)
-		except (AMQPConnectionError, ConnectionClosedByBroker, StreamLostError) as e:
+		except (AMQPConnectionError, ConnectionClosedByBroker, StreamLostError, ChannelWrongStateError) as e:
 			_log.error(f"Ooooooopsie! I caught a connection error while consuming messaiges: {e}")
 			raise
 		except Exception as e:
@@ -860,10 +862,14 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 		"""Publish message to DLX with retry cycle headers.
 
 		At-least-once delivery for DLX: the publish uses ``confirm_delivery()``
-		on a dedicated channel, so broker rejection or connection loss raises
-		and the original message is nacked (not acked). If the process crashes
-		between the confirmed DLX publish and the original ack, the message
-		will be redelivered and re-published to DLX. Consumers must be idempotent.
+		on a dedicated channel, so broker rejection or connection loss raises.
+		While the consumer channel is open the original message is nacked (not
+		acked). When the connection is lost the consumer channel is closed too,
+		so the delivery is left unsettled and the error is re-raised:
+		``start_consumer`` reconnects and the broker redelivers the message.
+		If the process crashes between the confirmed DLX publish and the
+		original ack, the message will be redelivered and re-published to DLX.
+		Consumers must be idempotent.
 		"""
 		_log = self._logger or log
 		try:
@@ -892,6 +898,9 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 			msg_id = properties.message_id if hasattr(properties, 'message_id') else 'unknown'
 			app_id = properties.app_id if hasattr(properties, 'app_id') else 'unknown'
 			_log.error(f"Failed to send message to DLX: {e} | message_id={msg_id} app_id={app_id} delivery_tag={method_frame.delivery_tag} exchange={original_exchange} routing_key={original_routing_key}")
+			if not self._consumer_channel.is_open:
+				_log.warning(f"Consumer channel is closed; leaving delivery {method_frame.delivery_tag} unsettled for broker redelivery.")
+				raise
 			self._consumer_channel.basic_nack(delivery_tag=method_frame.delivery_tag, requeue=False)
 
 	def _publish_to_dlx(self, dlx_exchange: str, routing_key: str, body: bytes, properties: dict):

@@ -8,9 +8,10 @@ still *driven* by tenacity; broker topology is treated as durable
 (auto_declare=False restores channel/QoS/consume, not re-declaration).
 """
 import logging
+import queue
 
 from unittest.mock import Mock, MagicMock, patch
-from pika.exceptions import StreamLostError
+from pika.exceptions import StreamLostError, ChannelWrongStateError
 from tenacity import wait_fixed, wait_none
 from mrsal.amqp.subclass import MrsalBlockingAMQP
 from mrsal.testing import TestMrsalBroker
@@ -272,6 +273,105 @@ def test_consumer_resumes_against_same_queue_after_mid_consume_drop(monkeypatch)
 	assert consume_kwargs['queue'] == 'orders'
 
 
+# --- Connection lost during DLX publish (#112) --------------------------------
+# A failing callback sends the delivery to the DLX. The DLX channel open hits the
+# dead socket, the consumer channel is closed, so mrsal must skip the nack and let
+# the StreamLostError reach start_consumer's retry.
+
+def _dlx_drop_connection(ch1):
+	"""conn1 hands out ``ch1`` as the consumer channel, then dies when the DLX
+	publish opens its own channel."""
+	conn1 = _open_connection(channel=ch1)
+
+	def channel():
+		if conn1.channel.call_count == 1:
+			return ch1
+		conn1.is_open = False
+		ch1.is_open = False
+		raise StreamLostError('Broken pipe')
+
+	conn1.channel.side_effect = channel
+	return conn1
+
+
+def _failing_delivery():
+	frame = MagicMock()
+	frame.delivery_tag = 5
+	props = MagicMock()
+	props.headers = None
+	return frame, props, b'{"data": "bad"}'
+
+
+def _start_dlx_consumer(monkeypatch, conn1, conn2, threaded):
+	with patch('mrsal.amqp.subclass.MrsalBlockingAMQP.setup_blocking_connection',
+			autospec=True) as mock_setup:
+		mock_setup.side_effect = lambda self: setattr(self, '_connection', conn2)
+
+		consumer = _make_consumer(conn1)
+		monkeypatch.setattr(consumer.start_consumer.retry, 'wait', wait_none())
+
+		consumer.start_consumer(
+			queue_name='orders', exchange_name='orders.x', exchange_type='direct',
+			routing_key='orders.new', callback=Mock(side_effect=ValueError('boom')),
+			auto_ack=False, dlx_enable=True, enable_retry_cycles=True,
+			threaded=threaded, max_workers=1,
+		)
+	return consumer, mock_setup
+
+
+def test_dlx_publish_connection_loss_reconnects_consumer(monkeypatch):
+	ch1 = MagicMock(name='channel1')
+	ch1.is_open = True
+	ch1.consume.return_value = [_failing_delivery()]
+	conn1 = _dlx_drop_connection(ch1)
+
+	ch2 = MagicMock(name='channel2')
+	ch2.consume.return_value = []
+	conn2 = _open_connection(channel=ch2)
+
+	consumer, mock_setup = _start_dlx_consumer(monkeypatch, conn1, conn2, threaded=False)
+
+	# The dead consumer channel was never nacked: the delivery stays unsettled.
+	ch1.basic_nack.assert_not_called()
+	ch1.basic_ack.assert_not_called()
+	# start_consumer retried: reconnected and set the consumer up again.
+	mock_setup.assert_called_once()
+	assert consumer._consumer_channel is ch2
+	ch2.basic_qos.assert_called_once_with(prefetch_count=7)
+	ch2.consume.assert_called_once()
+
+
+def test_threaded_dlx_publish_connection_loss_reconnects_consumer(monkeypatch):
+	"""threaded=True: the worker schedules the DLX handler with
+	add_callback_threadsafe; pika runs it inside consume() on the connection
+	thread, so the re-raised error leaves the consume loop."""
+	ch1 = MagicMock(name='channel1')
+	ch1.is_open = True
+	conn1 = _dlx_drop_connection(ch1)
+	pending = queue.Queue()
+	conn1.add_callback_threadsafe.side_effect = pending.put
+
+	def consume(**_):
+		yield _failing_delivery()
+		# Like pika, dispatch the worker's threadsafe callback inside consume().
+		pending.get(timeout=5)()
+
+	ch1.consume.side_effect = consume
+
+	ch2 = MagicMock(name='channel2')
+	ch2.consume.return_value = []
+	conn2 = _open_connection(channel=ch2)
+
+	consumer, mock_setup = _start_dlx_consumer(monkeypatch, conn1, conn2, threaded=True)
+
+	conn1.add_callback_threadsafe.assert_called_once()
+	ch1.basic_nack.assert_not_called()
+	ch1.basic_ack.assert_not_called()
+	mock_setup.assert_called_once()
+	assert consumer._consumer_channel is ch2
+	ch2.consume.assert_called_once()
+
+
 # --- Dead socket during declare (#105) ----------------------------------------
 # The sync declare helpers pass pika's AMQPConnectionError through instead of
 # wrapping it as a setup error, so these entry points' retries reconnect. Real
@@ -293,6 +393,21 @@ def test_stream_lost_in_consumer_declare_is_retried(monkeypatch):
 
 	assert channel.exchange_declare.call_count == 2
 	consumer._run_consume_loop.assert_called_once()
+
+
+def test_channel_wrong_state_in_consume_loop_is_retried(monkeypatch):
+	monkeypatch.setattr(MrsalBlockingAMQP.start_consumer.retry, 'wait', wait_none())
+	consumer = MrsalBlockingAMQP(**SETUP_ARGS)
+	consumer._connection = _open_connection()
+	consumer._run_consume_loop = Mock(side_effect=[ChannelWrongStateError('Channel is closed.'), None])
+
+	consumer.start_consumer(
+		queue_name='orders', callback=Mock(), exchange_name='orders.x',
+		exchange_type='direct', routing_key='orders.new', dlx_enable=False,
+		enable_retry_cycles=False,
+	)
+
+	assert consumer._run_consume_loop.call_count == 2
 
 
 def test_stream_lost_in_publish_message_declare_is_retried(monkeypatch):
