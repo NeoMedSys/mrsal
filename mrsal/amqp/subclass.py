@@ -641,7 +641,7 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 						future.add_done_callback(self._handle_worker_exception)
 					else:
 						self._process_single_message(method_frame, properties, body, runtime_config)
-		except (AMQPConnectionError, ConnectionClosedByBroker, StreamLostError) as e:
+		except (AMQPConnectionError, ConnectionClosedByBroker, StreamLostError, ChannelWrongStateError) as e:
 			_log.error(f"Ooooooopsie! I caught a connection error while consuming messaiges: {e}")
 			raise
 		except Exception as e:
