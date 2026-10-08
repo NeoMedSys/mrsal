@@ -862,10 +862,14 @@ class MrsalBlockingAMQP(MrsalBlockingBase):
 		"""Publish message to DLX with retry cycle headers.
 
 		At-least-once delivery for DLX: the publish uses ``confirm_delivery()``
-		on a dedicated channel, so broker rejection or connection loss raises
-		and the original message is nacked (not acked). If the process crashes
-		between the confirmed DLX publish and the original ack, the message
-		will be redelivered and re-published to DLX. Consumers must be idempotent.
+		on a dedicated channel, so broker rejection or connection loss raises.
+		While the consumer channel is open the original message is nacked (not
+		acked). When the connection is lost the consumer channel is closed too,
+		so the delivery is left unsettled and the error is re-raised:
+		``start_consumer`` reconnects and the broker redelivers the message.
+		If the process crashes between the confirmed DLX publish and the
+		original ack, the message will be redelivered and re-published to DLX.
+		Consumers must be idempotent.
 		"""
 		_log = self._logger or log
 		try:
